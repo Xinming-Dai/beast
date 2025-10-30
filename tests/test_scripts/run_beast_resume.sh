@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=100G
-#SBATCH -t 01:00:00
+#SBATCH -t 08:00:00
 #SBATCH -J beast_resume
 #SBATCH -o logs/beast_resume_%j.out
 #SBATCH -e logs/beast_resume_%j.err
