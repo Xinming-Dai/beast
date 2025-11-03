@@ -16,7 +16,7 @@
 source ~/.bashrc
 module load ffmpeg
 conda activate beast
-cd /u/xdai3/code/beast
+cd /u/xdai3/artifact/beast
 
 # --- Define paths ---
 CONFIG="configs/vit.yaml"
