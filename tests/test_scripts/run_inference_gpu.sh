@@ -21,11 +21,10 @@ cd /u/xdai3/artifact/beast
 MODEL="/work/nvme/bfsr/xdai3/runs/beast_train_13512555/tb_logs/version_0/checkpoints"
 DATA="/work/hdd/bfsr/xdai3/raw_data/beast/selected_images"
 
-# Extract the training job ID automatically from the model path
-TRAIN_ID=$(basename "$(dirname "$(dirname "$MODEL")")" | grep -o '[0-9]\+$')
+MODEL_PARENT=$(basename "$(dirname "$(dirname "$(dirname "$MODEL")")")")
+TRAIN_ID=$(echo "$MODEL_PARENT" | grep -Eo '[0-9]+$')
 
-# Define a unique output directory that includes both model and inference job IDs
-OUTPUT="/work/hdd/bfsr/xdai3/beast/beast_inference_train${TRAIN_ID}_infer${SLURM_JOB_ID}"
+OUTPUT="/work/hdd/bfsr/xdai3/beast/beast_inference_train_${TRAIN_ID}_inference_${SLURM_JOB_ID}"
 mkdir -p "$OUTPUT"
 
 echo "---------------------------------------"
