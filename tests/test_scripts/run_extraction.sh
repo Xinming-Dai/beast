@@ -7,8 +7,8 @@
 #SBATCH --mem=100G
 #SBATCH -t 02:00:00
 #SBATCH -J beast_extract
-#SBATCH -o /work/nvme/bfsr/runs/beast_extract_%j.out
-#SBATCH -e /work/nvme/bfsr/runs/beast_extract_%j.err
+#SBATCH -o /work/nvme/bfsr/xdai3/runs/beast_extract_%j.out
+#SBATCH -e /work/nvme/bfsr/xdai3/runs/beast_extract_%j.err
 
 # --- Setup environment ---
 source ~/.bashrc

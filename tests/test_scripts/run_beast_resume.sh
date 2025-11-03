@@ -8,8 +8,8 @@
 #SBATCH --mem=100G
 #SBATCH -t 08:00:00
 #SBATCH -J beast_resume
-#SBATCH -o /work/nvme/bfsr/runs/beast_train_%j.out
-#SBATCH -e /work/nvme/bfsr/runs/beast_train_%j.err
+#SBATCH -o /work/nvme/bfsr/xdai3/runs/beast_train_%j.out
+#SBATCH -e /work/nvme/bfsr/xdai3/runs/beast_train_%j.err
 
 
 # --- Setup environment ---

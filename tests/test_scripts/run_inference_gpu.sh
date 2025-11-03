@@ -8,8 +8,8 @@
 #SBATCH --mem=100G
 #SBATCH -t 01:00:00
 #SBATCH -J interactive_gpu
-#SBATCH -o logs/inference_gpu%j.out
-#SBATCH -e logs/inference_gpu%j.err
+#SBATCH -o /work/hdd/bfsr/xdai3/logs/inference_gpu%j.out
+#SBATCH -e /work/hdd/bfsr/xdai3/logs/inference_gpu%j.err
 
 # --- Commands below run on the compute node ---
 
