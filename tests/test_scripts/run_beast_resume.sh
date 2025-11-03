@@ -21,8 +21,15 @@ cd /u/xdai3/artifact/beast
 # --- Define paths ---
 CONFIG="configs/vit.yaml"
 DATA="/work/hdd/bfsr/xdai3/raw_data/beast/test_video1"
-CHECKPOINT="/work/hdd/bfsr/xdai3/raw_data/beast/test_video1/checkpoints/last.ckpt"
-OUTPUT="/work/nvme/bfsr/xdai3/runs/beast"
+CHECKPOINT="/work/nvme/bfsr/xdai3/runs/beast/tb_logs/version_0/checkpoints/epoch=664-step=7315-best.ckpt"
+BASE_DIR="/work/nvme/bfsr/xdai3/runs"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nogit")
+EXP_TAG="beast"  
+OUTPUT="${BASE_DIR}/${EXP_TAG}_${TIMESTAMP}_${GIT_HASH}"
+# Create directory
+mkdir -p "$OUTPUT"
+
 
 # --- Run BEAST ---
 if [ -f "$CHECKPOINT" ]; then
