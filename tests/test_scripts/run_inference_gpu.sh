@@ -8,8 +8,8 @@
 #SBATCH --mem=100G
 #SBATCH -t 02:00:00
 #SBATCH -J beast_infer
-#SBATCH -o /work/hdd/bfsr/xdai3/logs/inference_gpu_%j.out
-#SBATCH -e /work/hdd/bfsr/xdai3/logs/inference_gpu_%j.err
+#SBATCH -o /work/hdd/bfsr/xdai3/inference_logs/inference_gpu_%j.out
+#SBATCH -e /work/hdd/bfsr/xdai3/inference_logs/inference_gpu_%j.err
 
 # --- Environment setup ---
 source ~/.bashrc
