@@ -21,9 +21,10 @@ cd /u/xdai3/artifact/beast
 
 # --- Define paths ---
 model="/u/xdai3/artifact/beast/runs/2025-10-24/10-43-28"
-DATA="/u/xdai3/artifact/beast/tests/test_video"
+DATA="/work/hdd/bfsr/xdai3/raw_data/beast/selected_images"
+OUTPUT="/work/hdd/bfsr/xdai3/beast/beast_inference"
 
 # --- Run BEAST Inference---
 echo "No checkpoint found. Starting new training run."
-beast predict --model "$model" --input "$DATA"
+beast predict --model "$model" --input "$DATA" --output "$OUTPUT" --save_latents --save_reconstructions
 
