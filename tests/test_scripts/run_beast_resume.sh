@@ -22,7 +22,7 @@ cd /u/xdai3/code/beast
 CONFIG="configs/vit.yaml"
 DATA="/work/hdd/bfsr/xdai3/raw_data/beast/test_video1"
 CHECKPOINT="/work/hdd/bfsr/xdai3/raw_data/beast/test_video1/checkpoints/last.ckpt"
-OUTPUT = "/work/nvme/bfsr/xdai3/runs/beast"
+OUTPUT="/work/nvme/bfsr/xdai3/runs/beast"
 
 # --- Run BEAST ---
 if [ -f "$CHECKPOINT" ]; then
