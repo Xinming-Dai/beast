@@ -17,6 +17,7 @@ from beast.models.base import BaseLightningModel
 
 
 class BatchNormProjector(nn.Module):
+    """Projection head with BatchNorm layers."""
     def __init__(self, config):
         super().__init__()
         self.config = config
