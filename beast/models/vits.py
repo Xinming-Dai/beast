@@ -99,12 +99,12 @@ class VisionTransformer(BaseLightningModel):
             # Extract MSE loss by subtracting perceptual loss
             mse_loss = loss - self.vit_mae.lambda_perceptual * perceptual_loss
             log_list = [
-                {'name': f'{stage}_mse', 'value': mse_loss.clone()},
-                {'name': f'{stage}_perceptual', 'value': perceptual_loss.clone()}
+                {'name': f'{stage}_mse', 'value': mse_loss.detach().clone()},
+                {'name': f'{stage}_perceptual', 'value': perceptual_loss.detach().clone()}
             ]
         else:
             log_list = [
-                {'name': f'{stage}_mse', 'value': loss.clone()}
+                {'name': f'{stage}_mse', 'value': loss.detach().clone()}
         ]
         if self.config['model']['model_params']['use_infoNCE']:
             z = kwargs['z']
