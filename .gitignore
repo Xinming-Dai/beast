@@ -184,3 +184,6 @@ app.log
 # data
 data/
 *.png
+
+.vscode
+settings.json
