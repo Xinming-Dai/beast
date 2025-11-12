@@ -14,6 +14,7 @@ from transformers import (
 from typeguard import typechecked
 
 from beast.models.base import BaseLightningModel
+from beast.models.perceptual import AlexPerceptual
 
 
 class BatchNormProjector(nn.Module):
@@ -44,7 +45,16 @@ class VisionTransformer(BaseLightningModel):
         super().__init__(config)
         # Set up ViT architecture
         vit_mae_config = ViTMAEConfig(**config['model']['model_params'])
-        self.vit_mae = ViTMAE(vit_mae_config).from_pretrained("facebook/vit-mae-base")
+        # Get perceptual loss parameters from config
+        use_perceptual_loss = config['model']['model_params'].get('use_perceptual_loss', False)
+        lambda_perceptual = config['model']['model_params'].get('lambda_perceptual', 1.0)
+        device = config['model']['model_params'].get('device', 'cuda')
+        self.vit_mae = ViTMAE(
+            vit_mae_config,
+            use_perceptual_loss=use_perceptual_loss,
+            lambda_perceptual=lambda_perceptual,
+            device=device
+        ).from_pretrained("facebook/vit-mae-base")
         self.mask_ratio = config['model']['model_params']['mask_ratio']
         # contrastive loss
         if config['model']['model_params']['use_infoNCE']:
@@ -78,14 +88,24 @@ class VisionTransformer(BaseLightningModel):
         self,
         stage: str,
         **kwargs,
-    ) -> tuple[torch.tensor, list[dict]]:
+    ) -> tuple[torch.Tensor, list[dict]]:
         assert 'loss' in kwargs, "Loss is not in the kwargs"
-        mse_loss = kwargs['loss']
+        loss = kwargs['loss']
         # add all losses here for logging
-        log_list = [
-            {'name': f'{stage}_mse', 'value': mse_loss.clone()}
+        # If perceptual loss is available, the 'loss' is already combined (MSE + perceptual)
+        # Otherwise, it's just MSE
+        if 'perceptual_loss' in kwargs:
+            perceptual_loss = kwargs['perceptual_loss']
+            # Extract MSE loss by subtracting perceptual loss
+            mse_loss = loss - self.vit_mae.lambda_perceptual * perceptual_loss
+            log_list = [
+                {'name': f'{stage}_mse', 'value': mse_loss.clone()},
+                {'name': f'{stage}_perceptual', 'value': perceptual_loss.clone()}
+            ]
+        else:
+            log_list = [
+                {'name': f'{stage}_mse', 'value': loss.clone()}
         ]
-        loss = mse_loss
         if self.config['model']['model_params']['use_infoNCE']:
             z = kwargs['z']
             sim_matrix = z @ z.T
@@ -123,6 +143,17 @@ class ViTMAE(ViTMAEForPreTraining):
     # Overriding the forward method to return the latent and loss
     # This is used for training and inference
     # Huggingface Transformer library
+    def __init__(self, config, use_perceptual_loss: bool = False, lambda_perceptual: float = 1.0, device='cuda'):
+        super().__init__(config)
+        self.use_perceptual_loss = use_perceptual_loss
+        self.lambda_perceptual = lambda_perceptual
+        if use_perceptual_loss:
+            # Initialize AlexPerceptual with MSE criterion
+            self.perceptual_loss = AlexPerceptual(
+                device=device,
+                criterion=nn.MSELoss()
+            )
+    
     def forward(
         self,
         pixel_values: torch.Tensor,
@@ -178,12 +209,23 @@ class ViTMAE(ViTMAEForPreTraining):
         logits = decoder_outputs.logits
         # shape (batch_size, num_patches, patch_size*patch_size*num_channels)
         loss = self.forward_loss(pixel_values, logits, mask)
+        
+        # Compute perceptual loss if enabled and we have reconstructions
+        perceptual_loss_value = None
+        if self.use_perceptual_loss and return_recon:
+            reconstructions = self.unpatchify(logits)
+            perceptual_loss_value = self.perceptual_loss(reconstructions, pixel_values)
+            loss = loss + self.lambda_perceptual * perceptual_loss_value
+        
         if return_recon:
-            return {
+            result = {
                 'latents': latent,
                 'loss': loss,
                 'reconstructions': self.unpatchify(logits),
             }
+            if perceptual_loss_value is not None:
+                result['perceptual_loss'] = perceptual_loss_value
+            return result
         return {
             'latents': cls_latent,
             'loss': loss,
