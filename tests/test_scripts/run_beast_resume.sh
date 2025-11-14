@@ -20,7 +20,7 @@ cd /u/xdai3/artifact/beast
 
 # --- Define paths ---
 CONFIG="configs/vit.yaml"
-DATA="/work/hdd/bfsr/xdai3/raw_data/beast/test_video1"
+DATA="/work/nvme/bfsr/xdai3/raw_data/beast/test_video1"
 CHECKPOINT="/work/nvme/bfsr/xdai3/runs/beast/tb_logs/version_0/checkpoints/epoch=664-step=7315-best.ckpt"
 
 # Define unique output directory per job (using Slurm job name + ID)
@@ -41,5 +41,10 @@ if [ -f "$CHECKPOINT" ]; then
     beast train --config "$CONFIG" --data "$DATA" --checkpoint "$CHECKPOINT" --output "$OUTPUT_DIR"
 else
     echo "No checkpoint found. Starting new training run."
+    echo "CONFIG=$CONFIG  DATA=$DATA  OUTPUT_DIR=$OUTPUT_DIR"
     beast train --config "$CONFIG" --data "$DATA" --output "$OUTPUT_DIR"
 fi
+
+conda deactivate
+
+cd tests/test_scripts
