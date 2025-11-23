@@ -128,17 +128,18 @@ class Model:
 
         return cls(model, config, model_dir=None)
 
-    def train(self, output_dir: str | Path = 'runs/default'):
+    def train(self, output_dir: str | Path = 'runs/default', ckpt_path: str | Path | None = None):
         """Train the model using PyTorch Lightning.
 
         Parameters
         ----------
         output_dir: Directory to save checkpoints
+        ckpt_path: Path to checkpoint file to resume training from
 
         """
         self.model_dir = Path(output_dir)
         with chdir(self.model_dir):
-            self.model = train(self.config, self.model, output_dir=self.model_dir)
+            self.model = train(self.config, self.model, output_dir=self.model_dir, ckpt_path=ckpt_path)
 
     def predict_images(
         self,

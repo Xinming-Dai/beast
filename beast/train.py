@@ -51,7 +51,7 @@ def pretty_print_config(config: dict) -> None:
 
 
 @typechecked
-def train(config: dict, model, output_dir: str | Path):
+def train(config: dict, model, output_dir: str | Path, ckpt_path: str | Path | None = None):
 
     # Only print from rank 0
     if rank_zero_only.rank == 0:
@@ -203,7 +203,9 @@ def train(config: dict, model, output_dir: str | Path):
     # train model!
     if rank_zero_only.rank == 0:
         _debug_log("About to call trainer.fit() - this may hang here if there are issues with data loading or GPU setup")
-    trainer.fit(model=model, datamodule=datamodule)
+        if ckpt_path:
+            _debug_log(f"Resuming training from checkpoint: {ckpt_path}")
+    trainer.fit(model=model, datamodule=datamodule, ckpt_path=str(ckpt_path) if ckpt_path else None)
     if rank_zero_only.rank == 0:
         _debug_log("trainer.fit() completed")
 

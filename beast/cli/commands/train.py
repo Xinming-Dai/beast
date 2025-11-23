@@ -49,11 +49,11 @@ def register_parser(subparsers):
         type=int,
         help='Number of nodes to use (overrides config)',
     )
-    # optional.add_argument(
-    #     '--resume',
-    #     type=Path,
-    #     help='Resume training from checkpoint',
-    # )
+    optional.add_argument(
+        '--ckpt_path',
+        type=Path,
+        help='Resume training from checkpoint path',
+    )
     optional.add_argument(
         '--overrides',
         nargs='*',
@@ -114,27 +114,21 @@ def handle(args):
         config['training']['num_nodes'] = args.nodes
         _log_step(f"Number of nodes overridden to: {args.nodes}")
 
-    # Check for unsupported --checkpoint argument
-    if hasattr(args, 'checkpoint') and args.checkpoint:
-        _log_step(f"WARNING: --checkpoint argument provided but not supported: {args.checkpoint}")
-        _log_step("Checkpoint resuming is not currently implemented in the CLI")
-
     # Initialize model
     _log_step("Initializing model from config")
     from beast.api.model import Model
     model = Model.from_config(config)
     _log_step("Model initialized")
 
-    # if args.resume:
-    #     train_kwargs['resume_from_checkpoint'] = args.resume
-
     _logger.info(f'Training {type(model.model)} model')
     _logger.info(f'Data directory: {args.data}')
     _logger.info(f'Output directory: {args.output}')
+    if args.ckpt_path:
+        _logger.info(f'Resuming from checkpoint: {args.ckpt_path}')
 
     # Run training
     _log_step("About to call model.train()")
-    model.train(output_dir=args.output)
+    model.train(output_dir=args.output, ckpt_path=args.ckpt_path)
     _log_step("model.train() completed")
 
     _logger.info(f'Training complete. Model saved to {args.output}')

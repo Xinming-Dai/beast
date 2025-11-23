@@ -45,9 +45,8 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] Starting BEAST training..."
 if [ -f "$CHECKPOINT" ]; then
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] Found checkpoint: $CHECKPOINT"
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] Resuming BEAST training from checkpoint..."
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] About to call: beast train --config \"$CONFIG\" --data \"$DATA\" --checkpoint \"$CHECKPOINT\" --output \"$OUTPUT_DIR\""
-    # Note: --checkpoint argument may not be supported, checking if it causes issues
-    beast train --config "$CONFIG" --data "$DATA" --checkpoint "$CHECKPOINT" --output "$OUTPUT_DIR" 2>&1 | tee "$OUTPUT_DIR/training_output.log"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] About to call: beast train --config \"$CONFIG\" --data \"$DATA\" --ckpt_path \"$CHECKPOINT\" --output \"$OUTPUT_DIR\""
+    beast train --config "$CONFIG" --data "$DATA" --ckpt_path "$CHECKPOINT" --output "$OUTPUT_DIR" 2>&1 | tee "$OUTPUT_DIR/training_output.log"
 else
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] No checkpoint found. Starting new training run."
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] CONFIG=$CONFIG  DATA=$DATA  OUTPUT_DIR=$OUTPUT_DIR"
