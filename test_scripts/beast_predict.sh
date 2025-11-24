@@ -42,7 +42,7 @@ echo "TMPDIR set to: $TMPDIR"
 
 # --- Define paths ---
 
-MODEL="/work/nvme/bfsr/xdai3/runs/beast_train_13772502"
+MODEL="/work/nvme/bfsr/xdai3/runs/beast_train_13778575"
 
 INPUT="/work/nvme/bfsr/xdai3/raw_data/beast/selected_images"
 
