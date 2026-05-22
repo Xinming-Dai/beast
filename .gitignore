@@ -184,3 +184,6 @@ app.log
 # data
 /data/
 *.png
+
+# 3D model
+metric_checkpoint/

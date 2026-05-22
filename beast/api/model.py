@@ -15,6 +15,7 @@ from beast.inference import predict_images, predict_video
 from beast.io import load_config
 from beast.logging import log_step
 from beast.models.base import BaseLightningModel
+from beast.models.erayzer import ERayZer
 from beast.models.resnets import ResnetAutoencoder
 from beast.models.vits import VisionTransformer
 from beast.train import train
@@ -49,7 +50,7 @@ class Model:
     MODEL_REGISTRY = {
         'vit': VisionTransformer,
         'resnet': ResnetAutoencoder,
-        # Add more models as needed
+        'erayzer': ERayZer,
     }
 
     def __init__(
@@ -142,6 +143,9 @@ class Model:
     def train(self, output_dir: str | Path = 'runs/default') -> None:
         """Train the model using PyTorch Lightning.
 
+        Dispatches to an ERayZer-specific training loop for ERayZer models and
+        to the generic beast training loop for all other model types.
+
         Parameters
         ----------
         output_dir: Directory to save checkpoints
@@ -149,7 +153,11 @@ class Model:
         """
         self.model_dir = Path(output_dir)
         with chdir(self.model_dir):
-            self.model = train(self.config, self.model, output_dir=self.model_dir)
+            if isinstance(self.model, ERayZer):
+                from beast.train_erayzer import train_erayzer
+                self.model = train_erayzer(self.config, self.model, output_dir=self.model_dir)
+            else:
+                self.model = train(self.config, self.model, output_dir=self.model_dir)
 
     def predict_images(
         self,
