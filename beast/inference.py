@@ -1,12 +1,13 @@
 from pathlib import Path
 from typing import Any
 
-import cv2
 import lightning.pytorch as pl
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 from PIL import Image
+from torchvision import transforms
 from typeguard import typechecked
 
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
@@ -563,3 +564,113 @@ def predict_video(
         save_reconstructions=save_reconstructions,
         save_latents=save_latents,
     )
+
+
+def _load_image_tensor(path: Path, image_size: int) -> torch.Tensor:
+    """Load and resize an image to a square tensor in [0, 1].
+
+    Args:
+        path: path to the image file.
+        image_size: target height and width in pixels.
+
+    Returns:
+        float tensor of shape [3, image_size, image_size].
+    """
+    img = Image.open(path).convert('RGB')
+    tf = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+    ])
+    return tf(img)
+
+
+@typechecked
+def predict_erayzer(
+    model: BaseLightningModel,
+    view_images: list[list[str | Path]],
+    image_size: int = 320,
+    input_indices: list[int] | None = None,
+    target_indices: list[int] | None = None,
+    device: str = 'cuda',
+) -> list[dict[str, Any]]:
+    """Run ERayZer inference on one or more scenes, each with multiple views.
+
+    Each element of ``view_images`` is a list of image paths representing the V
+    views for one scene (batch item).  All scenes must have the same number of
+    views.
+
+    Args:
+        model: trained ERayZer model.
+        view_images: outer list length B (batch), inner list length V (views).
+            Each path points to an RGB image for that view.
+        image_size: images are resized to (image_size × image_size) before
+            being passed to the model.
+        input_view_indices: 0-based view indices to use as encoder inputs.  When
+            None, all views are used as input.
+        target_view_indices: 0-based view indices to render.  When None, all views
+            are rendered.
+        device: torch device string ('cuda' or 'cpu').
+
+    Returns:
+        list of dicts (one per batch item) with keys:
+            - 'render': rendered images tensor [V_target, 3, H, W] in [0, 1].
+            - 'render_video': interpolated video tensor [T, 3, H, W] or None.
+            - 'c2w': predicted camera-to-world matrices [V, 4, 4].
+            - 'depth_output': VDA depth maps [V_input, H, W].
+    """
+    if not view_images:
+        return []
+
+    num_views = len(view_images[0])
+    if any(len(views) != num_views for views in view_images):
+        raise ValueError('all scenes must have the same number of views')
+
+    # build image batch [B, V, 3, H, W]
+    batch_tensors = []
+    for views in view_images:
+        view_tensors = torch.stack(
+            [_load_image_tensor(Path(p), image_size) for p in views],
+            dim=0,
+        )  # [V, 3, H, W]
+        batch_tensors.append(view_tensors)
+    images = torch.stack(batch_tensors, dim=0).to(device)  # [B, V, 3, H, W]
+
+    batch_size = images.shape[0]
+
+    # build index tensors
+    if input_indices is None:
+        idx_input_view = torch.arange(num_views, device=device).unsqueeze(0).expand(batch_size, -1)
+    else:
+        idx_input_view = torch.tensor(input_indices, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    if target_indices is None:
+        idx_target_view = torch.arange(num_views, device=device).unsqueeze(0).expand(batch_size, -1)
+    else:
+        idx_target_view = torch.tensor(target_indices, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    batch_dict = {
+        'image': images,
+        'input_indices': idx_input_view,
+        'target_indices': idx_target_view,
+    }
+
+    model = model.to(device).eval()
+    with torch.no_grad():
+        out = model.get_model_outputs(batch_dict)
+
+    results = []
+    for b_i in range(batch_size):
+        render = out['render'][b_i].clamp(0.0, 1.0)         # [V_target, 3, H, W]
+        render_video = (
+            out['render_video'][b_i].clamp(0.0, 1.0)
+            if out.get('render_video') is not None
+            else None
+        )
+        results.append({
+            'render': render,
+            'render_video': render_video,
+            'c2w': out['c2w'][b_i],
+            'depth_output': out['depth_output'][b_i],
+        })
+
+    return results
