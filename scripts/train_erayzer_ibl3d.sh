@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:30:00
+#SBATCH -t 0-02:00:00
 #SBATCH -J erz_train_beast
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/train_erayzer_ibl3d_%j.log
 #SBATCH --export=ALL
@@ -89,7 +89,7 @@ cd "$REPO_ROOT"
 OVERRIDES=(
     "training.dataset_path=$DATASET_PATH"
     "model.vda.cache_root=$VDA_CACHE_ROOT"
-    "training.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
+    "model.merge_pcd.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
     "training.checkpoint_dir=$CHECKPOINT_DIR"
     "training.reset_training_state=true"
 )
