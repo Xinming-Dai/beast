@@ -5,7 +5,6 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 import torch
-import yaml
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast import log_step, version as beast_version
@@ -146,16 +145,6 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
         persistent_workers=num_workers > 0,
         drop_last=False,
     )
-
-    # ----------------------------------------------------------------------------------
-    # Save configuration in output directory
-    # ----------------------------------------------------------------------------------
-
-    log_step(f'Saving config to {output_dir}', level='debug')
-    dest_config_file = output_dir / 'config.yaml'
-    with open(dest_config_file, 'w') as fh:
-        yaml.dump(config, fh)
-    log_step('Config saved', level='debug')
 
     # ----------------------------------------------------------------------------------
     # Set up and run training
