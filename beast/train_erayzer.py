@@ -11,7 +11,83 @@ from lightning.pytorch.utilities import rank_zero_only
 from beast import log_step, version as beast_version
 from beast.data.ibl_dataset import IBLDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
+from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
+
+
+class ValVisualizationCallback(pl.Callback):
+    """Saves render-vs-target PNG grids after the first validation batch each epoch.
+
+    Args:
+        vis_dir: directory to write visualization files.
+        max_samples: number of batch samples to visualize per validation run.
+        max_views: number of target views to include per sample.
+    """
+
+    def __init__(self, vis_dir: Path, max_samples: int = 1, max_views: int = 2) -> None:
+        """Initialize with output directory and visualization limits."""
+        super().__init__()
+        self._vis_dir = Path(vis_dir)
+        self._max_samples = max_samples
+        self._max_views = max_views
+        self._saved_this_epoch = False
+
+    def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        """Save a step-0 visual from the first val batch before any training begins."""
+        if not trainer.is_global_zero:
+            return
+        try:
+            val_loader = trainer.val_dataloaders
+            if isinstance(val_loader, list):
+                val_loader = val_loader[0]
+            batch = next(iter(val_loader))
+            batch = pl_module.transfer_batch_to_device(batch, pl_module.device, dataloader_idx=0)
+            with torch.no_grad():
+                result = pl_module(batch)
+            saved_paths = save_training_visuals(
+                self._vis_dir,
+                result=result,
+                batch=batch,
+                step=0,
+                max_samples=self._max_samples,
+                max_views=self._max_views,
+            )
+            if saved_paths:
+                log_step(f'Saved initial visuals: {saved_paths[0]}', level='info')
+        except Exception as exc:
+            log_step(f'ValVisualizationCallback: failed to save initial visuals: {exc}', level='warning')
+
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        """Reset per-epoch save flag at the start of each validation run."""
+        self._saved_this_epoch = False
+
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs,
+        batch: dict,
+        batch_idx: int,
+    ) -> None:
+        """Save visuals on the first batch of each validation epoch (rank 0 only)."""
+        if batch_idx != 0 or self._saved_this_epoch or not trainer.is_global_zero:
+            return
+        self._saved_this_epoch = True
+        try:
+            with torch.no_grad():
+                result = pl_module(batch)
+            saved_paths = save_training_visuals(
+                self._vis_dir,
+                result=result,
+                batch=batch,
+                step=trainer.global_step,
+                max_samples=self._max_samples,
+                max_views=self._max_views,
+            )
+            if saved_paths:
+                log_step(f'Saved val visuals: {saved_paths[0]}', level='info')
+        except Exception as exc:
+            log_step(f'ValVisualizationCallback: failed to save visuals: {exc}', level='warning')
 
 
 def train_erayzer(config: dict, model, output_dir: str | Path):
@@ -99,6 +175,17 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
                 every_n_train_steps=checkpoint_every,
                 save_top_k=-1,
                 filename='{step}',
+            )
+        )
+
+    if training.get('save_visuals', True):
+        vis_dir_cfg = training.get('vis_dir') or None
+        vis_dir = Path(vis_dir_cfg) if vis_dir_cfg else output_dir / 'visuals'
+        callbacks.append(
+            ValVisualizationCallback(
+                vis_dir=vis_dir,
+                max_samples=int(training.get('vis_num_samples', 1)),
+                max_views=int(training.get('vis_max_views', 2)),
             )
         )
 
