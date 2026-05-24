@@ -14,6 +14,63 @@ from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
 
 
+class LossLoggerCallback(pl.Callback):
+    """Prints train and val losses to stdout at a configurable step interval.
+
+    Args:
+        max_steps: total training steps, used for zero-padded step counter.
+        log_every: print train losses every this many steps.
+    """
+
+    def __init__(self, max_steps: int, log_every: int = 1) -> None:
+        """Initialize with total step count and logging interval."""
+        super().__init__()
+        self._max_steps = max_steps
+        self._log_every = max(1, log_every)
+
+    @rank_zero_only
+    def on_train_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs,
+        batch,
+        batch_idx: int,
+    ) -> None:
+        """Print per-step train losses at the configured interval."""
+        step = trainer.global_step
+        if step % self._log_every != 0:
+            return
+        m = trainer.callback_metrics
+        width = len(str(self._max_steps))
+        parts = [f'[train] step={step:0{width}d}/{self._max_steps:0{width}d}']
+        for key in ('train_loss', 'train_l2', 'train_psnr', 'train_gs_reg',
+                    'train_lpips', 'train_perceptual'):
+            if key in m:
+                short = key.replace('train_', '')
+                parts.append(f'{short}={m[key].item():.6f}')
+        log_step(' '.join(parts), level='info')
+
+    @rank_zero_only
+    def on_validation_epoch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """Print aggregated val losses at the end of each validation run."""
+        if trainer.sanity_checking:
+            return
+        m = trainer.callback_metrics
+        step = trainer.global_step
+        parts = [f'[val] step={step}']
+        for key in ('val_loss', 'val_l2', 'val_psnr', 'val_gs_reg',
+                    'val_lpips', 'val_perceptual'):
+            if key in m:
+                short = key.replace('val_', '')
+                parts.append(f'{short}={m[key].item():.6f}')
+        log_step(' '.join(parts), level='info')
+
+
 class ValVisualizationCallback(pl.Callback):
     """Saves render-vs-target PNG grids after the first validation batch each epoch.
 
@@ -152,7 +209,12 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
 
     # reuse get_callbacks from train.py for LR monitor + val-best checkpoint;
     # append a step-based periodic checkpoint on top if configured.
-    callbacks = get_callbacks(
+    print_every = int(training.get('print_every', 10))
+    callbacks = [LossLoggerCallback(
+        max_steps=int(training.get('max_fwdbwd_passes', 4000)),
+        log_every=print_every,
+    )]
+    callbacks += get_callbacks(
         lr_monitor=True,
         checkpointing=training.get('save_val_best_checkpoint', True),
     )
