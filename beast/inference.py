@@ -13,6 +13,7 @@ from PIL import Image
 from torchvision import transforms
 from typeguard import typechecked
 
+from beast import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
@@ -697,3 +698,231 @@ def predict_erayzer(
         })
 
     return results
+
+
+def _write_ply_ascii(path: Path, xyz: np.ndarray, rgb01: np.ndarray) -> None:
+    """Write a point cloud as an ASCII PLY file without open3d.
+
+    Args:
+        path: output .ply file path.
+        xyz: float array of shape [N, 3] with x, y, z coordinates.
+        rgb01: float array of shape [N, 3] with RGB values in [0, 1].
+    """
+    rgb_u8 = (rgb01 * 255.0).round().clip(0, 255).astype(np.uint8)
+    with open(path, 'w') as f:
+        f.write(
+            'ply\nformat ascii 1.0\nelement vertex %d\n'
+            'property float x\nproperty float y\nproperty float z\n'
+            'property uchar red\nproperty uchar green\nproperty uchar blue\n'
+            'end_header\n' % len(xyz)
+        )
+        for i in range(len(xyz)):
+            x, y, z = xyz[i]
+            r, g, b = rgb_u8[i]
+            f.write(f'{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n')
+
+
+def save_gaussian_pointclouds(
+    result: dict,
+    output_dir: str | Path,
+    batch_idx: int,
+    max_samples: int | None = None,
+) -> list[Path]:
+    """Save Gaussian centers from one ERayZer batch output as PLY point clouds.
+
+    Uses pixel-aligned RGB from input images when ``result['pixelalign_xyz']`` and
+    ``result['image']`` are both present and have matching point counts; otherwise
+    falls back to opacity-as-grayscale coloring.
+
+    Requires ``open3d`` for binary PLY output; falls back to ASCII PLY when not
+    installed.
+
+    Args:
+        result: dict returned by ``model.get_model_outputs(batch)``.  Must contain
+            ``'gaussians'`` (list of GaussianModel, one per batch item) and optionally
+            ``'pixelalign_xyz'`` ([B, v_input, 3, H_r, W_r]) and ``'image'``
+            ([B, V, 3, H, W] in [0, 1]).
+        output_dir: root output directory; PLY files are written under
+            ``output_dir / 'ply'``.
+        batch_idx: used in the output filename
+            ``pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply``.
+        max_samples: cap on the number of batch items to save.  ``None`` saves all.
+
+    Returns:
+        list of Path objects for the PLY files that were written.
+    """
+    gaussians_list = result.get('gaussians')
+    if not gaussians_list:
+        return []
+
+    output_dir = Path(output_dir)
+    ply_dir = output_dir / 'ply'
+    ply_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import open3d as o3d
+        has_o3d = True
+    except ImportError:
+        has_o3d = False
+
+    pixelalign_xyz = result.get('pixelalign_xyz')
+    images = result.get('image')
+    use_pixel_colors = (
+        pixelalign_xyz is not None
+        and images is not None
+        and torch.is_tensor(pixelalign_xyz)
+        and torch.is_tensor(images)
+    )
+
+    saved = []
+    for sample_idx, gs in enumerate(gaussians_list):
+        if max_samples is not None and sample_idx >= max_samples:
+            break
+
+        rgb01 = None
+        if use_pixel_colors and sample_idx < pixelalign_xyz.shape[0] and sample_idx < images.shape[0]:
+            xyz = (
+                pixelalign_xyz[sample_idx]
+                .detach().float().cpu()
+                .permute(0, 2, 3, 1)
+                .reshape(-1, 3)
+                .numpy()
+            )
+            xyz[:, [1, 2]] *= -1
+            rgb_candidate = (
+                images[sample_idx]
+                .detach().float().cpu()
+                .clamp(0, 1)
+                .permute(0, 2, 3, 1)
+                .reshape(-1, 3)
+                .numpy()
+            )
+            if xyz.shape[0] == rgb_candidate.shape[0]:
+                rgb01 = rgb_candidate
+
+        if rgb01 is None:
+            xyz = gs.get_xyz.detach().float().cpu().numpy()
+            opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
+            rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
+
+        if xyz.size == 0:
+            continue
+
+        out_ply = ply_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
+
+        if has_o3d:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(xyz)
+            pcd.colors = o3d.utility.Vector3dVector(rgb01)
+            o3d.io.write_point_cloud(str(out_ply), pcd)
+        else:
+            _write_ply_ascii(out_ply, xyz, rgb01)
+
+        color_src = 'RGB from input views' if rgb01 is not None and use_pixel_colors else 'opacity grayscale'
+        log_step(f'Saved point cloud: {out_ply} ({xyz.shape[0]} points, {color_src})', level='info')
+        saved.append(out_ply)
+
+    return saved
+
+
+def infer_erayzer(
+    config: dict,
+    model,
+    output_dir: str | Path,
+    save_pointclouds: bool = True,
+    save_visuals: bool = False,
+    max_batches: int | None = None,
+    include_splits: list[str] | None = None,
+) -> dict:
+    """Run ERayZer inference over an IBL dataset and optionally save PLY point clouds.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        model: trained ERayZer Lightning model instance.
+        output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``
+            and optional PNG visuals under ``output_dir/png/``.
+        save_pointclouds: whether to save ``.ply`` files for each batch.
+        save_visuals: whether to save render-vs-target PNG grids for each batch.
+        max_batches: stop after this many batches.  ``None`` runs the full dataset.
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+            both ``'train'`` and ``'val'``.
+
+    Returns:
+        dict with keys:
+            - ``'output_dir'``: str path of the output directory.
+            - ``'num_batches'``: number of batches processed.
+            - ``'ply_files'``: list of Path objects for all saved PLY files.
+            - ``'vis_files'``: list of Path objects for all saved PNG grids.
+    """
+    from beast.data.ibl_dataset import IBLDataset
+    from beast.models.model_utils.data_utils import collate_with_correspondence_padding
+    from beast.models.model_utils.train_vis import save_training_visuals
+
+    if include_splits is None:
+        include_splits = ['train', 'val']
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset = IBLDataset(config, include_splits=include_splits)
+    log_step(f'infer_erayzer: {len(dataset)} samples across splits {include_splits}', level='info')
+
+    training = config['training']
+    num_workers = int(training.get('num_workers', 4))
+    batch_size = int(training.get('batch_size_per_gpu', 1))
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_with_correspondence_padding,
+        drop_last=False,
+    )
+
+    device = next(model.parameters()).device
+    model.eval()
+
+    all_ply: list[Path] = []
+    all_vis: list[Path] = []
+    num_batches = 0
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            batch = {
+                k: v.to(device) if torch.is_tensor(v) else v
+                for k, v in batch.items()
+            }
+
+            result = model.get_model_outputs(batch)
+
+            if save_pointclouds:
+                ply_paths = save_gaussian_pointclouds(result, output_dir, batch_idx)
+                all_ply.extend(ply_paths)
+
+            if save_visuals:
+                vis_paths = save_training_visuals(
+                    output_dir / 'png',
+                    result=result,
+                    batch=batch,
+                    step=batch_idx,
+                )
+                all_vis.extend(vis_paths or [])
+
+            num_batches += 1
+
+    log_step(
+        f'infer_erayzer: processed {num_batches} batches, '
+        f'{len(all_ply)} PLY files, {len(all_vis)} PNG grids',
+        level='info',
+    )
+
+    return {
+        'output_dir': str(output_dir),
+        'num_batches': num_batches,
+        'ply_files': all_ply,
+        'vis_files': all_vis,
+    }
