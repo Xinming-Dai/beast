@@ -410,3 +410,59 @@ correspondence pipeline. It appeared in the erayzer source repo's dataset output
 do **not** include a `valid_mask` array. Produce `left_xy`, `right_xy`, and
 `confidence` only. Invalid / low-confidence matches should either be excluded before
 saving or given `confidence = 0`.
+
+## Inference: PLY Point Cloud Export
+
+Two new functions in `beast/inference.py` add the `--save-pointclouds` capability
+from `E-RayZer-private/src/inference.py`:
+
+### `save_gaussian_pointclouds`
+
+```python
+from beast.inference import save_gaussian_pointclouds
+
+paths = save_gaussian_pointclouds(
+    result,        # dict from model.get_model_outputs(batch)
+    output_dir,    # root dir; PLY files go under output_dir/ply/
+    batch_idx,     # used in filename
+    max_samples=None,  # cap on batch items; None = all
+)
+```
+
+`result` already contains `gaussians`, `pixelalign_xyz`, and `image` from the
+ERayZer forward pass — nothing extra needs to be passed.
+
+**Color rule:**
+
+| Condition | Color source |
+|-----------|-------------|
+| `pixelalign_xyz` and `image` both present **and** total point counts match (`v_input × H × W == v_all × H × W`) | Per-pixel RGB from input images; y/z axes flipped to match viewer conventions |
+| Otherwise | Opacity-as-grayscale |
+
+**Output filename:** `{output_dir}/ply/pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply`
+
+**open3d dependency:** Uses `o3d.io.write_point_cloud` (binary PLY) when `open3d` is
+installed; falls back to ASCII PLY otherwise.
+
+### `infer_erayzer`
+
+Dataset-level inference loop — equivalent to running `src/inference.py
+--save-pointclouds` in the original repo.
+
+```python
+from beast.inference import infer_erayzer
+
+summary = infer_erayzer(
+    config,                        # full beast config dict
+    model,                         # trained ERayZer model
+    output_dir,                    # root output directory
+    save_pointclouds=True,         # write PLY files
+    save_visuals=False,            # write render-vs-target PNG grids
+    max_batches=None,              # stop early if set
+    include_splits=['train', 'val'],  # IBL dataset splits to load
+)
+# summary keys: 'output_dir', 'num_batches', 'ply_files', 'vis_files'
+```
+
+Uses `IBLDataset` + `collate_with_correspondence_padding` (same as `train_erayzer`).
+Runs `model.eval()` under `torch.no_grad()`. Moves each batch to the model's device.
