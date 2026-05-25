@@ -46,7 +46,7 @@ model:
   vda:
     enabled: true
     mode: precomputed
-    cache_root: null
+    cache_root: path/to/vda_cache/
     checkpoint_path: null
     encoder: vitb  # vitl | vitb | vits
     metric: false
@@ -78,7 +78,7 @@ training:
 
   # Validation
   val_split_ratio: 0.1 
-  val_every: 10
+  val_every: 100
 
   # Combined validation metric
   val_score_frame_weight: 1.0
@@ -96,21 +96,17 @@ training:
   use_amp: true
   use_tf32: true
 
-  checkpoint_dir: path/to/erayzer_dl3dv.pt
-  checkpoint_every: 1000
-  checkpoint_steps: [4000]
+  checkpoint_dir: path/to/ckpt_folder
+  checkpoint_every: 2000
+  checkpoint_steps: [10000]
 
-  enable_tensorboard: true
-  tensorboard_dir: null
-  tensorboard_log_every: 1
-  resume_ckpt: null
+  resume_ckpt: path/to/erayzer_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 4000
-  print_every: 1
+  max_fwdbwd_passes: 10000
+  print_every: 10
   save_visuals: true
   vis_num_samples: 1
   vis_max_views: 2
-  vis_dir: null
   render_video: false
 
   grad_checkpoint_every: 1
