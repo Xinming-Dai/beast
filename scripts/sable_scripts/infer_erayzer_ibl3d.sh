@@ -6,9 +6,9 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-02:00:00
-#SBATCH -J erz_train_beast
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/train_erayzer_ibl3d_%j.log
+#SBATCH -t 0-00:10:00
+#SBATCH -J erz_infer
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/infer_erayzer_ibl3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -16,26 +16,23 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-CONFIG="${CONFIG:-$REPO_ROOT/configs/erayzer_ibl3d.yaml}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+JOB_ID=18441450
 
-# Data paths (override by exporting before sbatch, e.g.:
-#   sbatch --export=ALL,DATASET_PATH=/path/to/pairs.txt scripts/train_erayzer_ibl3d.sh)
 STAGE=finetune
 DATASET_ROOT="${DATASET_ROOT:-/work/nvme/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 DATASET_PATH="${DATASET_PATH:-$DATASET_ROOT/opencv_cameras_pairs_${EID}.txt}"
 VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/processed/precached_video}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
-RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_erayzer/${EID}}"
+# Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_erayzer/$EID/$JOB_ID}"
 
-if [ -n "${SLURM_JOB_ID:-}" ]; then
-    CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
-    mkdir -p "$CHECKPOINT_DIR"
-else
-    CHECKPOINT_DIR="$CHECKPOINT_BASE"
-fi
+OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
+
+SPLITS="${SPLITS:-train val}"
+SAVE_VISUALS="${SAVE_VISUALS:-0}"
+MAX_BATCHES="${MAX_BATCHES:-}"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
@@ -54,16 +51,18 @@ export PYTHONUNBUFFERED=1
 
 cat <<EOF
 ---------------------------------------
-Job name: ${SLURM_JOB_NAME:-local}
-Job ID: ${SLURM_JOB_ID:-local}
-Running on node(s): ${SLURM_NODELIST:-$(hostname)}
-Config: $CONFIG
-Dataset path: $DATASET_PATH
-VDA cache root: $VDA_CACHE_ROOT
-Correspondence cache root: $CORRESPONDENCE_CACHE_ROOT
-Resume ckpt: ${RESUME_CKPT:-(none)}
-Checkpoint dir (output): $CHECKPOINT_DIR
-TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST
+Job name:              ${SLURM_JOB_NAME:-local}
+Job ID:                ${SLURM_JOB_ID:-local}
+Running on node(s):    ${SLURM_NODELIST:-$(hostname)}
+Model dir:             $MODEL_DIR
+Dataset path:          $DATASET_PATH
+VDA cache root:        $VDA_CACHE_ROOT
+Correspondence cache:  $CORRESPONDENCE_CACHE_ROOT
+Output dir:            $OUTPUT_DIR
+Splits:                $SPLITS
+Save visuals:          $SAVE_VISUALS
+Max batches:           ${MAX_BATCHES:-(all)}
+TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
 EOF
 
@@ -78,26 +77,26 @@ if torch.cuda.is_available():
         print(f"  cuda:{i} {torch.cuda.get_device_name(i)}  capability={cap[0]}.{cap[1]}")
 PY
 
-echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting inference..."
 
-[ -f "$CONFIG" ] || { echo "ERROR: Config not found: $CONFIG"; exit 1; }
+[ -d "$MODEL_DIR" ]    || { echo "ERROR: Model dir not found: $MODEL_DIR"; exit 1; }
 [ -f "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
 
 cd "$REPO_ROOT"
 
-# Build overrides list; only include resume_ckpt when it is set.
-OVERRIDES=(
-    "training.dataset_path=$DATASET_PATH"
-    "model.vda.cache_root=$VDA_CACHE_ROOT"
-    "model.merge_pcd.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
-    "training.checkpoint_dir=$CHECKPOINT_DIR"
-    "training.reset_training_state=true"
+PREDICT_ARGS=(
+    --model "$MODEL_DIR"
+    --input "$DATASET_PATH"
+    --vda-cache-root "$VDA_CACHE_ROOT"
+    --correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT"
+    --output "$OUTPUT_DIR"
+    --splits $SPLITS
 )
-[ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
+[ "$SAVE_VISUALS" = "1" ] && PREDICT_ARGS+=(--save-visuals)
+[ -n "$MAX_BATCHES" ]     && PREDICT_ARGS+=(--max-batches "$MAX_BATCHES")
 
-beast train \
-    --config "$CONFIG" \
-    --output "$CHECKPOINT_DIR" \
-    --overrides "${OVERRIDES[@]}"
+beast predict "${PREDICT_ARGS[@]}"
+
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Done."
 
 conda deactivate
