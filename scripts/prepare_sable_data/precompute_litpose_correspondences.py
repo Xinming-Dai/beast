@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build LitPose keypoint correspondence bundles for ERayZer training.
+"""Build LitPose keypoint correspondence bundles for Sable training.
 
 Reads raw LitPose DLC-style CSVs (left camera 256×320, right camera 320×256) and writes
 one ``.npz`` bundle per stereo pair under

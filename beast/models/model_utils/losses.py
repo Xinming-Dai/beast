@@ -1,4 +1,4 @@
-"""Loss functions for ERayZer rendering: perceptual, LPIPS, and composite render loss."""
+"""Loss functions for Sable rendering: perceptual, LPIPS, and composite render loss."""
 
 import urllib.request
 from pathlib import Path

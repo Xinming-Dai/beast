@@ -586,7 +586,7 @@ def _load_image_tensor(path: Path, image_size: int) -> torch.Tensor:
 
 
 @typechecked
-def predict_erayzer(
+def predict_sable(
     model: BaseLightningModel,
     view_images: list[list[str | Path]],
     image_size: int = 320,
@@ -594,14 +594,14 @@ def predict_erayzer(
     target_indices: list[int] | None = None,
     device: str = 'cuda',
 ) -> list[dict[str, Any]]:
-    """Run ERayZer inference on one or more scenes, each with multiple views.
+    """Run Sable inference on one or more scenes, each with multiple views.
 
     Each element of ``view_images`` is a list of image paths representing the V
     views for one scene (batch item).  All scenes must have the same number of
     views.
 
     Args:
-        model: trained ERayZer model.
+        model: trained Sable model.
         view_images: outer list length B (batch), inner list length V (views).
             Each path points to an RGB image for that view.
         image_size: images are resized to (image_size × image_size) before
@@ -705,7 +705,7 @@ def save_gaussian_pointclouds(
     batch_idx: int,
     max_samples: int | None = None,
 ) -> list[Path]:
-    """Save Gaussian centers from one ERayZer batch output as PLY point clouds.
+    """Save Gaussian centers from one Sable batch output as PLY point clouds.
 
     Uses pixel-aligned RGB from input images when ``result['pixelalign_xyz']`` and
     ``result['image']`` are both present and have matching point counts; otherwise
@@ -802,7 +802,7 @@ def save_gaussian_pointclouds(
     return saved
 
 
-def infer_erayzer(
+def infer_sable(
     config: dict,
     model,
     output_dir: str | Path,
@@ -811,11 +811,11 @@ def infer_erayzer(
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
 ) -> dict:
-    """Run ERayZer inference over an IBL dataset and optionally save PLY point clouds.
+    """Run Sable inference over an IBL dataset and optionally save PLY point clouds.
 
     Args:
         config: full beast config dict (same as used for training).
-        model: trained ERayZer Lightning model instance.
+        model: trained Sable Lightning model instance.
         output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``
             and optional PNG visuals under ``output_dir/png/``.
         save_pointclouds: whether to save ``.ply`` files for each batch.
@@ -842,7 +842,7 @@ def infer_erayzer(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = IBLDataset(config, include_splits=include_splits)
-    log_step(f'infer_erayzer: {len(dataset)} samples across splits {include_splits}', level='info')
+    log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
 
     training = config['training']
     num_workers = int(training.get('num_workers', 4))
@@ -892,7 +892,7 @@ def infer_erayzer(
             num_batches += 1
 
     log_step(
-        f'infer_erayzer: processed {num_batches} batches, '
+        f'infer_sable: processed {num_batches} batches, '
         f'{len(all_ply)} PLY files, {len(all_vis)} PNG grids',
         level='info',
     )

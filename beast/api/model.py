@@ -10,7 +10,7 @@ from typeguard import typechecked
 
 from beast import log_step
 from beast.models.base import BaseLightningModel
-from beast.models.erayzer import ERayZer
+from beast.models.sable import Sable
 from beast.models.resnets import ResnetAutoencoder
 from beast.models.vits import VisionTransformer
 from beast.train import train
@@ -37,7 +37,7 @@ class Model:
     MODEL_REGISTRY = {
         'vit': VisionTransformer,
         'resnet': ResnetAutoencoder,
-        'erayzer': ERayZer,
+        'sable': Sable,
     }
 
     def __init__(
@@ -131,7 +131,7 @@ class Model:
     def train(self, output_dir: str | Path = 'runs/default'):
         """Train the model using PyTorch Lightning.
 
-        Dispatches to an ERayZer-specific training loop for ERayZer models and
+        Dispatches to an Sable-specific training loop for Sable models and
         to the generic beast training loop for all other model types.
 
         Parameters
@@ -141,13 +141,13 @@ class Model:
         """
         self.model_dir = Path(output_dir)
         with chdir(self.model_dir):
-            if isinstance(self.model, ERayZer):
-                from beast.train_erayzer import train_erayzer
-                self.model = train_erayzer(self.config, self.model, output_dir=self.model_dir)
+            if isinstance(self.model, Sable):
+                from beast.train_sable import train_sable
+                self.model = train_sable(self.config, self.model, output_dir=self.model_dir)
             else:
                 self.model = train(self.config, self.model, output_dir=self.model_dir)
 
-    def infer_erayzer(
+    def infer_sable(
         self,
         dataset_path: str | Path,
         output_dir: str | Path | None = None,
@@ -157,7 +157,7 @@ class Model:
         save_visuals: bool = False,
         max_batches: int | None = None,
     ) -> dict[str, Any]:
-        """Run ERayZer inference over a scene dataset and save PLY point clouds.
+        """Run Sable inference over a scene dataset and save PLY point clouds.
 
         Args:
             dataset_path: path to the scene dataset file (e.g. IBL camera-pairs .txt).
@@ -171,7 +171,7 @@ class Model:
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files', 'vis_files'.
         """
-        from beast.inference import infer_erayzer as _infer_erayzer
+        from beast.inference import infer_sable as _infer_sable
 
         config = {**self.config}
         config['inference'] = True
@@ -192,7 +192,7 @@ class Model:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model.to(device)
 
-        return _infer_erayzer(
+        return _infer_sable(
             config=config,
             model=self.model,
             output_dir=output_dir,
