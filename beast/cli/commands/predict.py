@@ -1,4 +1,4 @@
-"""Command to run model inference on videos or scene datasets for ERayZer model."""
+"""Command to run model inference on videos or scene datasets for Sable model."""
 
 import argparse
 import logging
@@ -15,7 +15,7 @@ def register_parser(subparsers: Any) -> None:
         'predict',
         description=(
             'Run inference using a trained model. '
-            'For ERayZer models, --input should point to the scene dataset file '
+            'For Sable models, --input should point to the scene dataset file '
             '(e.g. an IBL camera-pairs .txt).'
         ),
         usage='beast predict --model <model_dir> --input <path> [options]',
@@ -34,7 +34,7 @@ def register_parser(subparsers: Any) -> None:
         type=Path,
         help=(
             'Input path. For video/image models: video file or directory of images/videos. '
-            'For ERayZer: scene dataset file (e.g. IBL camera-pairs .txt).'
+            'For Sable: scene dataset file (e.g. IBL camera-pairs .txt).'
         ),
     )
 
@@ -54,39 +54,39 @@ def register_parser(subparsers: Any) -> None:
     optional.add_argument(
         '--save_latents', '-l',
         action='store_true',
-        help='Extract and save latent features (non-ERayZer models)',
+        help='Extract and save latent features (non-Sable models)',
     )
     optional.add_argument(
         '--save_reconstructions', '-r',
         action='store_true',
-        help='Extract and save reconstructions (non-ERayZer models)',
+        help='Extract and save reconstructions (non-Sable models)',
     )
 
-    # ERayZer-specific options
-    erayzer_group = parser.add_argument_group('ERayZer options')
-    erayzer_group.add_argument(
+    # Sable-specific options
+    sable_group = parser.add_argument_group('Sable options')
+    sable_group.add_argument(
         '--vda-cache-root',
         type=Path,
         help='Root directory of precomputed VDA depth cache',
     )
-    erayzer_group.add_argument(
+    sable_group.add_argument(
         '--correspondence-cache-root',
         type=Path,
         help='Root directory of precomputed correspondence cache',
     )
-    erayzer_group.add_argument(
+    sable_group.add_argument(
         '--splits',
         nargs='+',
         default=['train', 'val'],
         metavar='SPLIT',
         help='Dataset splits to run inference on (default: train val)',
     )
-    erayzer_group.add_argument(
+    sable_group.add_argument(
         '--save-visuals',
         action='store_true',
         help='Save render-vs-target PNG grids alongside PLY point clouds',
     )
-    erayzer_group.add_argument(
+    sable_group.add_argument(
         '--max-batches',
         type=int,
         default=None,
@@ -98,29 +98,29 @@ def handle(args: argparse.Namespace) -> None:
     """Handle the predict command execution."""
 
     from beast.api.model import Model
-    from beast.models.erayzer import ERayZer
+    from beast.models.sable import Sable
 
     _logger.info(f'Loading model from: {args.model}')
     model = Model.from_dir(args.model)
 
-    if isinstance(model.model, ERayZer):
-        _handle_erayzer(args, model)
+    if isinstance(model.model, Sable):
+        _handle_sable(args, model)
     else:
         _handle_video_or_images(args, model)
 
 
-def _handle_erayzer(args, model):
-    """Run ERayZer inference over a scene dataset."""
+def _handle_sable(args, model):
+    """Run Sable inference over a scene dataset."""
 
     if args.input is None:
-        _logger.error('ERayZer models require --input pointing to the scene dataset file')
+        _logger.error('Sable models require --input pointing to the scene dataset file')
         return
 
     output_dir = args.output or args.model / 'inference'
-    _logger.info(f'Running ERayZer inference on: {args.input}')
+    _logger.info(f'Running Sable inference on: {args.input}')
     _logger.info(f'Output directory: {output_dir}')
 
-    model.infer_erayzer(
+    model.infer_sable(
         dataset_path=args.input,
         output_dir=output_dir,
         vda_cache_root=args.vda_cache_root,
@@ -132,7 +132,7 @@ def _handle_erayzer(args, model):
 
 
 def _handle_video_or_images(args, model):
-    """Run video/image inference for non-ERayZer models."""
+    """Run video/image inference for non-Sable models."""
 
     if args.input is None:
         _logger.error('--input is required')

@@ -1,4 +1,4 @@
-"""Debug utilities for visualizing merged point clouds during ERayZer training."""
+"""Debug utilities for visualizing merged point clouds during Sable training."""
 
 from pathlib import Path
 from typing import Any
@@ -25,7 +25,7 @@ def _save_icp_twoview3d_bundle(
     """Export pre-alignment PLYs + NPZ for twoview3d icp_with_keypoints.py.
 
     Expects ``source_indices`` / ``target_indices`` as flat point indices into
-    ``src_xyz`` / ``tgt_xyz`` (same convention as E-RayZer merge_pcd Kabsch).
+    ``src_xyz`` / ``tgt_xyz`` (same convention as Sable merge_pcd Kabsch).
 
     twoview3d loads: np.load(npz)['source_indices'], ['target_indices'].
     """
