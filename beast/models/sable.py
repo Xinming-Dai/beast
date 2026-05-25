@@ -1,4 +1,4 @@
-"""ERayZer: 3D Gaussian Splatting model with transformer encoder and pose estimation."""
+"""Sable: 3D Gaussian Splatting model with transformer encoder and pose estimation."""
 import copy
 import numpy as np
 from pathlib import Path
@@ -181,9 +181,9 @@ class GaussiansUpsampler(nn.Module):
         return gaussians
 
 
-class ERayZer(BaseLightningModel):
+class Sable(BaseLightningModel):
     def __init__(self, config: dict) -> None:
-        """Initialize ERayZer model.
+        """Initialize Sable model.
 
         Args:
             config: full training/model config dict.
@@ -396,7 +396,7 @@ class ERayZer(BaseLightningModel):
     # ------------------------------------------------------------------
 
     def get_model_outputs(self, batch_dict: dict) -> dict:
-        """Run ERayZer forward pass and return a plain dict.
+        """Run Sable forward pass and return a plain dict.
 
         Args:
             batch_dict: batch from the dataloader.

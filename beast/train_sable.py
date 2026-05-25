@@ -1,4 +1,4 @@
-"""ERayZer-specific training loop using PyTorch Lightning."""
+"""Sable-specific training loop using PyTorch Lightning."""
 
 import sys
 from pathlib import Path
@@ -173,8 +173,8 @@ class StepAccumulatorCallback(pl.Callback):
         checkpoint['total_steps_trained'] = trainer.global_step + self._steps_before
 
 
-def train_erayzer(config: dict, model, output_dir: str | Path):
-    """Train an ERayZer model on IBL data using PyTorch Lightning.
+def train_sable(config: dict, model, output_dir: str | Path):
+    """Train a Sable model on IBL data using PyTorch Lightning.
 
     Reads training parameters from ``config['training']``:
     ``batch_size_per_gpu``, ``max_fwdbwd_passes``, ``grad_accum_steps``,
@@ -184,7 +184,7 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
 
     Args:
         config: full beast config dict.
-        model: ERayZer Lightning model instance.
+        model: Sable Lightning model instance.
         output_dir: directory to save checkpoints and logs.
 
     Returns:
@@ -193,7 +193,7 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    log_step('Entering train_erayzer()', level='debug')
+    log_step('Entering train_sable()', level='debug')
     reset_seeds(seed=int(config['model'].get('seed', 0)))
 
     config['model']['beast_version'] = beast_version

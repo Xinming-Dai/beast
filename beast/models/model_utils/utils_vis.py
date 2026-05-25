@@ -1,4 +1,4 @@
-"""Visualization and camera utility functions for ERayZer rendering."""
+"""Visualization and camera utility functions for Sable rendering."""
 
 import torch
 

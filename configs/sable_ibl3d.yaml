@@ -2,7 +2,7 @@ inference: false
 evaluation: false
 
 model:
-  model_class: erayzer
+  model_class: sable
   seed: 0
   gaussians:
     init_gs: true
@@ -98,11 +98,11 @@ training:
 
   checkpoint_dir: path/to/ckpt_folder
   checkpoint_every: 2000
-  checkpoint_steps: [10000]
+  checkpoint_steps: [4000]
 
-  resume_ckpt: path/to/erayzer_dl3dv.pt
+  resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 10000
+  max_fwdbwd_passes: 4000
   print_every: 10
   save_visuals: true
   vis_num_samples: 1

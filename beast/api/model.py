@@ -174,7 +174,7 @@ class Model:
                 self.config, self.model, datamodule, output_dir=self.model_dir,
             )
 
-    def infer_erayzer(
+    def infer_sable(
         self,
         dataset_path: str | Path,
         output_dir: str | Path | None = None,
@@ -184,7 +184,7 @@ class Model:
         save_visuals: bool = False,
         max_batches: int | None = None,
     ) -> dict[str, Any]:
-        """Run ERayZer inference over a scene dataset and save PLY point clouds.
+        """Run Sable inference over a scene dataset and save PLY point clouds.
 
         Args:
             dataset_path: path to the scene dataset file (e.g. IBL camera-pairs .txt).
@@ -198,7 +198,7 @@ class Model:
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files', 'vis_files'.
         """
-        from beast.inference import infer_erayzer as _infer_erayzer
+        from beast.inference import infer_sable as _infer_sable
 
         config = {**self.config}
         config['inference'] = True
@@ -218,7 +218,7 @@ class Model:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model.to(device)
 
-        return _infer_erayzer(
+        return _infer_sable(
             config=config,
             model=self.model,
             output_dir=output_dir,
