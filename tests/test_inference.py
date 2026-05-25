@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -9,7 +10,7 @@ import torch
 import yaml
 from PIL import Image
 
-from beast.inference import ImagePredictionHandler, VideoPredictionHandler
+from beast.inference import ImagePredictionHandler, VideoPredictionHandler, save_gaussian_pointclouds
 
 
 class TestImagePredictionHandler:
@@ -500,3 +501,70 @@ class TestVideoPredictionHandler:
             assert result['latents_shape'] == (4, 128)
         else:
             assert result['latents_file'] is None
+
+
+class TestSaveGaussianPointclouds:
+    """Test the save_gaussian_pointclouds function."""
+
+    @pytest.fixture
+    def fake_gs(self):
+        """Minimal GaussianModel stub with get_xyz and get_opacity tensors."""
+        n = 12
+        gs = SimpleNamespace(
+            get_xyz=torch.rand(n, 3),
+            get_opacity=torch.rand(n, 1),
+        )
+        return gs
+
+    def test_save_gaussian_pointclouds_opacity_fallback(self, fake_gs, tmp_path):
+        """No pixelalign_xyz in result → PLY written with opacity grayscale colors."""
+        result = {'gaussians': [fake_gs]}
+        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0)
+        assert len(paths) == 1
+        assert paths[0].exists()
+        assert paths[0].name == 'pointcloud_batch0000_sample00.ply'
+
+    def test_save_gaussian_pointclouds_pixel_colors(self, fake_gs, tmp_path):
+        """Matching pixelalign_xyz and image shapes → PLY written with RGB colors."""
+        v, h, w = 2, 2, 3
+        n = v * h * w  # 12 points, matches fake_gs
+        # pixelalign_xyz: [B=1, v, 3, h, w] — flattened along v,h,w gives 12 points
+        pxyz = torch.rand(1, v, 3, h, w)
+        images = torch.rand(1, v, 3, h, w)
+        result = {
+            'gaussians': [fake_gs],
+            'pixelalign_xyz': pxyz,
+            'image': images,
+        }
+        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=1)
+        assert len(paths) == 1
+        assert paths[0].exists()
+        assert paths[0].name == 'pointcloud_batch0001_sample00.ply'
+
+    def test_save_gaussian_pointclouds_shape_mismatch_falls_back(self, fake_gs, tmp_path):
+        """Mismatched pixelalign_xyz / image point counts fall back to opacity colors."""
+        # pixelalign_xyz flattens to 6 points, image flattens to 12 — mismatch
+        pxyz = torch.rand(1, 1, 3, 2, 3)   # 1*2*3 = 6
+        images = torch.rand(1, 2, 3, 2, 3)  # 2*2*3 = 12
+        result = {
+            'gaussians': [fake_gs],
+            'pixelalign_xyz': pxyz,
+            'image': images,
+        }
+        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0)
+        # should not raise; writes with opacity fallback
+        assert len(paths) == 1
+        assert paths[0].exists()
+
+    def test_save_gaussian_pointclouds_max_samples(self, fake_gs, tmp_path):
+        """max_samples=1 writes only the first item when two are in the list."""
+        result = {'gaussians': [fake_gs, fake_gs]}
+        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0, max_samples=1)
+        assert len(paths) == 1
+        assert paths[0].name == 'pointcloud_batch0000_sample00.ply'
+        assert not (tmp_path / 'ply' / 'pointcloud_batch0000_sample01.ply').exists()
+
+    def test_save_gaussian_pointclouds_empty_gaussians(self, tmp_path):
+        """Missing or empty gaussians key returns empty list without error."""
+        assert save_gaussian_pointclouds({}, tmp_path, batch_idx=0) == []
+        assert save_gaussian_pointclouds({'gaussians': []}, tmp_path, batch_idx=0) == []
