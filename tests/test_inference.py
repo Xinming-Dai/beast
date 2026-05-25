@@ -2,6 +2,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
