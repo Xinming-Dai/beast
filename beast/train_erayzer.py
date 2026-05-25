@@ -18,15 +18,18 @@ class LossLoggerCallback(pl.Callback):
     """Prints train and val losses to stdout at a configurable step interval.
 
     Args:
-        max_steps: total training steps, used for zero-padded step counter.
+        max_steps: total training steps (global ceiling), used for zero-padded step counter.
         log_every: print train losses every this many steps.
+        global_step_offset: added to trainer.global_step for display; set to the
+            checkpoint's global_step when resuming so logs show absolute step numbers.
     """
 
-    def __init__(self, max_steps: int, log_every: int = 1) -> None:
-        """Initialize with total step count and logging interval."""
+    def __init__(self, max_steps: int, log_every: int = 1, global_step_offset: int = 0) -> None:
+        """Initialize with total step count, logging interval, and step offset for resumed training."""
         super().__init__()
         self._max_steps = max_steps
         self._log_every = max(1, log_every)
+        self._global_step_offset = global_step_offset
 
     @rank_zero_only
     def on_train_batch_end(
@@ -38,7 +41,7 @@ class LossLoggerCallback(pl.Callback):
         batch_idx: int,
     ) -> None:
         """Print per-step train losses at the configured interval."""
-        step = trainer.global_step
+        step = trainer.global_step + self._global_step_offset
         if step % self._log_every != 0:
             return
         m = trainer.callback_metrics
@@ -61,7 +64,7 @@ class LossLoggerCallback(pl.Callback):
         if trainer.sanity_checking:
             return
         m = trainer.callback_metrics
-        step = trainer.global_step
+        step = trainer.global_step + self._global_step_offset
         parts = [f'[val] step={step}']
         for key in ('val_loss', 'val_l2', 'val_psnr', 'val_gs_reg',
                     'val_lpips', 'val_perceptual'):
@@ -146,6 +149,30 @@ class ValVisualizationCallback(pl.Callback):
             log_step(f'ValVisualizationCallback: failed to save visuals: {exc}', level='warning')
 
 
+class StepAccumulatorCallback(pl.Callback):
+    """Writes cumulative total_steps_trained into every saved checkpoint.
+
+    Args:
+        steps_before_this_job: total steps already trained across all prior jobs,
+            read from the resumed checkpoint's total_steps_trained field.
+    """
+
+    def __init__(self, steps_before_this_job: int) -> None:
+        """Initialize with the cumulative step count before this job."""
+        super().__init__()
+        self._steps_before = steps_before_this_job
+
+    @rank_zero_only
+    def on_save_checkpoint(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        checkpoint: dict,
+    ) -> None:
+        """Inject total_steps_trained = prior steps + current job's global_step."""
+        checkpoint['total_steps_trained'] = trainer.global_step + self._steps_before
+
+
 def train_erayzer(config: dict, model, output_dir: str | Path):
     """Train an ERayZer model on IBL data using PyTorch Lightning.
 
@@ -207,12 +234,46 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
     # Set up and run training
     # ----------------------------------------------------------------------------------
 
+    # load checkpoint early so we can read global_step and compute remaining steps
+    max_fwdbwd_passes: int = int(training.get('max_fwdbwd_passes', 4000))
+    resume_ckpt: str | None = training.get('resume_ckpt') or None
+    reset_training_state: bool = bool(training.get('reset_training_state', False))
+    ckpt_path_for_trainer: str | None = resume_ckpt
+    global_step_at_resume: int = 0
+
+    if resume_ckpt is not None:
+        raw_ckpt = torch.load(resume_ckpt, map_location='cpu', weights_only=False)
+        is_lightning_ckpt = 'pytorch-lightning_version' in raw_ckpt
+        if not is_lightning_ckpt or reset_training_state:
+            # plain PyTorch checkpoint or explicitly resetting training state —
+            # load model weights only so optimizer/scheduler start fresh
+            state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            if missing:
+                log_step(f'Missing keys when loading checkpoint: {missing}', level='warning')
+            if unexpected:
+                log_step(f'Unexpected keys when loading checkpoint: {unexpected}', level='warning')
+            ckpt_path_for_trainer = None
+        global_step_at_resume = int(
+            raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0))
+        )
+
+    max_steps_this_run: int = max(0, max_fwdbwd_passes - global_step_at_resume)
+    if global_step_at_resume > 0:
+        log_step(
+            f'Resuming from global_step={global_step_at_resume}; '
+            f'will train for {max_steps_this_run} more steps '
+            f'(max_fwdbwd_passes={max_fwdbwd_passes})',
+            level='info',
+        )
+
     # reuse get_callbacks from train.py for LR monitor + val-best checkpoint;
     # append a step-based periodic checkpoint on top if configured.
     print_every = int(training.get('print_every', 10))
     callbacks = [LossLoggerCallback(
-        max_steps=int(training.get('max_fwdbwd_passes', 4000)),
+        max_steps=max_fwdbwd_passes,
         log_every=print_every,
+        global_step_offset=global_step_at_resume,
     )]
     callbacks += get_callbacks(
         lr_monitor=True,
@@ -239,6 +300,7 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
                 max_views=int(training.get('vis_max_views', 2)),
             )
         )
+    callbacks.append(StepAccumulatorCallback(global_step_at_resume))
 
     # precision
     precision: str | int = 32
@@ -256,7 +318,7 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
         accelerator='gpu',
         devices=int(training.get('num_gpus', 1)),
         num_nodes=int(training.get('num_nodes', 1)),
-        max_steps=int(training.get('max_fwdbwd_passes', 4000)),
+        max_steps=max_steps_this_run,
         accumulate_grad_batches=int(training.get('grad_accum_steps', 1)),
         precision=precision,
         val_check_interval=int(training.get('val_every', 10)),
@@ -266,24 +328,6 @@ def train_erayzer(config: dict, model, output_dir: str | Path):
         sync_batchnorm=True,
         log_every_n_steps=int(training.get('tensorboard_log_every', 1)),
     )
-
-    resume_ckpt: str | None = training.get('resume_ckpt') or None
-    reset_training_state: bool = bool(training.get('reset_training_state', False))
-    ckpt_path_for_trainer: str | None = resume_ckpt
-
-    if resume_ckpt is not None:
-        raw_ckpt = torch.load(resume_ckpt, map_location='cpu', weights_only=False)
-        is_lightning_ckpt = 'pytorch-lightning_version' in raw_ckpt
-        if not is_lightning_ckpt or reset_training_state:
-            # plain PyTorch checkpoint or explicitly resetting training state —
-            # load model weights only so optimizer/scheduler start fresh
-            state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
-            if missing:
-                log_step(f'Missing keys when loading checkpoint: {missing}', level='warning')
-            if unexpected:
-                log_step(f'Unexpected keys when loading checkpoint: {unexpected}', level='warning')
-            ckpt_path_for_trainer = None
 
     log_step('About to call trainer.fit()', level='debug')
     trainer.fit(
