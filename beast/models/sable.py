@@ -540,6 +540,7 @@ class Sable(BaseLightningModel):
         pred_fxfycxcy = rearrange(pred_fxfycxcy, '(b v) d -> b v d', b=b).detach()
         normalized = True
 
+        # dino image tokenization
         dino_image_all = data["image"]
         if pad_input:
             last_view = dino_image_all[:, -1:, ...].repeat(1, pad_views, 1, 1, 1)
@@ -566,9 +567,8 @@ class Sable(BaseLightningModel):
             config_key='return_dino_cls',
         )
 
+        # image tokens masking for input views
         img_tokens_all = rearrange(img_tokens, '(b v) n d -> b v n d', b=b, v=v_all)
-        c2w_input = pred_c2w[batch_idx, input_idx, ...]                         # [b, v_input, 4, 4]
-        fxfycxcy_input = pred_fxfycxcy[batch_idx, input_idx, ...]               # [b, v_input, 4]
         img_tokens_input = img_tokens_all[batch_idx, input_idx, ...]            # [b, v_input, n, d]
 
         if self.training and self.mask_ratio > 0:
@@ -576,7 +576,10 @@ class Sable(BaseLightningModel):
             masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
         else:
             masked_img_tokens_input = img_tokens_input
-
+        
+        '''predict scene representation using (posed) input views'''
+        c2w_input = pred_c2w[batch_idx, input_idx, ...]                                                      # [b, v_input, 4, 4]
+        fxfycxcy_input = pred_fxfycxcy[batch_idx, input_idx, ...]                                            # [b, v_input, 4]
         c2w_target = pred_c2w[batch_idx, target_idx, ...]                                                    # [b, v_target, 4, 4]
         fxfycxcy_target = pred_fxfycxcy[batch_idx, target_idx, ...].clone()                                  # [b, v_target, 4]
 
@@ -592,7 +595,6 @@ class Sable(BaseLightningModel):
             )
         plucker_emb_input = rearrange(plucker_emb_input, '(b v) n d -> b (v n) d', v=v_input)                 # [b, v_input*n, d]
 
-        '''predict scene representation using (posed) input views'''
         # get posed image representation
         img_tokens_input = rearrange(masked_img_tokens_input, 'b v n d -> b (v n) d')
         img_tokens_input = torch.cat([img_tokens_input, plucker_emb_input], dim=-1)                           # [b, v_input*n, 2d]
@@ -647,11 +649,6 @@ class Sable(BaseLightningModel):
             ph=self.ph,
             pw=self.pw,
         )
-
-        # if img_aligned_gaussians.shape[0] != b:
-        #     img_aligned_gaussians = rearrange(
-        #         img_aligned_gaussians, '(b v) n c -> b (v n) c', b=b, v=v_input
-        #     )
 
         xyz, features, scaling, rotation, opacity = self.upsampler.to_gs(img_aligned_gaussians)
         img_aligned_xyz = rearrange(
