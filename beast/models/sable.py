@@ -693,6 +693,7 @@ class Sable(BaseLightningModel):
             pcd_h=pcd_h,
             pcd_w=pcd_w,
             batch_idx=batch_idx,
+            input_idx=input_idx,
         ).detach()
 
         xyz_norm = None
@@ -1377,6 +1378,7 @@ class Sable(BaseLightningModel):
         pcd_h: int,
         pcd_w: int,
         batch_idx: torch.Tensor,
+        input_idx: torch.Tensor,
     ) -> torch.Tensor:
         if self.vda_mode == 'precomputed':
             if 'depth_vda' not in data:
@@ -1407,18 +1409,17 @@ class Sable(BaseLightningModel):
                 )
             return depth_vda[:, :v_input, 0, ...].contiguous()
 
-        depth_output = []
-        for matched_view_idx in range(v_input):
-            vda_out = data['image'][batch_idx, matched_view_idx, ...]
-            depth_per_view, _ = self.extract_vda_depth(vda_out, 1)
-            depth_per_view = torch.nn.functional.interpolate(
-                depth_per_view,
-                size=(pcd_h, pcd_w),
-                mode='bilinear',
-                align_corners=True,
-            ).view(b, 1, pcd_h, pcd_w)
-            depth_output.append(depth_per_view)
-        return torch.cat(depth_output, dim=1)
+        images_in = data['image'][batch_idx, input_idx, ...]
+        depth_all, vda_in = self.extract_vda_depth(images_in, v_input)
+        depth_all = torch.nn.functional.interpolate(
+            rearrange(depth_all, 'b v h w -> (b v) 1 h w'),
+            size=(pcd_h, pcd_w),
+            mode='bilinear',
+            align_corners=True,
+        )
+        depth_all = rearrange(depth_all, '(b v) 1 h w -> b v h w', b=b, v=v_input)
+        self.maybe_debug_vda(images_in, vda_in, depth_all)
+        return depth_all
 
     def maybe_debug_vda(self, vda_in_orig, vda_in, depth_maps) -> None:
         """Optionally save one VDA RGB/depth example for debugging."""
