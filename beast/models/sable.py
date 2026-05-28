@@ -522,10 +522,9 @@ class Sable(BaseLightningModel):
             )
 
         # concanate all tokens together
-        cam_tokens = repeat(self.camera_token, '1 n d -> bv n d', bv=b * v_all)
-        register_tokens = repeat(self.register_token, '1 n d -> bv n d', bv=b * v_all)
+        cam_tokens = repeat(self.camera_token, '1 one d -> bv one d', bv=b * v_all)
+        register_tokens = repeat(self.register_token, '1 num_register_tokens d -> bv num_register_tokens d', bv=b * v_all)
         all_tokens = torch.cat([cam_tokens, register_tokens, img_tokens], dim=1)
-        _, n2, _ = all_tokens.shape
         all_tokens = rearrange(all_tokens, '(b v) n d -> b (v n) d', b=b)         # [b, v_all*n, d]
 
         # pose estimation for all views
