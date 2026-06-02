@@ -8,7 +8,7 @@ import torch
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast import log_step, version as beast_version
-from beast.data.ibl_dataset import IBLDataset
+from beast.data.sable_dataset import SABLEDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
@@ -202,8 +202,8 @@ def train_sable(config: dict, model, output_dir: str | Path):
     training = config['training']
 
     log_step('Building IBL datasets (train / val splits)', level='info')
-    train_dataset = IBLDataset(config, include_splits=['train'])
-    val_dataset = IBLDataset(config, include_splits=['val'])
+    train_dataset = SABLEDataset(config, include_splits=['train'])
+    val_dataset = SABLEDataset(config, include_splits=['val'])
 
     if rank_zero_only.rank == 0:
         print(f'Dataset — train: {len(train_dataset)}, val: {len(val_dataset)}')
