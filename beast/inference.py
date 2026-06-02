@@ -854,7 +854,7 @@ def infer_sable(
             - ``'ply_files'``: list of Path objects for all saved PLY files.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
-    from beast.data.ibl_dataset import IBLDataset
+    from beast.data.sable_dataset import SABLEDataset
     from beast.models.model_utils.data_utils import collate_with_correspondence_padding
     from beast.models.model_utils.train_vis import save_training_visuals
 
@@ -864,7 +864,7 @@ def infer_sable(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = IBLDataset(config, include_splits=include_splits)
+    dataset = SABLEDataset(config, include_splits=include_splits)
     log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
 
     training = config['training']

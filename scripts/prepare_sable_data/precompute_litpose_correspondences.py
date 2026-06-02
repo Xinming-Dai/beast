@@ -6,7 +6,7 @@ one ``.npz`` bundle per stereo pair under
 ``{output_root}/{session_id}/pair_{pair_idx:06d}/litpose_matches.npz``.
 
 With ``--no-left-frames-stretched`` (the default), left-camera coordinates are stored in raw
-256×320 pixel space. ``IBLDataset`` rescales them to the model's ``image_size`` at load time.
+256×320 pixel space. ``SABLEDataset`` rescales them to the model's ``image_size`` at load time.
 With ``--left-frames-stretched``, the in-memory stretch from 256×320 → 320×256 is applied
 before saving (backward-compatible mode).
 """
@@ -239,7 +239,7 @@ def _build_keypoint_arrays(
         shift_nose_right: (dx, dy) pixel shift baked into the nose keypoint for right camera.
         left_already_stretched: if True, left (x,y) are already in stretched 320×256 space.
             If False, they are in raw 256×320 space and the stretch is NOT applied here
-            (``--no-left-frames-stretched`` mode: coordinates stay raw for IBLDataset to rescale).
+            (``--no-left-frames-stretched`` mode: coordinates stay raw for SABLEDataset to rescale).
 
     Returns:
         tuple of (left_xy, right_xy, confidence, labels) or None when no valid keypoints.
@@ -721,7 +721,7 @@ def _build_parser() -> argparse.ArgumentParser:
             'when set, left-camera frames are already stored stretched to 320×256 and '
             'the in-memory stretch is applied before saving. '
             'Default: --no-left-frames-stretched — coordinates saved in raw 256×320 space '
-            'for IBLDataset to rescale at load time.'
+            'for SABLEDataset to rescale at load time.'
         ),
     )
     p.add_argument(

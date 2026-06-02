@@ -1,0 +1,497 @@
+"""SABLE two-view dataset for SABLE model."""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torch.utils.data import Dataset
+
+_logger = logging.getLogger(__name__)
+
+_MAX_MATCHES = 512
+
+
+@dataclass(frozen=True)
+class _PrecacheRecord:
+    """One stereo pair loaded from a precache directory."""
+
+    session_id: str
+    pair_idx: int
+    left_path: Path
+    right_path: Path
+    left_source_frame_index: int
+    right_source_frame_index: int
+    scene_name: str
+
+
+class SABLEDataset(Dataset):
+    """Dataset for two-view IBL image pairs with precomputed VDA depth and correspondences.
+
+    Supports two ``dataset_path`` layouts:
+
+    * **Precache directory** — ``dataset_path`` is a directory containing per-session
+      subdirectories, each with a ``pair_metadata.json`` that lists stereo pairs and
+      their ``split`` field (``train`` / ``val`` / ``test``).  Pass ``include_splits``
+      to select which splits to load.
+    * **Scene JSON list** — ``dataset_path`` is a ``.txt`` file where each line is a
+      path to a scene JSON file (legacy format, no split filtering).
+
+    Camera parameters (c2w, fxfycxcy) are NOT provided — they are predicted by ERayZer.
+    Precomputed VDA depth is loaded from ``model.vda.cache_root``.
+    Pixel correspondences are loaded from ``model.merge_pcd.correspondence_cache_root``.
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        include_splits: list[str] | None = None,
+    ) -> None:
+        """Initialize.
+
+        Args:
+            config: full beast config dict. Reads keys:
+                ``training.dataset_path``, ``model.merge_pcd.correspondence_cache_root``,
+                ``model.vda.cache_root``, ``model.image_tokenizer.image_size``,
+                ``training.ibl_training_regime``, ``training.val_split_ratio``,
+                ``model.seed``.
+            include_splits: for the precache directory format, only load pairs whose
+                ``split`` field is in this list (e.g. ``['train']``, ``['val']``).
+                For the scene JSON list format, used together with
+                ``training.val_split_ratio`` to select the train or val portion of a
+                deterministic random split. ``None`` loads all records.
+        """
+        super().__init__()
+        self.config = config
+        training = config['training']
+        model_cfg = config['model']
+
+        dataset_path = training.get('dataset_path')
+        if not dataset_path:
+            raise ValueError('training.dataset_path must be set.')
+        val_split_ratio = float(training.get('val_split_ratio', 0.0))
+        split_seed = int(model_cfg.get('seed', 0))
+        self._records: list[_PrecacheRecord] = self._load_records(
+            Path(dataset_path),
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+        )
+
+        vda_cfg = model_cfg.get('vda', {}) or {}
+        cache_root = vda_cfg.get('cache_root')
+        if not cache_root:
+            raise ValueError('model.vda.cache_root must be set for SABLEDataset.')
+        self._vda_cache_root = Path(cache_root)
+
+        merge_pcd_cfg = model_cfg.get('merge_pcd', {}) or {}
+        corr_root = merge_pcd_cfg.get('correspondence_cache_root')
+        self._corr_root: Path | None = Path(corr_root) if corr_root else None
+
+        self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
+        self._training_regime: str = str(
+            training.get('ibl_training_regime', 'two_input_reconstruction')
+        ).strip().lower()
+
+    def __len__(self) -> int:
+        """Return the number of scene pairs."""
+        return len(self._records)
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        """Load one stereo pair.
+
+        Args:
+            idx: dataset index.
+
+        Returns:
+            dict with keys ``image``, ``context_indices``, ``target_indices``,
+            ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
+            ``scene_name``.
+        """
+        rec = self._records[idx]
+
+        left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
+        right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
+        vda_depths = [
+            self._load_vda_depth(rec.session_id, 'left', rec.left_source_frame_index),
+            self._load_vda_depth(rec.session_id, 'right', rec.right_source_frame_index),
+        ]
+
+        image_tensor = torch.stack([left_img, right_img], dim=0)  # [V, 3, H, W]
+        depth_tensor = torch.stack(vda_depths, dim=0)              # [V, 1, H, W]
+
+        context_indices, target_indices = self._resolve_view_indices()
+        correspondences = self._load_correspondences(
+            rec.session_id,
+            rec.pair_idx,
+            left_orig_size=(left_orig_w, left_orig_h),
+            right_orig_size=(right_orig_w, right_orig_h),
+        )
+
+        return {
+            'image': image_tensor,
+            'context_indices': context_indices,
+            'target_indices': target_indices,
+            'depth_vda': depth_tensor,
+            'leftcamera_xy': correspondences['leftcamera_xy'],
+            'rightcamera_xy': correspondences['rightcamera_xy'],
+            'confidence': correspondences['confidence'],
+            'scene_name': rec.scene_name,
+        }
+
+    def _load_records(
+        self,
+        dataset_path: Path,
+        include_splits: list[str] | None,
+        val_split_ratio: float = 0.0,
+        split_seed: int = 0,
+    ) -> list[_PrecacheRecord]:
+        """Dispatch to directory or .txt file loader.
+
+        Args:
+            dataset_path: path to precache root directory or scene JSON list .txt file.
+            include_splits: split filter; see ``__init__`` for format-specific behaviour.
+            val_split_ratio: fraction of records to reserve for validation when using
+                the scene JSON list format. Ignored for the precache directory format.
+            split_seed: RNG seed for the deterministic train/val split.
+
+        Returns:
+            list of ``_PrecacheRecord`` instances.
+        """
+        if dataset_path.is_dir():
+            return self._load_precache_records(dataset_path, include_splits)
+        if dataset_path.is_file():
+            return self._load_scene_json_records(
+                dataset_path,
+                include_splits=include_splits,
+                val_split_ratio=val_split_ratio,
+                split_seed=split_seed,
+            )
+        raise FileNotFoundError(f'dataset_path not found: {dataset_path}')
+
+    def _load_precache_records(
+        self,
+        root: Path,
+        include_splits: list[str] | None,
+    ) -> list[_PrecacheRecord]:
+        """Load records from a precache directory.
+
+        Expected layout::
+
+            root/
+              {session_id}/
+                pair_metadata.json   # list of pairs with split, paths, frame indices
+                {left_path}          # image (relative to session dir)
+                {right_path}         # image (relative to session dir)
+
+        Args:
+            root: precache root directory.
+            include_splits: only include pairs whose ``split`` matches an entry in this
+                list. Case-insensitive. ``None`` includes all splits.
+
+        Returns:
+            list of ``_PrecacheRecord``.
+        """
+        allowed = (
+            {s.lower() for s in include_splits} if include_splits is not None else None
+        )
+        records: list[_PrecacheRecord] = []
+        for session_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            metadata_path = session_dir / 'pair_metadata.json'
+            if not metadata_path.exists():
+                continue
+            with metadata_path.open('r', encoding='utf-8') as fh:
+                payload = json.load(fh)
+            pairs = payload.get('pairs', [])
+            for item in pairs:
+                split = str(item.get('split', '')).strip().lower()
+                if allowed is not None and split not in allowed:
+                    continue
+                left_rel = item.get('left_path')
+                right_rel = item.get('right_path')
+                if left_rel is None or right_rel is None:
+                    continue
+                left_path = session_dir / str(left_rel)
+                right_path = session_dir / str(right_rel)
+                if not left_path.exists() or not right_path.exists():
+                    continue
+                pair_idx = int(item['pair_idx'])
+                records.append(_PrecacheRecord(
+                    session_id=session_dir.name,
+                    pair_idx=pair_idx,
+                    left_path=left_path,
+                    right_path=right_path,
+                    left_source_frame_index=int(item['left_source_frame_index']),
+                    right_source_frame_index=int(item['right_source_frame_index']),
+                    scene_name=f'{session_dir.name}_pair_{pair_idx:06d}',
+                ))
+        if not records:
+            split_hint = f' (splits={include_splits})' if include_splits else ''
+            raise RuntimeError(f'No valid pairs found in {root}{split_hint}')
+        return records
+
+    def _load_scene_json_records(
+        self,
+        dataset_path: Path,
+        include_splits: list[str] | None = None,
+        val_split_ratio: float = 0.0,
+        split_seed: int = 0,
+    ) -> list[_PrecacheRecord]:
+        """Load records from a .txt file listing scene JSON paths, one per line.
+
+        When ``val_split_ratio > 0`` and ``include_splits`` is set, performs a
+        deterministic random split: the last ``ceil(N * val_split_ratio)`` records
+        (after shuffling with ``split_seed``) become the val set; the rest are train.
+        If ``val_split_ratio == 0`` or ``include_splits`` is ``None``, all records
+        are returned regardless of the requested split.
+
+        Args:
+            dataset_path: path to .txt file.
+            include_splits: which split to return (``['train']`` or ``['val']``).
+            val_split_ratio: fraction of records reserved for validation (0–1).
+            split_seed: RNG seed for the deterministic shuffle.
+
+        Returns:
+            list of ``_PrecacheRecord``.
+        """
+        records: list[_PrecacheRecord] = []
+        with dataset_path.open('r', encoding='utf-8') as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                scene_path = Path(stripped)
+                if not scene_path.exists():
+                    _logger.warning(f'scene JSON not found, skipping: {scene_path}')
+                    continue
+                try:
+                    rec = self._parse_scene_json(scene_path)
+                except Exception as exc:
+                    _logger.warning(f'Failed to parse {scene_path}: {exc}')
+                    continue
+                records.append(rec)
+        if not records:
+            raise RuntimeError(f'No valid scene JSON paths found in {dataset_path}')
+
+        if val_split_ratio <= 0.0 or include_splits is None:
+            return records
+
+        rng = np.random.default_rng(split_seed)
+        idx_shuffled = rng.permutation(len(records)).tolist()
+        n_val = max(1, round(len(records) * val_split_ratio))
+        idx_val = set(idx_shuffled[-n_val:])
+        idx_train = [i for i in idx_shuffled if i not in idx_val]
+
+        split_map: dict[str, list[_PrecacheRecord]] = {
+            'train': [records[i] for i in idx_train],
+            'val': [records[i] for i in sorted(idx_val)],
+        }
+        selected: list[_PrecacheRecord] = []
+        for split_name in include_splits:
+            selected.extend(split_map.get(split_name.lower(), []))
+
+        if not selected:
+            raise RuntimeError(
+                f'No records after applying val_split_ratio={val_split_ratio} '
+                f'for splits={include_splits} in {dataset_path}'
+            )
+        return selected
+
+    @staticmethod
+    def _parse_scene_json(scene_path: Path) -> _PrecacheRecord:
+        """Parse a scene JSON file into a ``_PrecacheRecord``.
+
+        Scene JSON fields used: ``session_id``, ``pair_id``, ``frames`` (each with
+        ``file_path``, ``source_frame_index``, ``camera_name``).
+        Image paths are resolved as ``scene_path.parent.parent / frame['file_path']``.
+
+        Args:
+            scene_path: path to scene JSON file.
+
+        Returns:
+            ``_PrecacheRecord``.
+        """
+        with scene_path.open('r', encoding='utf-8') as fh:
+            payload = json.load(fh)
+        frames = payload.get('frames', [])
+        if len(frames) != 2:
+            raise RuntimeError(f'Expected 2 frames, got {len(frames)}: {scene_path}')
+        scene_root = scene_path.parent.parent
+        by_camera = {
+            str(f.get('camera_name', '')).strip().lower(): f for f in frames
+        }
+        left_frame = by_camera.get('left', frames[0])
+        right_frame = by_camera.get('right', frames[1])
+        return _PrecacheRecord(
+            session_id=str(payload.get('session_id', scene_path.stem)),
+            pair_idx=int(payload['pair_id']) if payload.get('pair_id') is not None else 0,
+            left_path=scene_root / str(left_frame['file_path']),
+            right_path=scene_root / str(right_frame['file_path']),
+            left_source_frame_index=int(left_frame['source_frame_index']),
+            right_source_frame_index=int(right_frame['source_frame_index']),
+            scene_name=str(payload.get('scene_name', scene_path.stem)),
+        )
+
+    def _load_image(self, path: Path) -> tuple[torch.Tensor, int, int]:
+        """Load a PNG/JPG image and resize to ``image_size``.
+
+        Args:
+            path: path to image file.
+
+        Returns:
+            tuple of (float32 tensor [3, H, W] in range [0, 1], original_width, original_height).
+        """
+        with Image.open(path) as img:
+            img = img.convert('RGB')
+            orig_w, orig_h = img.size
+            if orig_w != self._image_size or orig_h != self._image_size:
+                img = img.resize((self._image_size, self._image_size), Image.BILINEAR)
+            arr = np.asarray(img, dtype=np.float32) / 255.0
+        return torch.from_numpy(arr).permute(2, 0, 1).contiguous(), orig_w, orig_h
+
+    def _load_vda_depth(
+        self,
+        session_id: str,
+        camera_name: str,
+        source_frame_index: int,
+    ) -> torch.Tensor:
+        """Load one precomputed VDA depth map and resize to ``image_size``.
+
+        Expected path: ``{vda_cache_root}/{session_id}/{camera_name}/{frame_idx:06d}.npy``
+
+        Args:
+            session_id: session identifier (subdirectory name).
+            camera_name: ``'left'`` or ``'right'``.
+            source_frame_index: frame index used in the cache file name.
+
+        Returns:
+            float32 tensor [1, H, W] where H = W = ``image_size``.
+
+        Raises:
+            FileNotFoundError: if the depth cache file does not exist.
+        """
+        depth_path = (
+            self._vda_cache_root
+            / session_id
+            / camera_name
+            / f'{source_frame_index:06d}.npy'
+        )
+        if not depth_path.exists():
+            raise FileNotFoundError(
+                f'VDA depth cache not found: {depth_path}\n'
+                'Make sure model.vda.cache_root points to the precomputed depth directory.'
+            )
+        depth_np = np.load(str(depth_path)).astype(np.float32)
+        depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0)   # [1, 1, H, W]
+        if depth_t.shape[-2] != self._image_size or depth_t.shape[-1] != self._image_size:
+            depth_t = F.interpolate(
+                depth_t,
+                size=(self._image_size, self._image_size),
+                mode='bilinear',
+                align_corners=False,
+            )
+        return depth_t.squeeze(0)   # [1, H, W]
+
+    def _load_correspondences(
+        self,
+        session_id: str,
+        pair_idx: int,
+        left_orig_size: tuple[int, int],
+        right_orig_size: tuple[int, int],
+    ) -> dict[str, torch.Tensor]:
+        """Load pixel correspondences from a litpose .npz bundle and rescale to image_size.
+
+        Expected path: ``{corr_root}/{session_id}/pair_{pair_idx:06d}/litpose_matches.npz``
+
+        Fields in the .npz: ``left_xy [N,2]``, ``right_xy [N,2]``, ``confidence [N]``.
+        Coordinates are in the original camera pixel space and are scaled to
+        ``image_size × image_size`` to match the resized image tensor.
+        All output tensors are zero-padded to ``_MAX_MATCHES`` entries; padding rows have
+        ``confidence == 0`` so callers can derive validity with ``confidence > 0``.
+
+        If the bundle is missing or ``model.merge_pcd.correspondence_cache_root`` is unset, returns
+        all-zero tensors. The model's Kabsch step handles this gracefully by falling back
+        to ICP without correspondence hints.
+
+        Args:
+            session_id: session identifier.
+            pair_idx: pair index.
+            left_orig_size: original (width, height) of the left image before resizing.
+            right_orig_size: original (width, height) of the right image before resizing.
+
+        Returns:
+            dict with keys ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``.
+        """
+        if self._corr_root is None:
+            return self._empty_correspondences()
+
+        bundle_path = (
+            self._corr_root
+            / session_id
+            / f'pair_{pair_idx:06d}'
+            / 'litpose_matches.npz'
+        )
+        if not bundle_path.exists():
+            _logger.debug(f'correspondence bundle not found, using empty: {bundle_path}')
+            return self._empty_correspondences()
+
+        try:
+            payload = np.load(str(bundle_path), allow_pickle=True)
+            left_xy = np.asarray(payload['left_xy'], dtype=np.float32)
+            right_xy = np.asarray(payload['right_xy'], dtype=np.float32)
+            confidence = np.asarray(payload['confidence'], dtype=np.float32)
+        except Exception as exc:
+            _logger.warning(f'Failed to load correspondence bundle {bundle_path}: {exc}')
+            return self._empty_correspondences()
+
+        n = min(int(len(confidence)), _MAX_MATCHES)
+        padded_left = np.zeros((_MAX_MATCHES, 2), dtype=np.float32)
+        padded_right = np.zeros((_MAX_MATCHES, 2), dtype=np.float32)
+        padded_conf = np.zeros(_MAX_MATCHES, dtype=np.float32)
+
+        padded_left[:n] = left_xy[:n]
+        padded_right[:n] = right_xy[:n]
+        padded_conf[:n] = confidence[:n]
+
+        # scale coordinates from original camera pixel space → image_size × image_size
+        lw, lh = left_orig_size
+        rw, rh = right_orig_size
+        padded_left[:n, 0] *= self._image_size / lw
+        padded_left[:n, 1] *= self._image_size / lh
+        padded_right[:n, 0] *= self._image_size / rw
+        padded_right[:n, 1] *= self._image_size / rh
+
+        return {
+            'leftcamera_xy': torch.from_numpy(padded_left),
+            'rightcamera_xy': torch.from_numpy(padded_right),
+            'confidence': torch.from_numpy(padded_conf),
+        }
+
+    def _empty_correspondences(self) -> dict[str, torch.Tensor]:
+        """Return zero-padded correspondence tensors (all confidence zero)."""
+        return {
+            'leftcamera_xy': torch.zeros(_MAX_MATCHES, 2, dtype=torch.float32),
+            'rightcamera_xy': torch.zeros(_MAX_MATCHES, 2, dtype=torch.float32),
+            'confidence': torch.zeros(_MAX_MATCHES, dtype=torch.float32),
+        }
+
+    def _resolve_view_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Resolve context and target view indices for the training regime.
+
+        For ``two_input_reconstruction`` all views are both context and target.
+        For ``fixed_1to1`` index 0 is context, index 1 is target.
+
+        Returns:
+            tuple of (context_indices, target_indices) as long tensors.
+        """
+        all_idx = torch.arange(2, dtype=torch.long)
+        if self._training_regime == 'two_input_reconstruction':
+            return all_idx, all_idx.clone()
+        return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
