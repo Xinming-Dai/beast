@@ -607,7 +607,7 @@ class Sable(BaseLightningModel):
         # encoder layers, predict depths and feature vectors
         all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input*n, d]
         frame_cls_tokens, all_tokens = all_tokens.split([self.num_cls_tokens, v_input * n], dim=1)
-        # cls_3d_out is for neural encoding
+        # cls_3d_out is for neural encoding; has extra 3d info compared with dino_cls_tokens
         cls_3d_out = latent_tensor_export_if_requested(
             frame_cls_tokens,
             data,
