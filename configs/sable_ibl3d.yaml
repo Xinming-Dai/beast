@@ -73,7 +73,7 @@ optimizer:
   scheduler: cosine
 
 training:
-  dataset_name: beast.data.ibl_dataset.IBLDataset
+  dataset_name: beast.data.sable_dataset.SABLEDataset
   dataset_path: null
 
   # Validation
