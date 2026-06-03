@@ -14,6 +14,8 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
 
+from beast.logging import log_step
+
 _logger = logging.getLogger(__name__)
 
 _MAX_MATCHES = 512
@@ -269,12 +271,12 @@ class SABLEDataset(Dataset):
                     continue
                 scene_path = Path(stripped)
                 if not scene_path.exists():
-                    _logger.warning(f'scene JSON not found, skipping: {scene_path}')
+                    log_step(f'scene JSON not found, skipping: {scene_path}', level='warning')
                     continue
                 try:
                     rec = self._parse_scene_json(scene_path)
                 except Exception as exc:
-                    _logger.warning(f'Failed to parse {scene_path}: {exc}')
+                    log_step(f'failed to parse {scene_path}: {exc}', level='warning')
                     continue
                 records.append(rec)
         if not records:
@@ -439,7 +441,7 @@ class SABLEDataset(Dataset):
             / 'litpose_matches.npz'
         )
         if not bundle_path.exists():
-            _logger.debug(f'correspondence bundle not found, using empty: {bundle_path}')
+            log_step(f'correspondence bundle not found, using empty: {bundle_path}', level='debug')
             return self._empty_correspondences()
 
         try:
@@ -448,7 +450,7 @@ class SABLEDataset(Dataset):
             right_xy = np.asarray(payload['right_xy'], dtype=np.float32)
             confidence = np.asarray(payload['confidence'], dtype=np.float32)
         except Exception as exc:
-            _logger.warning(f'Failed to load correspondence bundle {bundle_path}: {exc}')
+            log_step(f'failed to load correspondence bundle {bundle_path}: {exc}', level='warning')
             return self._empty_correspondences()
 
         n = min(int(len(confidence)), _MAX_MATCHES)
@@ -495,3 +497,279 @@ class SABLEDataset(Dataset):
         if self._training_regime == 'two_input_reconstruction':
             return all_idx, all_idx.clone()
         return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+
+
+class IBLTwoViewDataset(SABLEDataset):
+    """Two-view IBL dataset reading from the ``beast extract_sable`` pipeline output.
+
+    Like :class:`~beast.data.sable_dataset.SABLEDataset` but:
+
+    * VDA depth is **optional** — looks for ``vda{frame_idx:08d}.npy`` alongside
+      the extracted images.  Returns a zero depth tensor with a warning when the
+      file is absent, allowing training without precomputed depth (the model
+      handles online VDA inference via ``model.vda.mode: online`` in the training
+      config).
+    * Correspondence files are **optional** and stored per-frame per-camera as
+      ``correspondence{frame_idx:08d}.npy`` alongside the images.  Each file
+      contains a float32 array of shape ``[K, 3]`` (x, y, likelihood).
+      Coordinates are in native IBL pixel space and are rescaled to
+      ``image_size × image_size`` at load time.  Returns zero tensors when
+      files are absent.  No zero-padding to a fixed max number of matches —
+      returns exact ``[K, 2]`` and ``[K]`` tensors so ``K`` must be consistent
+      across the dataset (guaranteed when ``litpose.keypoints`` is fixed in the
+      extraction config).
+
+    ``dataset_path`` should point to the ``dataset/`` subdirectory produced by
+    ``beast extract_sable`` (i.e. the directory that contains per-session
+    subdirectories each with ``pair_metadata.json``).
+
+    Config keys read (same as :class:`SABLEDataset` except ``model.vda.cache_root``
+    is not used):
+
+    * ``training.dataset_path``
+    * ``model.image_tokenizer.image_size``
+    * ``training.ibl_training_regime``
+    * ``training.val_split_ratio``
+    * ``model.seed``
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        include_splits: list[str] | None = None,
+    ) -> None:
+        """Initialize.
+
+        Args:
+            config: full beast config dict.
+            include_splits: split filter; see :class:`SABLEDataset` for details.
+        """
+        # bypass SABLEDataset.__init__'s hard requirement on vda cache_root by
+        # calling Dataset.__init__ directly and re-implementing init logic
+        Dataset.__init__(self)
+        self.config = config
+
+        training = config['training']
+        model_cfg = config['model']
+
+        dataset_path = training.get('dataset_path')
+        if not dataset_path:
+            raise ValueError('training.dataset_path must be set.')
+        val_split_ratio = float(training.get('val_split_ratio', 0.0))
+        split_seed = int(model_cfg.get('seed', 0))
+        self._records: list[_PrecacheRecord] = self._load_records(
+            Path(dataset_path),
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+        )
+
+        # VDA and correspondence roots are not used directly; depth and
+        # correspondences are co-located with images
+        self._vda_cache_root = None  # type: ignore[assignment]
+        self._corr_root = None
+
+        self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
+        self._training_regime: str = str(
+            training.get('ibl_training_regime', 'two_input_reconstruction')
+        ).strip().lower()
+
+        # cache K (number of keypoints) from the first available correspondence file
+        self._n_keypoints: int | None = None
+
+    # ------------------------------------------------------------------
+    # overrides
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        """Load one stereo pair.
+
+        Args:
+            idx: dataset index.
+
+        Returns:
+            dict with keys ``image``, ``context_indices``, ``target_indices``,
+            ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
+            ``scene_name``.
+        """
+        rec = self._records[idx]
+
+        left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
+        right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
+
+        vda_depths = [
+            self._load_vda_depth_sable(rec.left_path.parent, rec.left_source_frame_index),
+            self._load_vda_depth_sable(rec.right_path.parent, rec.right_source_frame_index),
+        ]
+
+        image_tensor = torch.stack([left_img, right_img], dim=0)   # [V, 3, H, W]
+        depth_tensor = torch.stack(vda_depths, dim=0)               # [V, 1, H, W]
+
+        context_indices, target_indices = self._resolve_view_indices()
+        correspondences = self._load_correspondences_sable(
+            left_cam_dir=rec.left_path.parent,
+            right_cam_dir=rec.right_path.parent,
+            left_frame_idx=rec.left_source_frame_index,
+            right_frame_idx=rec.right_source_frame_index,
+            left_orig_size=(left_orig_w, left_orig_h),
+            right_orig_size=(right_orig_w, right_orig_h),
+        )
+
+        return {
+            'image': image_tensor,
+            'context_indices': context_indices,
+            'target_indices': target_indices,
+            'depth_vda': depth_tensor,
+            'leftcamera_xy': correspondences['leftcamera_xy'],
+            'rightcamera_xy': correspondences['rightcamera_xy'],
+            'confidence': correspondences['confidence'],
+            'scene_name': rec.scene_name,
+        }
+
+    # ------------------------------------------------------------------
+    # VDA depth loading
+    # ------------------------------------------------------------------
+
+    def _load_vda_depth_sable(
+        self,
+        cam_dir: Path,
+        source_frame_index: int,
+    ) -> torch.Tensor:
+        """Load VDA depth from alongside extracted images.
+
+        Expected path: ``{cam_dir}/vda{source_frame_index:08d}.npy``
+
+        Returns a zero depth tensor with a warning when the file is absent.
+
+        Args:
+            cam_dir: camera directory (e.g. ``{session_dir}/left/``).
+            source_frame_index: frame index used in the filename.
+
+        Returns:
+            float32 tensor [1, H, W] where H = W = ``image_size``.
+        """
+        depth_path = cam_dir / f'vda{source_frame_index:08d}.npy'
+        if not depth_path.exists():
+            log_step(
+                f'VDA depth not found (using zeros): {depth_path}. '
+                'Run beast extract_sable with vda.enabled: true to precompute.',
+                level='debug',
+            )
+            return torch.zeros(1, self._image_size, self._image_size, dtype=torch.float32)
+
+        depth_np = np.load(str(depth_path)).astype(np.float32)
+        depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0)   # [1, 1, H, W]
+        if depth_t.shape[-2] != self._image_size or depth_t.shape[-1] != self._image_size:
+            depth_t = F.interpolate(
+                depth_t,
+                size=(self._image_size, self._image_size),
+                mode='bilinear',
+                align_corners=False,
+            )
+        return depth_t.squeeze(0)   # [1, H, W]
+
+    # ------------------------------------------------------------------
+    # correspondence loading
+    # ------------------------------------------------------------------
+
+    def _load_correspondences_sable(
+        self,
+        left_cam_dir: Path,
+        right_cam_dir: Path,
+        left_frame_idx: int,
+        right_frame_idx: int,
+        left_orig_size: tuple[int, int],
+        right_orig_size: tuple[int, int],
+    ) -> dict[str, torch.Tensor]:
+        """Load per-frame correspondence files and rescale to image_size.
+
+        Expected paths:
+            ``{left_cam_dir}/correspondence{left_frame_idx:08d}.npy``
+            ``{right_cam_dir}/correspondence{right_frame_idx:08d}.npy``
+
+        Each file contains a float32 array of shape ``[K, 3]`` (x, y, likelihood).
+        Coordinates are rescaled from native IBL pixel space to
+        ``image_size × image_size``.
+
+        Returns zero tensors with shape ``[K, 2]`` and ``[K]`` when files are absent.
+        K is inferred from the first available file; defaults to 0 if none found.
+
+        Args:
+            left_cam_dir: left camera directory.
+            right_cam_dir: right camera directory.
+            left_frame_idx: left source frame index.
+            right_frame_idx: right source frame index.
+            left_orig_size: original (width, height) of the left image.
+            right_orig_size: original (width, height) of the right image.
+
+        Returns:
+            dict with keys ``leftcamera_xy [K, 2]``, ``rightcamera_xy [K, 2]``,
+            ``confidence [K]``.
+        """
+        left_path = left_cam_dir / f'correspondence{left_frame_idx:08d}.npy'
+        right_path = right_cam_dir / f'correspondence{right_frame_idx:08d}.npy'
+
+        left_arr: np.ndarray | None = None
+        right_arr: np.ndarray | None = None
+
+        if left_path.exists():
+            try:
+                left_arr = np.load(str(left_path)).astype(np.float32)
+            except Exception as exc:
+                log_step(f'failed to load correspondence {left_path}: {exc}', level='warning')
+
+        if right_path.exists():
+            try:
+                right_arr = np.load(str(right_path)).astype(np.float32)
+            except Exception as exc:
+                log_step(f'failed to load correspondence {right_path}: {exc}', level='warning')
+
+        # update cached K from whichever file loaded successfully
+        for arr in (left_arr, right_arr):
+            if arr is not None and self._n_keypoints is None:
+                self._n_keypoints = arr.shape[0]
+
+        k = self._n_keypoints or 0
+
+        if k == 0 or (left_arr is None and right_arr is None):
+            return self._empty_correspondences_k(k)
+
+        if left_arr is None:
+            left_arr = np.zeros((k, 3), dtype=np.float32)
+        if right_arr is None:
+            right_arr = np.zeros((k, 3), dtype=np.float32)
+
+        # rescale coordinates from native pixel space → image_size × image_size
+        lw, lh = left_orig_size
+        rw, rh = right_orig_size
+        left_xy = left_arr[:, :2].copy()
+        right_xy = right_arr[:, :2].copy()
+        left_xy[:, 0] *= self._image_size / lw
+        left_xy[:, 1] *= self._image_size / lh
+        right_xy[:, 0] *= self._image_size / rw
+        right_xy[:, 1] *= self._image_size / rh
+
+        # confidence = element-wise minimum of left and right likelihoods
+        conf = np.minimum(left_arr[:, 2], right_arr[:, 2])
+
+        return {
+            'leftcamera_xy': torch.from_numpy(left_xy),
+            'rightcamera_xy': torch.from_numpy(right_xy),
+            'confidence': torch.from_numpy(conf),
+        }
+
+    @staticmethod
+    def _empty_correspondences_k(k: int) -> dict[str, torch.Tensor]:
+        """Return zero correspondence tensors of shape [K, 2] and [K].
+
+        Args:
+            k: number of keypoints.
+
+        Returns:
+            dict with zero-valued leftcamera_xy, rightcamera_xy, confidence.
+        """
+        return {
+            'leftcamera_xy': torch.zeros(k, 2, dtype=torch.float32),
+            'rightcamera_xy': torch.zeros(k, 2, dtype=torch.float32),
+            'confidence': torch.zeros(k, dtype=torch.float32),
+        }
