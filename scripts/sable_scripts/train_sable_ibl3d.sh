@@ -91,7 +91,7 @@ OVERRIDES=(
     "model.vda.cache_root=$VDA_CACHE_ROOT"
     "model.merge_pcd.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
     "training.checkpoint_dir=$CHECKPOINT_DIR"
-    "training.reset_training_state=false"
+    "training.reset_training_state=True"
 )
 [ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
 
