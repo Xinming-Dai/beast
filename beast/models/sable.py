@@ -125,6 +125,36 @@ def build_transformer_blocks(
     return nn.ModuleList(layers)
 
 
+def build_token_masks(
+    keep: torch.Tensor,
+    b: int,
+    v: int,
+    hh: int,
+    ww: int,
+    ph: int,
+    pw: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build pixel-space and Gaussian-space masks from the token keep mask.
+
+    Args:
+        keep: boolean tensor of shape [B, V, hh*ww]; True where token is visible.
+        b: batch size.
+        v: number of views.
+        hh: token rows.
+        ww: token columns.
+        ph: pixels per token row (patch height).
+        pw: pixels per token column (patch width).
+
+    Returns:
+        pixel_mask: float tensor [B, V, hh*ph, ww*pw]; 1.0 at masked locations.
+        gaussian_mask: float tensor [B, V, hh*ww*ph*pw]; 1.0 at masked Gaussians.
+    """
+    keep_2d = keep.reshape(b, v, hh, ww)
+    pixel_mask = (~keep_2d).float().repeat_interleave(ph, dim=2).repeat_interleave(pw, dim=3)
+    gaussian_mask = (~keep).float().repeat_interleave(ph * pw, dim=2)
+    return pixel_mask, gaussian_mask
+
+
 class GaussiansUpsampler(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -425,7 +455,8 @@ class Sable(BaseLightningModel):
         xyz_norm = kwargs['xyz_norm']
         xyz_init_norm = kwargs['xyz_init_norm']
         pixel_mask = kwargs.get('pixel_mask')
-        result = self.loss_computer(rendering, target, xyz_norm, xyz_init_norm, pixel_mask)
+        gaussian_mask = kwargs.get('gaussian_mask')
+        result = self.loss_computer(rendering, target, xyz_norm, xyz_init_norm, pixel_mask, gaussian_mask)
         log_list = [
             {'name': f'{stage}_l2', 'value': result.l2_loss},
             {'name': f'{stage}_psnr', 'value': result.psnr, 'prog_bar': True},
@@ -571,9 +602,13 @@ class Sable(BaseLightningModel):
         img_tokens_all = rearrange(img_tokens, '(b v) n d -> b v n d', b=b, v=v_all)
         img_tokens_input = img_tokens_all[batch_idx, input_idx, ...]            # [b, v_input, n, d]
 
+        keep = None
+        pixel_mask = None
+        gaussian_mask = None
         if self.training and self.mask_ratio > 0:
-            keep = (torch.rand(img_tokens_input.shape[:-1], device=img_tokens_input.device) >= self.mask_ratio)
+            keep = (torch.rand((b, v_input, n), device=img_tokens_input.device) >= self.mask_ratio)
             masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
+            pixel_mask, gaussian_mask = build_token_masks(keep, b, v_input, self.hh, self.ww, self.ph, self.pw)
         else:
             masked_img_tokens_input = img_tokens_input
         
@@ -716,15 +751,11 @@ class Sable(BaseLightningModel):
             xyz_init_src_pts = xyz_init_for_merge[:, 0]
             xyz_init_tgt_pts = xyz_init_for_merge[:, 1]
 
+            debug_corrs: list[tuple[list[int], list[int], tuple[np.ndarray, np.ndarray] | None]] = []
+            n_dbg_save = 0
             if self.debug_merged_pcd:
                 self.debug_merged_pcd_num_batches = int(self.config['model']['merge_pcd'].get('debug_merged_pcd_num_batches', 1))
                 n_dbg_save = min(self.debug_merged_pcd_num_batches, b)
-                debug_src_corr_idx = [None] * n_dbg_save
-                debug_tgt_corr_idx = [None] * n_dbg_save
-                debug_icp_src_xyz = [None] * n_dbg_save
-                debug_icp_tgt_xyz = [None] * n_dbg_save
-                debug_corr_left_xy = [None] * n_dbg_save
-                debug_corr_right_xy = [None] * n_dbg_save
 
             for b_i in range(b):
                 corr_xy_from_pixels = None
@@ -761,41 +792,27 @@ class Sable(BaseLightningModel):
                 xyz_init[b_i, 1] = torch.from_numpy(init_tgt_pts).to(xyz.device)
 
                 if self.debug_merged_pcd and b_i < n_dbg_save:
-                    debug_src_corr_idx[b_i] = list(src_idx)
-                    debug_tgt_corr_idx[b_i] = list(tgt_idx)
-                    debug_icp_src_xyz[b_i] = np.ascontiguousarray(
-                        xyz_init_src_pts[b_i]
-                    )
-                    debug_icp_tgt_xyz[b_i] = np.ascontiguousarray(
-                        xyz_init_tgt_pts[b_i]
-                    )
-                    if corr_xy_from_pixels is not None:
-                        debug_corr_left_xy[b_i] = corr_xy_from_pixels[0]
-                        debug_corr_right_xy[b_i] = corr_xy_from_pixels[1]
+                    debug_corrs.append((list(src_idx), list(tgt_idx), corr_xy_from_pixels))
 
             xyz_init = rearrange(xyz_init, 'b v n c -> b (v n) c', b=b, v=v_target)
             xyz = rearrange(xyz, 'b v n c -> b (v n) c', b=b, v=v_target)
 
             if self.debug_merged_pcd:
                 xyz = xyz_init
-                from beast.models.model_utils.debug_merge import save_merged_pcd
-                save_merged_pcd(
+                from beast.models.model_utils.debug_merge import save_debug_pcd
+                save_debug_pcd(
                     xyz_init=xyz_init,
+                    xyz_init_for_merge=xyz_init_for_merge,
                     data=data,
                     target_idx=target_idx,
                     v_target=v_target,
-                    pcd_h=int(self.config['model']['target_image']['height']),
-                    pcd_w=int(self.config['model']['target_image']['width']),
+                    depth_output=depth_output,
+                    debug_corrs=debug_corrs,
+                    pcd_h=pcd_h,
+                    pcd_w=pcd_w,
+                    num_batches=self.debug_merged_pcd_num_batches,
                     ph=self.ph,
                     pw=self.pw,
-                    num_batches=self.debug_merged_pcd_num_batches,
-                    src_corr_idx=debug_src_corr_idx,
-                    tgt_corr_idx=debug_tgt_corr_idx,
-                    depth_maps=depth_output,
-                    pre_kabsch_src_xyz=debug_icp_src_xyz,
-                    pre_kabsch_tgt_xyz=debug_icp_tgt_xyz,
-                    corr_left_xy=debug_corr_left_xy,
-                    corr_right_xy=debug_corr_right_xy,
                 )
 
             xyz_norm, xyz_init_norm = map(
@@ -804,7 +821,6 @@ class Sable(BaseLightningModel):
                     (xyz, xyz_init.detach()),
                 )
             )
-            gs_reg_loss = torch.nn.functional.mse_loss(xyz_norm, xyz_init_norm)
 
         xyz, features, scaling, rotation, opacity = map(
             sanitize,
@@ -932,6 +948,8 @@ class Sable(BaseLightningModel):
             'xyz_norm': xyz_norm,
             'xyz_init_norm': xyz_init_norm,
             'gs_reg_loss': gs_reg_loss,
+            'pixel_mask': pixel_mask,
+            'gaussian_mask': gaussian_mask,
             'frame_z': cls_3d_out,
             'img_tokens': img_tokens_out,
             'depth_z': dino_cls_out,

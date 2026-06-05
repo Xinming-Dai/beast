@@ -1,12 +1,12 @@
 """Debug utilities for visualizing merged point clouds during Sable training."""
 
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import open3d as o3d
 import torch
 from einops import rearrange
+from PIL import Image
 
 
 def _save_icp_twoview3d_bundle(
@@ -97,8 +97,8 @@ def _save_pair_images_and_corr_overlays(
     *,
     save_dir: str,
     rgb_bgr_views: list[np.ndarray],
-    depth_gray_u8_views: list[np.ndarray] | None,
-    depth_bgr_views: list[np.ndarray | None] | None,
+    depth_gray_u8_views: list[np.ndarray],
+    depth_bgr_views: list[np.ndarray | None],
     corr_left_xy: np.ndarray | None,
     corr_right_xy: np.ndarray | None,
 ) -> None:
@@ -108,12 +108,7 @@ def _save_pair_images_and_corr_overlays(
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
     n = len(rgb_bgr_views)
-    has_depth = (
-        depth_gray_u8_views is not None
-        and len(depth_gray_u8_views) == n
-        and depth_bgr_views is not None
-        and len(depth_bgr_views) == n
-    )
+    has_depth = len(depth_gray_u8_views) == n and len(depth_bgr_views) == n
     for vi in range(n):
         cv2.imwrite(str(save_path / f'pair_view{vi}_rgb.png'), rgb_bgr_views[vi])
 
@@ -158,50 +153,6 @@ def _save_pair_images_and_corr_overlays(
         cv2.imwrite(str(save_path / 'pair_rgb_sidebyside_corr_overlay.png'), grid)
 
 
-def _per_batch_corr_indices(
-    corr: Any | None, batch_idx: int
-) -> list[int] | None:
-    """Legacy ``List[int]`` applies to batch 0 only; else index a per-batch list."""
-    if corr is None:
-        return None
-    if not isinstance(corr, list) or len(corr) == 0:
-        return None
-    if isinstance(corr[0], int):
-        return list(corr) if batch_idx == 0 else None
-    if batch_idx < len(corr):
-        item = corr[batch_idx]
-        return list(item) if item is not None else None
-    return None
-
-
-def _per_batch_ndarray_or_list(
-    arr: Any | None, batch_idx: int
-) -> np.ndarray | None:
-    """Legacy ``(N,3)`` ndarray applies to batch 0 only; else index a per-batch list."""
-    if arr is None:
-        return None
-    if isinstance(arr, np.ndarray):
-        return arr if batch_idx == 0 else None
-    if isinstance(arr, list) and batch_idx < len(arr):
-        a = arr[batch_idx]
-        return np.asarray(a) if a is not None else None
-    return None
-
-
-def _per_batch_corr_xy(
-    xy: Any | None, batch_idx: int
-) -> np.ndarray | None:
-    """Legacy ``(N,2)`` ndarray for batch 0; else per-batch list of arrays."""
-    if xy is None:
-        return None
-    if isinstance(xy, np.ndarray):
-        return xy if batch_idx == 0 else None
-    if isinstance(xy, list) and batch_idx < len(xy):
-        a = xy[batch_idx]
-        return np.asarray(a) if a is not None else None
-    return None
-
-
 def _save_merged_pcd_single(
     *,
     batch_idx: int,
@@ -226,8 +177,8 @@ def _save_merged_pcd_single(
     """Save debug outputs for a single batch item."""
     color_list = []
     rgb_bgr_views: list[np.ndarray] = []
-    depth_gray_list: list[np.ndarray] | None = [] if depth_maps is not None else None
-    depth_bgr_list: list[np.ndarray | None] | None = [] if depth_maps is not None else None
+    depth_gray_list: list[np.ndarray] = []
+    depth_bgr_list: list[np.ndarray | None] = []
     for vi in range(v_target):
         view_global = target_idx[batch_idx, vi].item()
         img = data['image'][batch_idx, view_global].float()
@@ -246,7 +197,7 @@ def _save_merged_pcd_single(
         )
         color_list.append(img_flat)
 
-        if depth_gray_list is not None and depth_bgr_list is not None:
+        if depth_maps is not None:
             if vi < depth_maps.shape[1]:
                 d = depth_maps[batch_idx, vi].detach().float().cpu().numpy()
                 d_norm = (d - d.min()) / (d.max() - d.min() + 1e-6)
@@ -277,13 +228,12 @@ def _save_merged_pcd_single(
     o3d.io.write_point_cloud(str(save_path / filename), pcd)
 
     if depth_maps is not None:
-        from PIL import Image
-
         for vi in range(min(v_target, depth_maps.shape[1])):
             d_u8 = depth_gray_list[vi]
             Image.fromarray(d_u8).save(save_path / f'depth_view{vi}_gray.png')
-            if depth_bgr_list[vi] is not None:
-                Image.fromarray(depth_bgr_list[vi][..., ::-1]).save(
+            d_bgr = depth_bgr_list[vi]
+            if d_bgr is not None:
+                Image.fromarray(d_bgr[..., ::-1]).save(
                     save_path / f'depth_view{vi}_turbo.png'
                 )
 
@@ -318,65 +268,43 @@ def _save_merged_pcd_single(
         )
 
 
-def save_merged_pcd(
+def save_debug_pcd(
     xyz_init: torch.Tensor,
+    xyz_init_for_merge: np.ndarray,
     data: dict,
     target_idx: torch.Tensor,
     v_target: int,
+    depth_output: torch.Tensor | None,
+    debug_corrs: list[tuple[list[int], list[int], tuple[np.ndarray, np.ndarray] | None]],
     pcd_h: int,
     pcd_w: int,
+    num_batches: int,
     ph: int,
     pw: int,
     save_dir: str = 'debug_ckpt/debug_pcd',
     filename: str = 'xyz_init.ply',
-    num_batches: int = 1,
-    src_corr_idx: list[int] | list[list[int] | None] | None = None,
-    tgt_corr_idx: list[int] | list[list[int] | None] | None = None,
-    depth_maps: torch.Tensor | None = None,
-    pre_kabsch_src_xyz: np.ndarray | list[np.ndarray] | None = None,
-    pre_kabsch_tgt_xyz: np.ndarray | list[np.ndarray] | None = None,
-    corr_left_xy: np.ndarray | list[np.ndarray | None] | None = None,
-    corr_right_xy: np.ndarray | list[np.ndarray | None] | None = None,
 ) -> None:
-    """Save the merged point cloud colored by its corresponding target-view images.
-
-    When correspondence indices are provided, an additional PLY is saved with
-    source correspondence points colored red and target correspondence points
-    colored blue, connected by green lines.
+    """Save debug point clouds and overlays for each batch in debug_corrs.
 
     Args:
-        xyz_init: [b, v_target*N, 3] world-space points.
+        xyz_init: [b, v_target*N, 3] world-space points after Kabsch alignment.
+        xyz_init_for_merge: numpy copy of xyz_init before the loop, shape [b, v, N, 3].
         data: forward() data dict containing "image" [b, v_all, 3, H, W] in [0, 1].
         target_idx: [b, v_target] global view indices into data["image"].
         v_target: number of target views.
-        pcd_h: depth-map height used when building xyz_init.
-        pcd_w: depth-map width used when building xyz_init.
-        ph: patch height (self.ph from the model).
-        pw: patch width (self.pw from the model).
-        save_dir: root directory to write outputs. Defaults to 'debug_ckpt/debug_pcd'.
-        filename: output PLY filename (same name in each batch subfolder when applicable).
-        num_batches: save batch indices ``0 .. min(num_batches, B) - 1``. If
-            ``num_batches > 1``, writes under ``save_dir/batch_000``, etc.;
-            if ``1``, writes directly in ``save_dir``.
-        src_corr_idx: flat indices into view-0 points, or per-batch list of same.
-        tgt_corr_idx: flat indices into view-1 points.
-        depth_maps: [b, v_target, H_vda, W_vda] VDA depth maps.
-        pre_kabsch_src_xyz: pre-Kabsch (N,3) for one batch, or list per batch index.
-            With valid correspondence indices, writes ``icp_source_view0.ply``,
-            ``icp_target_view1.ply``, and ``icp_correspondences.npz``.
-        pre_kabsch_tgt_xyz: pre-Kabsch (N,3) for one batch, or list per batch index.
-        corr_left_xy: (N,2) pixel coords on pcd_h×pcd_w for one batch, or per-batch list.
-        corr_right_xy: (N,2) pixel coords on pcd_h×pcd_w for one batch, or per-batch list.
+        depth_output: [b, v_target, H, W] VDA depth maps, or None.
+        debug_corrs: one entry per saved batch — (src_idx, tgt_idx, corr_xy_from_pixels).
+        pcd_h: depth-map height.
+        pcd_w: depth-map width.
+        num_batches: number of batches saved; controls whether subdirs are used.
+        ph: patch height.
+        pw: patch width.
+        save_dir: root directory to write outputs.
+        filename: output PLY filename.
     """
-    b = xyz_init.shape[0]
-    n_req = max(1, int(num_batches))
-    use_subdirs = n_req > 1
-    n_save = min(n_req, b)
-
-    for bi in range(n_save):
-        batch_dir = (
-            str(Path(save_dir) / f'batch_{bi:03d}') if use_subdirs else save_dir
-        )
+    use_subdirs = num_batches > 1
+    for bi, (src_idx, tgt_idx, corr_xy) in enumerate(debug_corrs):
+        batch_dir = str(Path(save_dir) / f'batch_{bi:03d}') if use_subdirs else save_dir
         _save_merged_pcd_single(
             batch_idx=bi,
             batch_save_dir=batch_dir,
@@ -389,11 +317,11 @@ def save_merged_pcd(
             ph=ph,
             pw=pw,
             filename=filename,
-            src_corr_idx=_per_batch_corr_indices(src_corr_idx, bi),
-            tgt_corr_idx=_per_batch_corr_indices(tgt_corr_idx, bi),
-            depth_maps=depth_maps,
-            icp_pre_kabsch_src_xyz=_per_batch_ndarray_or_list(pre_kabsch_src_xyz, bi),
-            icp_pre_kabsch_tgt_xyz=_per_batch_ndarray_or_list(pre_kabsch_tgt_xyz, bi),
-            corr_left_xy=_per_batch_corr_xy(corr_left_xy, bi),
-            corr_right_xy=_per_batch_corr_xy(corr_right_xy, bi),
+            src_corr_idx=src_idx,
+            tgt_corr_idx=tgt_idx,
+            depth_maps=depth_output,
+            icp_pre_kabsch_src_xyz=np.ascontiguousarray(xyz_init_for_merge[bi, 0]),
+            icp_pre_kabsch_tgt_xyz=np.ascontiguousarray(xyz_init_for_merge[bi, 1]),
+            corr_left_xy=corr_xy[0] if corr_xy is not None else None,
+            corr_right_xy=corr_xy[1] if corr_xy is not None else None,
         )

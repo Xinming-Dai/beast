@@ -10,9 +10,8 @@ from typing import Any
 
 import torch
 
-from beast.config import BeastConfig
 from beast.inference import predict_images, predict_video
-from beast.io import load_config
+from beast.io import load_config, validate_config
 from beast.logging import log_step
 from beast.models.base import BaseLightningModel
 from beast.models.sable import Sable
@@ -117,7 +116,7 @@ class Model:
         if not isinstance(config_path, dict):
             config = load_config(config_path)
         else:
-            config = BeastConfig.model_validate(config_path).model_dump()
+            config = validate_config(config_path)
 
         model_type = config['model'].get('model_class', '').lower()
         if model_type not in cls.MODEL_REGISTRY:

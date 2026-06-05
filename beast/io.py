@@ -7,10 +7,31 @@ from pathlib import Path
 import yaml
 from aniposelib.cameras import CameraGroup as CameraGroupAnipose
 
-from beast.config import BeastConfig
+from beast.config import BeastConfig, SableConfig
 from beast.preprocess.config_3d import Beast3DConfig
 
 _logger = logging.getLogger(__name__)
+
+
+def validate_config(raw: dict) -> dict:
+    """Validate a raw config dict and return it as a plain nested dict.
+
+    Dispatches to the appropriate pydantic schema based on model_class, filling
+    in defaults for any fields absent from the raw dict.
+
+    Args:
+        raw: untyped config dict, typically from yaml.safe_load
+
+    Returns:
+        validated config as a plain nested dict with defaults applied
+
+    Raises:
+        pydantic_core.ValidationError: if required fields are missing or invalid
+    """
+    model_class = raw.get('model', {}).get('model_class', '')
+    if model_class == 'sable':
+        return SableConfig.model_validate(raw).model_dump()
+    return BeastConfig.model_validate(raw).model_dump()
 
 
 def load_config(path: str | Path) -> dict:
@@ -34,13 +55,7 @@ def load_config(path: str | Path) -> dict:
     with open(path) as file:
         raw = yaml.safe_load(file)
 
-    # validate against the schema; raises ValidationError on missing required
-    # fields, wrong types, or invalid Literal values
-    validated = BeastConfig.model_validate(raw)
-
-    # convert back to a plain nested dict so callers don't depend on pydantic types;
-    # this also fills in any fields that have defaults but were absent from the yaml
-    return validated.model_dump()
+    return validate_config(raw)
 
 
 def apply_config_overrides(config: dict, overrides: dict | list) -> dict:

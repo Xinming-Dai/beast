@@ -7,7 +7,7 @@ import lightning.pytorch as pl
 import torch
 from lightning.pytorch.utilities import rank_zero_only
 
-from beast import log_step, version as beast_version
+from beast.logging import log_step
 from beast.data.sable_dataset import SABLEDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
@@ -196,7 +196,6 @@ def train_sable(config: dict, model, output_dir: str | Path):
     log_step('Entering train_sable()', level='debug')
     reset_seeds(seed=int(config['model'].get('seed', 0)))
 
-    config['model']['beast_version'] = beast_version
     pretty_print_config(config)
 
     training = config['training']
