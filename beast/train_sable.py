@@ -246,6 +246,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         if not is_lightning_ckpt or reset_training_state:
             # plain PyTorch checkpoint or explicitly resetting training state —
             # load model weights only so optimizer/scheduler start fresh
+            log_step('Training state will be reset', level='warning')
             state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             if missing:
