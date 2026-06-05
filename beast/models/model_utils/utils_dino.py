@@ -1,7 +1,37 @@
 """DINOv3 feature extractor for patch and CLS token extraction."""
 
+import os
 import torch.nn as nn
+from pathlib import Path
 from transformers import AutoModel
+
+
+def _resolve_model_path(model_name: str) -> str:
+    """Resolve model identifier to a local path or HuggingFace identifier.
+
+    Priority:
+    1. If model_name is an existing local directory, use it directly.
+    2. If ``HF_HOME`` is set and contains files directly (not a snapshot dir),
+       use that directory directly — handles the case where weights were
+       downloaded to HF_HOME/ without the snapshot subdirectory.
+    3. Otherwise treat model_name as a HuggingFace model ID.
+    """
+    p = Path(model_name)
+    if p.is_dir():
+        return str(p.resolve())
+
+    # Check HF_HOME: support both snapshot layout and flat layout
+    hf_home = Path(os.environ.get('HF_HOME', ''))
+    if hf_home and hf_home.is_dir():
+        # Snapshot layout: HF_HOME/models--{model_name}/...
+        snapshot = hf_home / f'models--{model_name.replace("/", "--")}'
+        if snapshot.is_dir():
+            return str(snapshot.resolve())
+        # Flat layout: HF_HOME/ directly contains the model files (user downloaded here)
+        if (hf_home / 'config.json').exists():
+            return str(hf_home.resolve())
+
+    return model_name
 
 
 class DinoV3(nn.Module):
@@ -9,18 +39,20 @@ class DinoV3(nn.Module):
 
     def __init__(
         self,
-        model_name='facebook/dinov3-vitb16-pretrain-lvd1689m',
-        freeze=True,
+        model_name: str = 'facebook/dinov3-vitb16-pretrain-lvd1689m',
+        freeze: bool = True,
     ):
         """Initialize DINOv3.
 
         Args:
-            model_name: HuggingFace model identifier.
+            model_name: HuggingFace model identifier or path to a local directory
+                containing model files (preferred when offline / gated repo).
             freeze: whether to freeze all parameters (default True).
         """
         super().__init__()
 
-        self.model = AutoModel.from_pretrained(model_name)
+        resolved = _resolve_model_path(model_name)
+        self.model = AutoModel.from_pretrained(resolved, local_files_only=Path(resolved).is_dir())
 
         self.embed_dim = self.model.config.hidden_size
 

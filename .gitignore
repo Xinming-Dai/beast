@@ -183,7 +183,12 @@ app.log
 
 # data
 data/
+!beast/data/
+!beast/data/cheese3d_dataset.py
 *.png
 
 # 3D model
 metric_checkpoint/
+outputs/
+tb_logs/
+third_party/

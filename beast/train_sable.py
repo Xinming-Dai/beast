@@ -8,7 +8,6 @@ import torch
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast import log_step, version as beast_version
-from beast.data.ibl_dataset import IBLDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
@@ -174,7 +173,12 @@ class StepAccumulatorCallback(pl.Callback):
 
 
 def train_sable(config: dict, model, output_dir: str | Path):
-    """Train a Sable model on IBL data using PyTorch Lightning.
+    """Train a Sable model on Cheese3D or IBL data using PyTorch Lightning.
+
+    The dataset class is resolved from ``training.dataset_name`` in the config:
+
+    - ``beast.data.cheese3d_dataset.Cheese3DDataset`` — Cheese3D zero-shot evaluation.
+    - ``beast.data.ibl_dataset.IBLDataset`` — IBL training (legacy, default).
 
     Reads training parameters from ``config['training']``:
     ``batch_size_per_gpu``, ``max_fwdbwd_passes``, ``grad_accum_steps``,
@@ -201,12 +205,30 @@ def train_sable(config: dict, model, output_dir: str | Path):
 
     training = config['training']
 
-    log_step('Building IBL datasets (train / val splits)', level='info')
-    train_dataset = IBLDataset(config, include_splits=['train'])
-    val_dataset = IBLDataset(config, include_splits=['val'])
+    # Resolve dataset class from config or default to IBLDataset.
+    # Cheese3D: set training.dataset_name = beast.data.cheese3d_dataset.Cheese3DDataset
+    # IBL: use beast.data.ibl_dataset.IBLDataset (default, legacy).
+    dataset_name = str(training.get('dataset_name', 'beast.data.ibl_dataset.IBLDataset'))
+    log_step(f'Building dataset using: {dataset_name}', level='info')
+
+    import importlib
+    module_path, class_name = dataset_name.rsplit('.', 1)
+    module = importlib.import_module(module_path)
+    DatasetClass = getattr(module, class_name)
+
+    log_step('Building datasets (train / val splits)', level='info')
+    train_dataset = DatasetClass(config, include_splits=['train'])
+    val_check_interval = int(training.get('val_every', 10))
+    if val_check_interval > 0:
+        val_dataset = DatasetClass(config, include_splits=['val'])
+        log_step('Building validation dataloader', level='debug')
+    else:
+        val_dataset = None
+        val_check_interval = 1  # non-zero to avoid ZeroDivisionError in Lightning
+        log_step('Validation disabled (val_every <= 0)', level='info')
 
     if rank_zero_only.rank == 0:
-        print(f'Dataset — train: {len(train_dataset)}, val: {len(val_dataset)}')
+        print(f'Dataset — train: {len(train_dataset)}, val: {len(val_dataset) if val_dataset else 0}')
 
     num_workers = int(training.get('num_workers', 8))
     batch_size = int(training.get('batch_size_per_gpu', 1))
@@ -220,15 +242,18 @@ def train_sable(config: dict, model, output_dir: str | Path):
         persistent_workers=num_workers > 0,
         drop_last=True,
     )
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=collate_with_correspondence_padding,
-        persistent_workers=num_workers > 0,
-        drop_last=False,
-    )
+    if val_dataset is not None:
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate_with_correspondence_padding,
+            persistent_workers=num_workers > 0,
+            drop_last=False,
+        )
+    else:
+        val_loader = None
 
     # ----------------------------------------------------------------------------------
     # Set up and run training
@@ -278,6 +303,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
     callbacks += get_callbacks(
         lr_monitor=True,
         checkpointing=training.get('save_val_best_checkpoint', True),
+        val_monitor='val_loss' if val_dataset is not None else None,
     )
     checkpoint_every = int(training.get('checkpoint_every', 0))
     if checkpoint_every > 0:
@@ -321,7 +347,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         max_steps=max_steps_this_run,
         accumulate_grad_batches=int(training.get('grad_accum_steps', 1)),
         precision=precision,
-        val_check_interval=int(training.get('val_every', 10)),
+        val_check_interval=val_check_interval,
         gradient_clip_val=float(training.get('grad_clip_norm', 1.0)),
         callbacks=callbacks,
         logger=logger,

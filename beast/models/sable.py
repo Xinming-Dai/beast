@@ -464,15 +464,23 @@ class Sable(BaseLightningModel):
         )
         total_steps = self.config['training']['max_fwdbwd_passes']
         warmup_steps = cfg['warmup']
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=cfg['lr'],
-            total_steps=total_steps,
-            pct_start=warmup_steps / total_steps,
-            anneal_strategy='cos',
-            div_factor=cfg.get('div_factor', 1.0),
-            final_div_factor=cfg.get('final_div_factor', 1.0),
-        )
+        if total_steps <= warmup_steps:
+            scheduler = torch.optim.lr_scheduler.ConstantLR(
+                optimizer,
+                factor=1.0,
+                total_iters=total_steps,
+            )
+        else:
+            pct_start = min(1.0, max(0.0, warmup_steps / total_steps))
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=cfg['lr'],
+                total_steps=total_steps,
+                pct_start=pct_start,
+                anneal_strategy='cos',
+                div_factor=cfg.get('div_factor', 1.0),
+                final_div_factor=cfg.get('final_div_factor', 1.0),
+            )
         return {
             'optimizer': optimizer,
             'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'},
@@ -779,6 +787,8 @@ class Sable(BaseLightningModel):
             if self.debug_merged_pcd:
                 xyz = xyz_init
                 from beast.models.model_utils.debug_merge import save_merged_pcd
+                from pathlib import Path
+                ckpt_dir = Path(self.config['training']['checkpoint_dir']).expanduser().resolve()
                 save_merged_pcd(
                     xyz_init=xyz_init,
                     data=data,
@@ -788,6 +798,7 @@ class Sable(BaseLightningModel):
                     pcd_w=int(self.config['model']['target_image']['width']),
                     ph=self.ph,
                     pw=self.pw,
+                    save_dir=str(ckpt_dir / 'debug_pcd'),
                     num_batches=self.debug_merged_pcd_num_batches,
                     src_corr_idx=debug_src_corr_idx,
                     tgt_corr_idx=debug_tgt_corr_idx,
@@ -1433,8 +1444,9 @@ class Sable(BaseLightningModel):
         try:
             save_vda_debug_images(vda_in_orig, vda_in, depth_maps, Path(self.vda_debug_dir))
             self._vda_debug_saved = True
-        except Exception:
-            # Never break training due to debug logging.
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[VDA debug] save_vda_debug_images failed: {e}", exc_info=True)
             self._vda_debug_saved = True
 
 

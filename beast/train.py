@@ -213,6 +213,7 @@ def get_callbacks(
     checkpointing: bool = True,
     lr_monitor: bool = True,
     ckpt_every_n_epochs: int | None = None,
+    val_monitor: str | None = 'val_loss',
 ) -> list:
 
     callbacks = []
@@ -221,10 +222,10 @@ def get_callbacks(
         lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='epoch')
         callbacks.append(lr_monitor)
 
-    # always save out best model
-    if checkpointing:
+    # always save out best model when validation is enabled
+    if checkpointing and val_monitor:
         ckpt_best_callback = pl.callbacks.model_checkpoint.ModelCheckpoint(
-            monitor='val_loss',
+            monitor=val_monitor,
             mode='min',
             filename='{epoch}-{step}-best',
         )

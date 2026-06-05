@@ -1,0 +1,190 @@
+# SABLE training config for Cheese3D zero-shot evaluation.
+#
+# PHASE 1 (smoke test):
+#   - model.gaussians.init_gs: false   → skip Kabsch / merge_pcd
+#   - model.vda.mode: online           → VDA runs on-the-fly; depth_vda is zero placeholder
+#   - No correspondence cache needed
+#
+# PHASE 2 (pseudo-correspondence):
+#   - Set model.gaussians.init_gs: true
+#   - Generate pseudo-points from segmentation masks (≥ 3 pts per pair)
+#
+# PHASE 3 (LP keypoints):
+#   - Set model.merge_pcd.correspondence_cache_root to processed LitPose bundles
+#
+# USAGE:
+#   Override the following at runtime via CLI --overrides or environment:
+#     training.dataset_path    → path to Cheese3D root or manifest JSONL
+#     training.views           → camera view names (e.g. L R or BC TL TR)
+#     training.sessions        → session IDs to include (optional)
+#     checkpoint_dir           → output directory for checkpoints
+#     resume_ckpt              → pretrained SABLE checkpoint (e.g. sable_dl3dv.pt)
+
+inference: false
+evaluation: false
+
+model:
+  model_class: sable
+  seed: 0
+
+  gaussians:
+    init_gs: false        # Phase 1: skip Kabsch
+    n_gaussians: 1
+    range_setting:
+      type: linear_depth
+      near: 0
+      far: 8
+    sh_degree: 3
+    upsampler:
+      upsample_factor: 1
+
+  gs_per_pixel_sqrt: 1
+  hard_pixelalign: true
+
+  image_tokenizer:
+    image_size: 320
+    in_channels: 3
+    patch_size: 16
+    use_off_the_shelf: false
+
+  input_with_pe: true
+  near_plane: 0.2
+
+  pose_latent:
+    canonical: middle
+    length: 1
+    mode: pairwise
+
+  scaling_bias: -3.0
+  scaling_max: -2.0
+
+  target_image:
+    height: 320
+    width: 320
+
+  transformer:
+    d: 768
+    d_head: 64
+    decoder_n_layer: 8
+    depth_init: true
+    encoder_geom_n_layer: 16
+    encoder_n_layer: 16
+    fix_decoder: false
+    neck_n_layer: 1
+    special_init: true
+    use_qk_norm: true
+
+  vda:
+    enabled: true
+    mode: precomputed         # A0: precomputed=zero placeholder; A1: set to online
+    cache_root: null
+    checkpoint_path: null
+    encoder: vitb
+    metric: false
+    debug_save: false
+    debug_dir: null
+
+  use_deferred_rendering: false
+  use_gsplat: true
+  mask_ratio: 0.75
+
+  merge_pcd:
+    num_points: 3
+    debug_merged_pcd: false
+    debug_merged_pcd_num_batches: 16
+    correspondence_cache_root: null   # Phase 1: null, Phase 3: set to LitPose cache
+
+optimizer:
+  type: AdamW
+  lr: 0.00002
+  wd: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 600
+  div_factor: 1.0
+  final_div_factor: 1.0
+  scheduler: cosine
+
+training:
+  # ── Dataset ──────────────────────────────────────────────────────────────────
+  dataset_name: beast.data.cheese3d_dataset.Cheese3DDataset
+  dataset_path: /home/jqh/NeuralWorkshops/E-RayZer-private/data/cheese3d_cam
+  views: [L, R]              # Override: use any 2+ cameras from {BC, L, R, TC, TL, TR}
+  sessions: null              # Override: specific session IDs to include
+  allow_missing_masks: true   # Phase 1: skip mask requirement
+
+  # ── Image / frame sampling ───────────────────────────────────────────────────
+  image_size: 320
+  start_frame: 0
+  frame_step: 1
+  max_frames_per_session: null
+
+  # ── View regime ───────────────────────────────────────────────────────────────
+  # Two-input reconstruction: all views are both context and target.
+  # context_indices = target_indices = [0, 1, ...] (one entry per view).
+  ibl_training_regime: two_input_reconstruction
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
+
+  # ── Validation ────────────────────────────────────────────────────────────────
+  val_split_ratio: 0.1
+  val_every: 0               # A0: disabled
+  val_score_frame_weight: 1.0
+  val_score_perceptual_weight: 1.0
+  val_score_depth_weight: 1.0
+  save_val_best_checkpoint: false  # A0: disabled
+
+  # ── Training ─────────────────────────────────────────────────────────────────
+  batch_size_per_gpu: 4       # A0: small batch to reduce memory pressure
+  grad_accum_steps: 1
+  num_workers: 4              # A0: reduce workers
+  prefetch_factor: 2
+
+  amp_dtype: bf16
+  use_amp: true
+  use_tf32: true
+
+  checkpoint_dir: ./outputs/cheese3d_phase1_a0_full
+  checkpoint_every: 0          # keep disabled unless needed
+  checkpoint_steps: []        # A0: disabled
+
+  resume_ckpt: null           # No pretrained checkpoint — public beast/sable.py incompatible with private ckpts
+  reset_training_state: true
+  max_fwdbwd_passes: 5000        # Full baseline training
+  print_every: 1
+  save_visuals: true
+  vis_num_samples: 1
+  vis_max_views: 2
+  render_video: false
+
+  grad_checkpoint_every: 1
+  grad_clip_norm: 1.0
+  allowed_gradnorm_factor: 5.0
+  no_pass_steps: 50
+
+  # ── Losses ────────────────────────────────────────────────────────────────────
+  l2_loss_weight: 1.0
+  lpips_loss_weight: 0.0
+  perceptual_loss_weight: 0.3
+  gs_reg_loss_weight: 1.0
+  gs_decay_steps: 0
+
+  scene_scale_factor: 1.35
+  random_split: false
+  random_shuffle: false
+
+  view_selector:
+    type: all
+    fallback_type: all
+    overlap_path_template: null
+    use_curriculum: false
+    curriculum_iter: 0
+    curriculum_start_min_overlap: 1.0
+    curriculum_start_max_overlap: 1.0
+    min_overlap: 0.0
+    max_overlap: 1.0
+    min_frame_dist: 1
+    max_frame_dist: 1
+    curriculum_start_min_frame_dist: 1
+    curriculum_start_max_frame_dist: 1

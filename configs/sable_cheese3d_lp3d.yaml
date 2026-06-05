@@ -1,0 +1,194 @@
+# Phase 3: LP3D Kabsch — Cheese3D with 28 keypoint correspondences from LP3D.
+#
+# Correspondence pipeline:
+#   1. LP3D (mvt_3d_loss_450_0) → 28 keypoints × L/R views → CSV predictions
+#   2. convert_csv_to_litpose_cache.py → litpose_matches.npz bundles
+#   3. Cheese3DDataset (correspondence_mode=cache) → leftcamera_xy / rightcamera_xy / confidence
+#   4. Sable.forward (init_gs=true) → Kabsch alignment → gs_reg_loss
+#
+# No pretrained checkpoint is used — model trains from scratch.
+# All transformer/decoder weights are initialized via special_init=true.
+#
+# Expected outcomes:
+#   - Phase 1 (init_gs=false): no Kabsch, only L2+LPIPS+Perceptual loss
+#   - Phase 2 (mask_bbox, 5 points): ~76% Kabsch inliers (verified independently)
+#   - Phase 3 (LP3D, 28 points, mean_conf=0.99): should match or exceed Phase 2
+#
+# Ablation matrix:
+#   init_gs | correspondence_mode | source       | expected
+#   --------|-------------------|--------------|------------------
+#   false   | none              | (baseline)   | no Kabsch
+#   true    | mask_bbox         | seg masks    | 5 pts, conf=1.0
+#   true    | cache             | LP3D npz     | 28 pts, conf~0.99
+
+inference: false
+evaluation: false
+
+model:
+  model_class: sable
+  seed: 42
+
+  gaussians:
+    init_gs: true              # KEY: enable Kabsch point cloud initialization
+    n_gaussians: 1
+    range_setting:
+      type: linear_depth
+      near: 0
+      far: 8
+    sh_degree: 3
+    upsampler:
+      upsample_factor: 1
+
+  gs_per_pixel_sqrt: 1
+  hard_pixelalign: true
+
+  image_tokenizer:
+    image_size: 320
+    in_channels: 3
+    patch_size: 16
+    use_off_the_shelf: false
+
+  input_with_pe: true
+  near_plane: 0.2
+
+  pose_latent:
+    canonical: middle
+    length: 1
+    mode: pairwise
+
+  scaling_bias: -3.0
+  scaling_max: -2.0
+
+  target_image:
+    height: 320
+    width: 320
+
+  transformer:
+    d: 768
+    d_head: 64
+    decoder_n_layer: 8
+    depth_init: true
+    encoder_geom_n_layer: 16
+    encoder_n_layer: 16
+    fix_decoder: false
+    neck_n_layer: 1
+    special_init: true     # critical for training from scratch
+    use_qk_norm: true
+
+  vda:
+    enabled: true
+    mode: online             # VDA runs online (fast, ~0.5s per frame on A100)
+    cache_root: null
+    checkpoint_path: null
+    encoder: vitb
+    metric: false
+    debug_save: false
+    debug_dir: null
+
+  use_deferred_rendering: false
+  use_gsplat: true
+  mask_ratio: 0.0           # Phase 3: no masking — full image for correspondence quality
+
+  merge_pcd:
+    num_points: 3           # minimum correspondences for Kabsch
+    debug_merged_pcd: false
+    debug_merged_pcd_num_batches: 16
+    correspondence_cache_root: /home/jqh/NeuralWorkshops/E-RayZer-private/data/cheese3d_lp_correspondences_v2
+
+optimizer:
+  type: AdamW
+  lr: 0.0001               # Higher LR for training from scratch (vs 2e-5 with pretrained)
+  wd: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 200
+  div_factor: 1.0
+  final_div_factor: 1.0
+  scheduler: cosine
+
+training:
+  # ── Dataset ──────────────────────────────────────────────────────────────────
+  dataset_name: beast.data.cheese3d_dataset.Cheese3DDataset
+  dataset_path: /home/jqh/NeuralWorkshops/E-RayZer-private/data/cheese3d_cam
+  views: [L, R]
+  sessions: null            # Override: set specific session for single-session training
+  allow_missing_masks: true
+
+  # ── Correspondence ───────────────────────────────────────────────────────────
+  correspondence_mode: cache   # ← KEY: load from LP3D npz bundles
+  max_empty_bundle_ratio: 0.0
+  mask_threshold: 0
+
+  # ── Image / frame sampling ───────────────────────────────────────────────────
+  image_size: 320
+  start_frame: 0
+  frame_step: 1
+  max_frames_per_session: null
+
+  # ── View regime ───────────────────────────────────────────────────────────────
+  ibl_training_regime: two_input_reconstruction
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
+
+  # ── Validation ────────────────────────────────────────────────────────────────
+  val_split_ratio: 0.1
+  val_every: 50
+  val_score_frame_weight: 1.0
+  val_score_perceptual_weight: 1.0
+  val_score_depth_weight: 1.0
+  save_val_best_checkpoint: true
+
+  # ── Training ─────────────────────────────────────────────────────────────────
+  batch_size_per_gpu: 1     # Conservative for 320x320 Gaussian Splatting
+  grad_accum_steps: 1
+  num_workers: 4
+  prefetch_factor: 2
+
+  amp_dtype: bf16
+  use_amp: true
+  use_tf32: true
+
+  checkpoint_dir: ./outputs/cheese3d_phase3_lp3d
+  checkpoint_every: 0
+  checkpoint_steps: []
+
+  resume_ckpt: null         # ← NO pretrained checkpoint — train from scratch
+  reset_training_state: true
+  max_fwdbwd_passes: 5000  # Adjust for actual training run
+  print_every: 1
+  save_visuals: true
+  vis_num_samples: 2
+  vis_max_views: 2
+  render_video: true
+
+  grad_checkpoint_every: 1
+  grad_clip_norm: 1.0
+  allowed_gradnorm_factor: 5.0
+  no_pass_steps: 50
+
+  # ── Losses ───────────────────────────────────────────────────────────────────
+  l2_loss_weight: 1.0
+  lpips_loss_weight: 0.0
+  perceptual_loss_weight: 0.3
+  gs_reg_loss_weight: 1.0   # Key: drives Gaussians toward Kabsch-aligned positions
+  gs_decay_steps: 0
+
+  scene_scale_factor: 1.35
+  random_split: false
+  random_shuffle: false
+
+  view_selector:
+    type: all
+    fallback_type: all
+    overlap_path_template: null
+    use_curriculum: false
+    curriculum_iter: 0
+    curriculum_start_min_overlap: 1.0
+    curriculum_start_max_overlap: 1.0
+    min_overlap: 0.0
+    max_overlap: 1.0
+    min_frame_dist: 1
+    max_frame_dist: 1
+    curriculum_start_min_frame_dist: 1
+    curriculum_start_max_frame_dist: 1
