@@ -164,15 +164,29 @@ class PerceptualLoss(nn.Module):
         return (e0 + e1 + e2 + e3 + e4 + e5) / 255.0
 
 
-def masked_mse_loss(rendering: torch.Tensor, target: torch.Tensor, pixel_mask: torch.Tensor) -> torch.Tensor:
+def masked_mse_loss(
+    rendering: torch.Tensor,
+    target: torch.Tensor,
+    pixel_mask: torch.Tensor,
+) -> torch.Tensor:
     """Scalar MSE over RGB: sum(w*(p-t)^2) / sum(w), w repeated across channels."""
     m = pixel_mask.to(dtype=rendering.dtype, device=rendering.device)
     if m.ndim == 3:
         m = m.unsqueeze(1)
     valid_mask = m.expand_as(rendering)
     loss = F.mse_loss(rendering, target, reduction='none') * valid_mask
-    normalizer = valid_mask.sum()
-    return loss.sum() / normalizer
+    return loss.sum() / valid_mask.sum().clamp_min(1.0)
+
+
+def masked_gs_reg_loss(
+    xyz_norm: torch.Tensor,
+    xyz_init_norm: torch.Tensor,
+    gaussian_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Masked MSE over Gaussian xyz displacements: sum(w*(p-p0)^2) / sum(w), w broadcast over xyz coordinates."""
+    m = gaussian_mask.to(dtype=xyz_norm.dtype, device=xyz_norm.device).reshape(gaussian_mask.shape[0], -1, 1)
+    loss = F.mse_loss(xyz_norm, xyz_init_norm, reduction='none') * m
+    return loss.sum() / m.sum().clamp_min(1.0)
 
 
 class LossComputer(nn.Module):
@@ -208,6 +222,7 @@ class LossComputer(nn.Module):
         xyz_norm: torch.Tensor,
         xyz_init_norm: torch.Tensor,
         pixel_mask: torch.Tensor | None = None,
+        gaussian_mask: torch.Tensor | None = None,
     ) -> SimpleNamespace:
         """Compute composite render loss.
 
@@ -216,7 +231,8 @@ class LossComputer(nn.Module):
             target: ground-truth images of shape [B, V, 3 or 4, H, W].
             xyz_norm: normalized xyz coordinates of shape [B, V, N, 3].
             xyz_init_norm: normalized initial xyz coordinates of shape [B, V, N, 3].
-            pixel_mask: optional foreground mask of shape [B, V, H, W] or [B*V, 1, H, W].
+            pixel_mask: optional mask of shape [B, V, H, W]; 1.0 at masked token pixels, 0.0 at visible.
+            gaussian_mask: optional mask of shape [B, V, N]; 1.0 at masked Gaussians, 0.0 at visible.
 
         Returns:
             SimpleNamespace with fields: loss, l2_loss, psnr, gs_reg_loss, lpips_loss, perceptual_loss.
@@ -233,11 +249,14 @@ class LossComputer(nn.Module):
             l2_loss = masked_mse_loss(rendering, target, pixel_mask)
         else:
             l2_loss = F.mse_loss(rendering, target)
-        gs_reg_loss = (
-            F.mse_loss(xyz_norm, xyz_init_norm)
-            if xyz_norm is not None and xyz_init_norm is not None
-            else rendering.new_zeros(())
-        )
+
+        if xyz_norm is not None and xyz_init_norm is not None:
+            if gaussian_mask is not None:
+                gs_reg_loss = masked_gs_reg_loss(xyz_norm, xyz_init_norm, gaussian_mask)
+            else:
+                gs_reg_loss = F.mse_loss(xyz_norm, xyz_init_norm)
+        else:
+            gs_reg_loss = rendering.new_zeros(())
 
         psnr = -10.0 * torch.log10(l2_loss.clamp_min(1e-8))
 

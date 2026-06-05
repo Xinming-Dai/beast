@@ -272,21 +272,12 @@ def get_interpolated_poses_many(
     traj = np.stack(traj, axis=0)
     k_interp = torch.stack(k_interp, dim=0)
 
-    return torch.tensor(traj, dtype=torch.float32), torch.tensor(k_interp, dtype=torch.float32)
+    return torch.from_numpy(traj).float(), k_interp.clone().detach().float()
 
 
 def normalize(x: torch.Tensor) -> Float[Tensor, '*batch']:
     """Return a normalized vector."""
     return x / torch.linalg.norm(x)
-
-
-def viewmatrix(z, up, pos):
-    """Construct a camera view matrix using the look direction, up vector, and position."""
-    vec2 = normalize(up)
-    vec0 = normalize(torch.cross(z, vec2))
-    vec1 = normalize(torch.cross(vec0, z))
-    m = torch.stack([vec0, vec1, z, pos], 1)
-    return m
 
 
 def normalize_np(x):
@@ -352,29 +343,6 @@ def normalize_with_norm(
         torch.tensor([_EPS]).to(x),
     )
     return x / norm, norm
-
-
-def viewmatrix(  # noqa: F811
-    lookat: torch.Tensor,
-    up: torch.Tensor,
-    pos: torch.Tensor,
-) -> Float[Tensor, '*batch']:
-    """Return a camera transformation matrix.
-
-    Args:
-        lookat: the direction the camera is looking.
-        up: the upward direction of the camera.
-        pos: the position of the camera.
-
-    Returns:
-        camera transformation matrix.
-    """
-    vec2 = normalize(lookat)
-    vec1_avg = normalize(up)
-    vec0 = normalize(torch.cross(vec1_avg, vec2))
-    vec1 = normalize(torch.cross(vec2, vec0))
-    m = torch.stack([vec0, vec1, vec2, pos], 1)
-    return m
 
 
 def get_distortion_params(

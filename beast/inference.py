@@ -6,6 +6,7 @@ from typing import Any
 
 import lightning.pytorch as pl
 import numpy as np
+import cv2
 import torch
 import torch.nn.functional as F
 import yaml
@@ -13,7 +14,7 @@ from PIL import Image
 from torchvision import transforms
 from typeguard import typechecked
 
-from beast import log_step
+from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
