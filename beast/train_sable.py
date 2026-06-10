@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import yaml
+
 import lightning.pytorch as pl
 import torch
 from lightning.pytorch.utilities import rank_zero_only
@@ -192,6 +194,10 @@ def train_sable(config: dict, model, output_dir: str | Path):
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_config_file = output_dir / 'config.yaml'
+    with open(dest_config_file, 'w') as file:
+        yaml.dump(config, file)
 
     log_step('Entering train_sable()', level='debug')
     reset_seeds(seed=int(config['model'].get('seed', 0)))
