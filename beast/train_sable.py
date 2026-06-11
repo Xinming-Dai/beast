@@ -1,5 +1,6 @@
 """Sable-specific training loop using PyTorch Lightning."""
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -10,10 +11,23 @@ import torch
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast.logging import log_step
-from beast.data.sable_dataset import SABLEDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
+
+
+def _resolve_dataset_class(dataset_name: str) -> type:
+    """Resolve a dotted ``module.ClassName`` path to the dataset class.
+
+    Args:
+        dataset_name: dotted path, e.g. ``'beast.data.sable_dataset.SABLEDataset'``.
+
+    Returns:
+        the resolved class.
+    """
+    module_name, _, class_name = dataset_name.rpartition('.')
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
 
 
 class LossLoggerCallback(pl.Callback):
@@ -207,8 +221,11 @@ def train_sable(config: dict, model, output_dir: str | Path):
     training = config['training']
 
     log_step('Building IBL datasets (train / val splits)', level='info')
-    train_dataset = SABLEDataset(config, include_splits=['train'])
-    val_dataset = SABLEDataset(config, include_splits=['val'])
+    dataset_cls = _resolve_dataset_class(
+        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
+    )
+    train_dataset = dataset_cls(config, include_splits=['train'])
+    val_dataset = dataset_cls(config, include_splits=['val'])
 
     if rank_zero_only.rank == 0:
         print(f'Dataset — train: {len(train_dataset)}, val: {len(val_dataset)}')
