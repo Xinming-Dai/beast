@@ -68,6 +68,9 @@ packages = [{ include = "beast" }]
 beast = "beast.cli.main:main"
 
 [project.optional-dependencies]
+vda = [
+    "easydict",
+]
 dev = [
     "pre-commit",
     "pyright",
