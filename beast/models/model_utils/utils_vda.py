@@ -19,9 +19,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 VDA_INPUT_SIZE = 518
 
 
-def ensure_vda_on_path() -> None:
-    """Ensure a local Video-Depth-Anything repo is on sys.path."""
+def ensure_vda_on_path(repo_root: str | Path | None = None) -> None:
+    """Ensure a local Video-Depth-Anything repo is on sys.path.
+
+    Args:
+        repo_root: optional path to the VDA repo (e.g. from `model.vda.repo_root` in config).
+            Takes precedence over the `VDA_REPO_ROOT` env var and the default
+            `<beast repo root>/third_party/VDA` location.
+    """
     candidates = [
+        repo_root,
         os.environ.get('VDA_REPO_ROOT'),
         _REPO_ROOT / 'third_party' / 'VDA',
     ]
@@ -90,12 +97,13 @@ def load_frozen_video_depth_anything(vda_cfg: Mapping[str, Any]) -> nn.Module:
     """Build VideoDepthAnything, load checkpoint if present, freeze and set eval.
 
     Args:
-        vda_cfg: VDA config mapping with optional keys 'encoder', 'metric', 'checkpoint_path'.
+        vda_cfg: VDA config mapping with optional keys 'encoder', 'metric', 'checkpoint_path',
+            'repo_root'.
 
     Returns:
         frozen nn.Module in eval mode.
     """
-    ensure_vda_on_path()
+    ensure_vda_on_path(vda_cfg.get('repo_root'))
     _disable_vda_xformers_flags()
     from video_depth_anything.video_depth import VideoDepthAnything
 

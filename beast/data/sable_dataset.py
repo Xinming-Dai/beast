@@ -32,6 +32,8 @@ class _PrecacheRecord:
     left_source_frame_index: int
     right_source_frame_index: int
     scene_name: str
+    left_mask_path: Path | None = None
+    right_mask_path: Path | None = None
 
 
 class SABLEDataset(Dataset):
@@ -282,6 +284,40 @@ class SABLEDataset(Dataset):
         if not records:
             raise RuntimeError(f'No valid scene JSON paths found in {dataset_path}')
 
+        return self._split_records(
+            records,
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+            source_desc=str(dataset_path),
+        )
+
+    @staticmethod
+    def _split_records(
+        records: list[_PrecacheRecord],
+        include_splits: list[str] | None,
+        val_split_ratio: float,
+        split_seed: int,
+        source_desc: str,
+    ) -> list[_PrecacheRecord]:
+        """Deterministically split records into train/val and select the requested splits.
+
+        The last ``ceil(N * val_split_ratio)`` records (after shuffling with
+        ``split_seed``) become the val set; the rest are train. If ``val_split_ratio
+        == 0`` or ``include_splits`` is ``None``, all records are returned regardless
+        of the requested split.
+
+        Args:
+            records: full list of records to split.
+            include_splits: which splits to return (``['train']`` or ``['val']``).
+            val_split_ratio: fraction of records reserved for validation (0-1).
+            split_seed: RNG seed for the deterministic shuffle.
+            source_desc: human-readable description of the record source, used in
+                error messages.
+
+        Returns:
+            list of ``_PrecacheRecord`` for the requested splits.
+        """
         if val_split_ratio <= 0.0 or include_splits is None:
             return records
 
@@ -302,7 +338,7 @@ class SABLEDataset(Dataset):
         if not selected:
             raise RuntimeError(
                 f'No records after applying val_split_ratio={val_split_ratio} '
-                f'for splits={include_splits} in {dataset_path}'
+                f'for splits={include_splits} in {source_desc}'
             )
         return selected
 
@@ -773,3 +809,338 @@ class IBLTwoViewDataset(SABLEDataset):
             'rightcamera_xy': torch.zeros(k, 2, dtype=torch.float32),
             'confidence': torch.zeros(k, dtype=torch.float32),
         }
+
+
+# fixed correspondence points used by Cheese3DDataset for every scene and camera,
+# in native (320x256) pixel space; rescaled to image_size x image_size at load time
+_CHEESE3D_FIXED_XY = torch.tensor(
+    [
+        [134.8540, 210.1205],
+        [113.2900, 189.3839],
+        [32.9249, 69.7657],
+    ],
+    dtype=torch.float32,
+)
+_CHEESE3D_FIXED_CONFIDENCE = torch.ones(3, dtype=torch.float32)
+
+
+class Cheese3DDataset(SABLEDataset):
+    """Two-view dataset for Cheese3D camera frames.
+
+    Reads raw frames extracted to::
+
+        {dataset_path}/{session_id}/{camera}/img{frame_idx:08d}.png
+
+    For each session in ``training.cheese3d_session_names``, pairs frames from
+    ``training.cheese3d_left_camera`` and ``training.cheese3d_right_camera`` (default
+    ``'TL'``/``'TR'``) by matching frame index. The accompanying per-frame ``.npy``
+    files (static camera intrinsics/extrinsics, not segmentation masks) are ignored.
+
+    Unlike :class:`SABLEDataset`:
+
+    * ``depth_vda`` is always zero — pair this dataset with ``model.vda.mode: online``
+      so the SABLE model computes depth from ``data['image']`` itself.
+    * Correspondences are a fixed set of 3 points (``_CHEESE3D_FIXED_XY``,
+      ``_CHEESE3D_FIXED_CONFIDENCE``), identical for every scene and camera, rescaled
+      from native (320x256) pixel space to ``image_size x image_size``.
+
+    Optionally, SAM3 segmentation masks can be applied to zero out background pixels.
+    Masks are read from::
+
+        {segmentation_root}/{session_id}_{camera}_*/masks/mask{frame_idx:08d}.png
+
+    When ``training.cheese3d_use_segmentation`` is true, only frame indices with a
+    mask available for both cameras are included, and ``image`` is multiplied by the
+    (resized) binary mask in :meth:`__getitem__`.
+
+    Config keys read:
+
+    * ``training.dataset_path`` — root Cheese3D directory.
+    * ``training.cheese3d_session_names`` — required list of session subdirectory names.
+    * ``training.cheese3d_left_camera`` (default ``'TL'``),
+      ``training.cheese3d_right_camera`` (default ``'TR'``).
+    * ``training.cheese3d_use_segmentation`` (default ``False``),
+      ``training.cheese3d_segmentation_root`` (required if the above is true).
+    * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
+      ``training.ibl_training_regime``.
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        include_splits: list[str] | None = None,
+    ) -> None:
+        """Initialize.
+
+        Args:
+            config: full beast config dict.
+            include_splits: split filter; see :class:`SABLEDataset` for details.
+        """
+        # bypass SABLEDataset.__init__'s requirements on vda cache_root and
+        # correspondence cache; this dataset needs neither.
+        Dataset.__init__(self)
+        self.config = config
+
+        training = config['training']
+        model_cfg = config['model']
+
+        dataset_path = training.get('dataset_path')
+        if not dataset_path:
+            raise ValueError('training.dataset_path must be set.')
+        session_names = training.get('cheese3d_session_names')
+        if not session_names:
+            raise ValueError('training.cheese3d_session_names must be a non-empty list.')
+        left_camera = str(training.get('cheese3d_left_camera', 'TL'))
+        right_camera = str(training.get('cheese3d_right_camera', 'TR'))
+
+        use_segmentation = bool(training.get('cheese3d_use_segmentation', False))
+        segmentation_root: Path | None = None
+        if use_segmentation:
+            segmentation_root_raw = training.get('cheese3d_segmentation_root')
+            if not segmentation_root_raw:
+                raise ValueError(
+                    'training.cheese3d_segmentation_root must be set when '
+                    'training.cheese3d_use_segmentation is true.'
+                )
+            segmentation_root = Path(segmentation_root_raw)
+        self._use_segmentation = use_segmentation
+
+        val_split_ratio = float(training.get('val_split_ratio', 0.0))
+        split_seed = int(model_cfg.get('seed', 0))
+        self._records: list[_PrecacheRecord] = self._load_records(
+            Path(dataset_path),
+            session_names=session_names,
+            left_camera=left_camera,
+            right_camera=right_camera,
+            segmentation_root=segmentation_root,
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+        )
+
+        self._vda_cache_root = None  # type: ignore[assignment]
+        self._corr_root = None
+
+        self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
+        self._training_regime: str = str(
+            training.get('ibl_training_regime', 'two_input_reconstruction')
+        ).strip().lower()
+
+    def _load_records(  # type: ignore[override]
+        self,
+        dataset_path: Path,
+        session_names: list[str],
+        left_camera: str,
+        right_camera: str,
+        segmentation_root: Path | None,
+        include_splits: list[str] | None,
+        val_split_ratio: float,
+        split_seed: int,
+    ) -> list[_PrecacheRecord]:
+        """Build records by pairing same-index frames from two cameras across sessions.
+
+        Args:
+            dataset_path: root Cheese3D directory containing per-session subdirectories.
+            session_names: session subdirectory names to include.
+            left_camera: left camera subdirectory name (e.g. ``'TL'``).
+            right_camera: right camera subdirectory name (e.g. ``'TR'``).
+            segmentation_root: root directory of SAM3 segmentation masks, or ``None``
+                to disable mask filtering/loading.
+            include_splits: split filter; see :class:`SABLEDataset` for details.
+            val_split_ratio: fraction of records reserved for validation.
+            split_seed: RNG seed for the deterministic train/val split.
+
+        Returns:
+            list of ``_PrecacheRecord``.
+        """
+        records: list[_PrecacheRecord] = []
+        for session_name in session_names:
+            session_dir = dataset_path / session_name
+            left_dir = session_dir / left_camera
+            right_dir = session_dir / right_camera
+            if not left_dir.is_dir() or not right_dir.is_dir():
+                log_step(
+                    f'skipping session {session_name!r}: missing {left_camera!r} or '
+                    f'{right_camera!r} camera directory',
+                    level='warning',
+                )
+                continue
+            left_indices = self._frame_indices(left_dir, prefix='img', suffix='.png')
+            right_indices = self._frame_indices(right_dir, prefix='img', suffix='.png')
+            common_indices = left_indices & right_indices
+
+            left_mask_dir = right_mask_dir = None
+            if segmentation_root is not None:
+                left_mask_dir = self._resolve_mask_dir(segmentation_root, session_name, left_camera)
+                right_mask_dir = self._resolve_mask_dir(segmentation_root, session_name, right_camera)
+                left_mask_indices = self._frame_indices(left_mask_dir, prefix='mask', suffix='.png')
+                right_mask_indices = self._frame_indices(right_mask_dir, prefix='mask', suffix='.png')
+                common_indices &= left_mask_indices & right_mask_indices
+
+            for frame_idx in sorted(common_indices):
+                records.append(_PrecacheRecord(
+                    session_id=session_name,
+                    pair_idx=len(records),
+                    left_path=left_dir / f'img{frame_idx:08d}.png',
+                    right_path=right_dir / f'img{frame_idx:08d}.png',
+                    left_source_frame_index=frame_idx,
+                    right_source_frame_index=frame_idx,
+                    scene_name=f'{session_name}_frame_{frame_idx:08d}',
+                    left_mask_path=(
+                        left_mask_dir / f'mask{frame_idx:08d}.png' if left_mask_dir else None
+                    ),
+                    right_mask_path=(
+                        right_mask_dir / f'mask{frame_idx:08d}.png' if right_mask_dir else None
+                    ),
+                ))
+
+        if not records:
+            raise RuntimeError(
+                f'No common {left_camera}/{right_camera} frames found for sessions '
+                f'{session_names} under {dataset_path}'
+            )
+
+        return self._split_records(
+            records,
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+            source_desc=str(dataset_path),
+        )
+
+    @staticmethod
+    def _resolve_mask_dir(segmentation_root: Path, session_name: str, camera: str) -> Path:
+        """Resolve the ``masks/`` directory for one session/camera.
+
+        Expects exactly one ``{segmentation_root}/{session_name}_{camera}_*`` match,
+        each containing a ``masks/`` subdirectory.
+
+        Args:
+            segmentation_root: root directory of SAM3 segmentation masks.
+            session_name: session subdirectory name (e.g. ``'20231031_B6_chew_bl_000'``).
+            camera: camera name (e.g. ``'TL'``).
+
+        Returns:
+            path to the ``masks/`` subdirectory.
+
+        Raises:
+            RuntimeError: if zero or more than one matching directory is found.
+        """
+        matches = sorted(segmentation_root.glob(f'{session_name}_{camera}_*'))
+        if len(matches) != 1:
+            raise RuntimeError(
+                f'Expected exactly one segmentation mask directory matching '
+                f'{segmentation_root}/{session_name}_{camera}_*, found {len(matches)}: '
+                f'{matches}'
+            )
+        return matches[0] / 'masks'
+
+    @staticmethod
+    def _frame_indices(camera_dir: Path, prefix: str, suffix: str) -> set[int]:
+        """Return the set of frame indices with a ``{prefix}NNNNNNNN{suffix}`` file.
+
+        Args:
+            camera_dir: directory to scan.
+            prefix: filename prefix before the zero-padded frame index (e.g. ``'img'``
+                or ``'mask'``).
+            suffix: filename suffix after the frame index (e.g. ``'.png'``).
+
+        Returns:
+            set of frame indices parsed from matching filenames.
+        """
+        indices: set[int] = set()
+        for path in camera_dir.glob(f'{prefix}*{suffix}'):
+            name = path.name
+            if name.startswith(prefix) and name.endswith(suffix):
+                try:
+                    indices.add(int(name[len(prefix):-len(suffix)]))
+                except ValueError:
+                    continue
+        return indices
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        """Load one stereo pair.
+
+        Args:
+            idx: dataset index.
+
+        Returns:
+            dict with keys ``image``, ``context_indices``, ``target_indices``,
+            ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
+            ``scene_name``.
+        """
+        rec = self._records[idx]
+
+        left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
+        right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
+
+        if rec.left_mask_path is not None and rec.right_mask_path is not None:
+            left_img = left_img * self._load_mask(rec.left_mask_path)
+            right_img = right_img * self._load_mask(rec.right_mask_path)
+
+        image_tensor = torch.stack([left_img, right_img], dim=0)   # [V, 3, H, W]
+        depth_tensor = torch.zeros(
+            2, 1, self._image_size, self._image_size, dtype=torch.float32,
+        )
+
+        context_indices, target_indices = self._resolve_view_indices()
+        correspondences = self._fixed_correspondences(
+            left_orig_size=(left_orig_w, left_orig_h),
+            right_orig_size=(right_orig_w, right_orig_h),
+        )
+
+        return {
+            'image': image_tensor,
+            'context_indices': context_indices,
+            'target_indices': target_indices,
+            'depth_vda': depth_tensor,
+            'leftcamera_xy': correspondences['leftcamera_xy'],
+            'rightcamera_xy': correspondences['rightcamera_xy'],
+            'confidence': correspondences['confidence'],
+            'scene_name': rec.scene_name,
+        }
+
+    def _fixed_correspondences(
+        self,
+        left_orig_size: tuple[int, int],
+        right_orig_size: tuple[int, int],
+    ) -> dict[str, torch.Tensor]:
+        """Rescale the fixed correspondence points to ``image_size x image_size``.
+
+        Args:
+            left_orig_size: original (width, height) of the left image.
+            right_orig_size: original (width, height) of the right image.
+
+        Returns:
+            dict with keys ``leftcamera_xy [3, 2]``, ``rightcamera_xy [3, 2]``,
+            ``confidence [3]``.
+        """
+        lw, lh = left_orig_size
+        rw, rh = right_orig_size
+        scale_left = torch.tensor([self._image_size / lw, self._image_size / lh])
+        scale_right = torch.tensor([self._image_size / rw, self._image_size / rh])
+        return {
+            'leftcamera_xy': _CHEESE3D_FIXED_XY * scale_left,
+            'rightcamera_xy': _CHEESE3D_FIXED_XY * scale_right,
+            'confidence': _CHEESE3D_FIXED_CONFIDENCE.clone(),
+        }
+
+    def _load_mask(self, path: Path) -> torch.Tensor:
+        """Load a binary segmentation mask and resize to ``image_size x image_size``.
+
+        Args:
+            path: path to a single-channel mask PNG with values in ``{0, 255}``.
+
+        Returns:
+            float32 tensor ``[1, image_size, image_size]`` with values in ``{0, 1}``.
+        """
+        with Image.open(path) as img:
+            arr = np.asarray(img.convert('L'), dtype=np.float32)
+        mask = torch.from_numpy(arr > 0).to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+        if mask.shape[-2] != self._image_size or mask.shape[-1] != self._image_size:
+            mask = F.interpolate(
+                mask,
+                size=(self._image_size, self._image_size),
+                mode='nearest',
+            )
+        return mask.squeeze(0)  # [1, S, S]
