@@ -25,14 +25,16 @@ Finetune mode:
 """
 
 import argparse
+import importlib
 import json
 import os
 import sys
 import time
-import torch
-import importlib
 from pathlib import Path
 from types import SimpleNamespace
+
+import torch
+import yaml
 
 try:
     import tqdm
@@ -42,7 +44,10 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-HF_DINO_DIR = "/data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints/dinov3-vitb16-pretrain-lvd1689m"
+HF_DINO_DIR = (
+    "/data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints/"
+    "dinov3-vitb16-pretrain-lvd1689m"
+)
 os.environ["HF_HOME"] = HF_DINO_DIR
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -52,11 +57,11 @@ os.environ["NUMBA_DISABLE_JIT"] = "1"
 os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba-cache"
 os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib-cache"
 
+from beast.inference import save_gaussian_pointclouds  # noqa: E402
 from beast.io import load_config  # noqa: E402
-from beast.models.sable import Sable  # noqa: E402
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding  # noqa: E402
 from beast.models.model_utils.train_vis import save_training_visuals  # noqa: E402
-from beast.inference import save_gaussian_pointclouds  # noqa: E402
+from beast.models.sable import Sable  # noqa: E402
 from beast.train_sable import train_sable  # noqa: E402
 
 
@@ -97,6 +102,15 @@ def _extract_model_state_dict(raw_checkpoint: dict) -> dict:
         if isinstance(state_dict, dict):
             return state_dict
     return raw_checkpoint
+
+
+def _save_effective_run_config(output_dir: Path, args: argparse.Namespace, config: dict) -> None:
+    """Persist the exact CLI args and config used for this run."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "args.json", "w") as f:
+        json.dump(vars(args), f, indent=2, default=str)
+    with open(output_dir / "effective_config.yaml", "w") as f:
+        yaml.safe_dump(config, f, sort_keys=False)
 
 
 def parse_args() -> argparse.Namespace:
@@ -141,11 +155,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reset_training_state", action="store_true", default=False,
                         help="Reset optimizer/scheduler state when loading checkpoint")
     parser.add_argument("--init_gs", type=str, default=None, choices=["true", "false"],
-                        help="Override init_gs in gaussians config (for no-Kabsch ablation: --init_gs false)")
+                        help="Override init_gs in gaussians config")
     parser.add_argument("--correspondence_mode", type=str, default=None, choices=["cache", "none"],
                         help="Override correspondence_mode (cache=LP3D, none=no correspondence)")
     parser.add_argument("--gs_reg_loss_weight", type=float, default=None,
-                        help="Override training.gs_reg_loss_weight for Kabsch regularization sweeps")
+                        help="Override training.gs_reg_loss_weight")
     parser.add_argument("--max_steps", type=int, default=200,
                         help="Max training steps for --finetune mode (default: 200)")
     parser.add_argument("--val_every", type=int, default=50,
@@ -201,10 +215,11 @@ def main() -> None:
 
 
 def _run_smoke(args, config, cache_root, config_path) -> None:
-    from pathlib import Path as P
     import subprocess
 
-    validator_script = REPO_ROOT / "scripts" / "sable_scripts" / "validate_cheese3d_stage1_cache.py"
+    validator_script = (
+        REPO_ROOT / "scripts" / "sable_scripts" / "validate_cheese3d_stage1_cache.py"
+    )
     python_exe = Path(os.environ["PATH"].split(":")[0]) / "python"
     validate_cmd = [
         str(python_exe), str(validator_script),
@@ -224,8 +239,9 @@ def _run_smoke(args, config, cache_root, config_path) -> None:
     config["training"]["max_fwdbwd_passes"] = 4
     config["training"]["checkpoint_dir"] = str(smoke_output_dir)
     config["model"]["merge_pcd"]["debug_merged_pcd"] = args.smoke_mode == "debug"
+    _save_effective_run_config(smoke_output_dir, args, config)
 
-    output_dir = P(config["training"]["checkpoint_dir"])
+    output_dir = Path(config["training"]["checkpoint_dir"])
     print(f"Output: {output_dir}")
     print(f"init_gs: {config['model']['gaussians']['init_gs']}")
     print(f"correspondence_mode: {config['training'].get('correspondence_mode')}")
@@ -264,6 +280,7 @@ def _run_eval(args, config, cache_root) -> None:
     if args.init_gs is not None:
         config["model"]["gaussians"]["init_gs"] = args.init_gs == "true"
         print(f"init_gs override: {config['model']['gaussians']['init_gs']}")
+    _save_effective_run_config(eval_output_dir, args, config)
 
     vis_views = args.vis_views or config["training"].get("num_target_views", 2)
 
@@ -274,7 +291,8 @@ def _run_eval(args, config, cache_root) -> None:
     print(f"init_gs: {config['model']['gaussians']['init_gs']}")
     print(f"correspondence_mode: {config['training'].get('correspondence_mode')}")
     print(f"gs_reg_loss_weight: {config['training'].get('gs_reg_loss_weight')}")
-    print(f"ibl_training_regime: {config['training'].get('ibl_training_regime', 'two_input_reconstruction')}")
+    regime = config['training'].get('ibl_training_regime', 'two_input_reconstruction')
+    print(f"ibl_training_regime: {regime}")
     print(f"num_input_views: {config['training'].get('num_input_views')}, "
           f"num_target_views: {config['training'].get('num_target_views')}")
 
@@ -452,7 +470,10 @@ def _run_eval(args, config, cache_root) -> None:
         l2 = m.get('val_l2', m.get('test_l2', m.get('train_l2', float('nan'))))
         psnr = m.get('val_psnr', m.get('test_psnr', m.get('train_psnr', float('nan'))))
         gs = m.get('val_gs_reg', m.get('test_gs_reg', m.get('train_gs_reg', float('nan'))))
-        perc = m.get('val_perceptual', m.get('test_perceptual', m.get('train_perceptual', float('nan'))))
+        perc = m.get(
+            'val_perceptual',
+            m.get('test_perceptual', m.get('train_perceptual', float('nan'))),
+        )
         print(f"{split:<10} {l2:>12.6f} {psnr:>10.4f} {gs:>12.6f} {perc:>14.6f}")
     print(f"\nMetrics: {eval_output_dir / 'metrics.json'}")
     print(f"\nVisuals: {vis_dir}")
@@ -461,7 +482,6 @@ def _run_eval(args, config, cache_root) -> None:
 def _run_finetune(args, config, cache_root, config_path) -> None:
     """Fine-tune pilot: load checkpoint + NVS training loop + periodic val metrics."""
     import subprocess
-    import json
     from collections import defaultdict
 
     finetune_output_dir = (REPO_ROOT / args.finetune_output_dir).resolve()
@@ -483,10 +503,13 @@ def _run_finetune(args, config, cache_root, config_path) -> None:
     if args.init_gs is not None:
         config["model"]["gaussians"]["init_gs"] = args.init_gs == "true"
         print(f"init_gs override: {config['model']['gaussians']['init_gs']}")
+    _save_effective_run_config(finetune_output_dir, args, config)
 
     # Validate cache if using correspondence
     if config["training"].get("correspondence_mode") == "cache":
-        validator_script = REPO_ROOT / "scripts" / "sable_scripts" / "validate_cheese3d_stage1_cache.py"
+        validator_script = (
+            REPO_ROOT / "scripts" / "sable_scripts" / "validate_cheese3d_stage1_cache.py"
+        )
         python_exe = Path(os.environ["PATH"].split(":")[0]) / "python"
         validate_cmd = [
             str(python_exe), str(validator_script),
@@ -569,7 +592,8 @@ def _run_finetune(args, config, cache_root, config_path) -> None:
     print(f"init_gs: {config['model']['gaussians']['init_gs']}")
     print(f"correspondence_mode: {config['training'].get('correspondence_mode')}")
     print(f"gs_reg_loss_weight: {config['training'].get('gs_reg_loss_weight')}")
-    print(f"ibl_training_regime: {config['training'].get('ibl_training_regime', 'two_input_reconstruction')}")
+    regime = config['training'].get('ibl_training_regime', 'two_input_reconstruction')
+    print(f"ibl_training_regime: {regime}")
     print(f"num_input_views: {config['training'].get('num_input_views')}, "
           f"num_target_views: {config['training'].get('num_target_views')}")
 
@@ -616,7 +640,7 @@ def _run_finetune(args, config, cache_root, config_path) -> None:
     model.train()
 
     # Optimizer + scaler
-    from torch.amp import autocast, GradScaler
+    from torch.amp import GradScaler, autocast
     cfg_opt = config['optimizer']
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
@@ -766,7 +790,11 @@ def _run_finetune(args, config, cache_root, config_path) -> None:
             sps = (step + 1) / elapsed if elapsed > 0 else 0
             suffix = ""
             if _last_metrics:
-                suffix = f" psnr={_last_metrics.get('val_psnr', 0):.2f} l2={_last_metrics.get('val_l2', 0):.4f} ({sps:.1f} step/s)"
+                suffix = (
+                    f" psnr={_last_metrics.get('val_psnr', 0):.2f}"
+                    f" l2={_last_metrics.get('val_l2', 0):.4f}"
+                    f" ({sps:.1f} step/s)"
+                )
             pbar.set_postfix_str(suffix, refresh=False)
             pbar.update(1)
 

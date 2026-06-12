@@ -7,7 +7,7 @@ import lightning.pytorch as pl
 import torch
 from lightning.pytorch.utilities import rank_zero_only
 
-from beast import log_step, version as beast_version
+from beast import version as beast_version
 from beast.logging import log_step
 from beast.data.sable_dataset import SABLEDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding

@@ -95,7 +95,7 @@ model:
     num_points: 3           # minimum correspondences for Kabsch
     debug_merged_pcd: false
     debug_merged_pcd_num_batches: 16
-    correspondence_cache_root: /data/jqh/Outputs/beast/outputs/cheese3d_stage1/cache_all28   # Override via CLI
+    correspondence_cache_root: /data/jqh/Datasets/E-RayZer-private/data/cheese3d_stage1_lp3d_cache   # Override via CLI
 
 optimizer:
   type: AdamW
