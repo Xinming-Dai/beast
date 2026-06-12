@@ -47,6 +47,74 @@ RIGID_HEAD_KEYPOINTS = [
     "ear(bottom)(right)",
 ]
 
+EAR_NOSE_5_KEYPOINTS = [
+    "nose(tip)",
+    "ear(base)(left)",
+    "ear(base)(right)",
+    "ear(tip)(left)",
+    "ear(tip)(right)",
+]
+
+HEAD_CORE_7_KEYPOINTS = [
+    "nose(bottom)",
+    "nose(tip)",
+    "nose(top)",
+    "ear(base)(left)",
+    "ear(tip)(left)",
+    "ear(base)(right)",
+    "ear(tip)(right)",
+]
+
+HEAD_CORE_9_KEYPOINTS = [
+    *HEAD_CORE_7_KEYPOINTS,
+    "eye(front)(left)",
+    "eye(front)(right)",
+]
+
+RIGID_EAR_NOSE_11_KEYPOINTS = [
+    "nose(bottom)",
+    "nose(tip)",
+    "nose(top)",
+    "ear(base)(left)",
+    "ear(top)(left)",
+    "ear(tip)(left)",
+    "ear(bottom)(left)",
+    "ear(base)(right)",
+    "ear(top)(right)",
+    "ear(tip)(right)",
+    "ear(bottom)(right)",
+]
+
+RIGID_FACE_13_KEYPOINTS = [
+    *RIGID_EAR_NOSE_11_KEYPOINTS,
+    "eye(front)(left)",
+    "eye(front)(right)",
+]
+
+RIGID_FACE_15_KEYPOINTS = [
+    *RIGID_FACE_13_KEYPOINTS,
+    "eye(back)(left)",
+    "eye(back)(right)",
+]
+
+RIGID_NO_EYE_BOTTOM_17_KEYPOINTS = [
+    k for k in RIGID_HEAD_KEYPOINTS
+    if k not in {"eye(bottom)(left)", "eye(bottom)(right)"}
+]
+
+KEYPOINT_VARIANTS = {
+    "all28": None,
+    "rigidHead": RIGID_HEAD_KEYPOINTS,
+    "earNose5": EAR_NOSE_5_KEYPOINTS,
+    "headCore7": HEAD_CORE_7_KEYPOINTS,
+    "headCore9": HEAD_CORE_9_KEYPOINTS,
+    "rigidEarNose11": RIGID_EAR_NOSE_11_KEYPOINTS,
+    "rigidFace13": RIGID_FACE_13_KEYPOINTS,
+    "rigidFace15": RIGID_FACE_15_KEYPOINTS,
+    "rigidNoEyeBottom17": RIGID_NO_EYE_BOTTOM_17_KEYPOINTS,
+    "dynamicHighConf": None,
+}
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="CSV predictions → litpose_matches.npz")
@@ -65,7 +133,7 @@ def parse_args():
     p.add_argument("--keypoints", type=str, default=None,
                    help="Comma-separated keypoint names to include (default: all)")
     p.add_argument("--keypoint_variant", type=str, default="all28",
-                   choices=["all28", "rigidHead", "dynamicHighConf"],
+                   choices=list(KEYPOINT_VARIANTS.keys()),
                    help="Named keypoint subset / threshold preset")
     p.add_argument("--dynamic_min_confidence", type=float, default=0.95,
                    help="Confidence threshold used for dynamicHighConf variant")
@@ -102,9 +170,9 @@ def resolve_keypoint_selection(all_keypoints: list[str], args) -> tuple[list[str
         selected = [k for k in requested if k in all_keypoints]
         return selected, float(args.min_confidence), "explicit"
 
-    if args.keypoint_variant == "rigidHead":
-        selected = [k for k in RIGID_HEAD_KEYPOINTS if k in all_keypoints]
-        return selected, float(args.min_confidence), "rigidHead"
+    if args.keypoint_variant in KEYPOINT_VARIANTS and KEYPOINT_VARIANTS[args.keypoint_variant] is not None:
+        selected = [k for k in KEYPOINT_VARIANTS[args.keypoint_variant] if k in all_keypoints]
+        return selected, float(args.min_confidence), args.keypoint_variant
 
     if args.keypoint_variant == "dynamicHighConf":
         return list(all_keypoints), float(args.dynamic_min_confidence), "dynamicHighConf"

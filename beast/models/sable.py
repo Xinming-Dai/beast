@@ -710,7 +710,7 @@ class Sable(BaseLightningModel):
 
         if self.init_gs:
             depth_for_pcd = depth_output.clone()
-            depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_target)
+            depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_input)
             xyz_flat = torch.stack(
                 [
                     pseudo_pointcloud_normalized(d, self.ph, self.pw)
@@ -718,8 +718,8 @@ class Sable(BaseLightningModel):
                 ],
                 dim=0,
             )
-            xyz_init = rearrange(xyz_flat, '(b v) n c -> b v n c', b=b, v=v_target)
-            xyz = rearrange(xyz, 'b (v n) c -> b v n c', b=b, v=v_target)
+            xyz_init = rearrange(xyz_flat, '(b v) n c -> b v n c', b=b, v=v_input)
+            xyz = rearrange(xyz, 'b (v n) c -> b v n c', b=b, v=v_input)
             xyz_init_for_merge = xyz_init.detach().clone().cpu().float().numpy()
             xyz_init_src_pts = xyz_init_for_merge[:, 0]
             xyz_init_tgt_pts = xyz_init_for_merge[:, 1]
@@ -781,8 +781,8 @@ class Sable(BaseLightningModel):
                         debug_corr_left_xy[b_i] = corr_xy_from_pixels[0]
                         debug_corr_right_xy[b_i] = corr_xy_from_pixels[1]
 
-            xyz_init = rearrange(xyz_init, 'b v n c -> b (v n) c', b=b, v=v_target)
-            xyz = rearrange(xyz, 'b v n c -> b (v n) c', b=b, v=v_target)
+            xyz_init = rearrange(xyz_init, 'b v n c -> b (v n) c', b=b, v=v_input)
+            xyz = rearrange(xyz, 'b v n c -> b (v n) c', b=b, v=v_input)
 
             if self.debug_merged_pcd:
                 xyz = xyz_init
@@ -793,7 +793,7 @@ class Sable(BaseLightningModel):
                     xyz_init=xyz_init,
                     data=data,
                     target_idx=target_idx,
-                    v_target=v_target,
+                    v_target=v_input,   # xyz_init/depth_maps are indexed by input views
                     pcd_h=int(self.config['model']['target_image']['height']),
                     pcd_w=int(self.config['model']['target_image']['width']),
                     ph=self.ph,

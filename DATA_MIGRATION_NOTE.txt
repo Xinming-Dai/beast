@@ -1,0 +1,35 @@
+Project: beast
+Migration date: 2026-06-10
+
+Moved directories
+- /home/jqh/NeuralWorkshops/beast/tb_logs -> /data/jqh/Outputs/beast/tb_logs
+- /home/jqh/NeuralWorkshops/beast/outputs -> /data/jqh/Outputs/beast/outputs
+- /home/jqh/NeuralWorkshops/beast/metric_checkpoint -> /data/jqh/pretrained_checkpoints/beast/metric_checkpoint
+
+Not moved
+- /home/jqh/NeuralWorkshops/beast/data was listed in the migration plan, but the directory did not exist at execution time, so no data directory was moved for this project.
+
+Compatibility on this machine
+- The original paths in the project root now point to the new locations through symlinks where applicable.
+- Existing scripts that read or write `tb_logs`, `outputs`, or `metric_checkpoint` via the old project-local paths should continue to work on this machine.
+
+Recommended real paths for lab or other machines
+- Checkpoints: /data/jqh/pretrained_checkpoints/beast/metric_checkpoint
+- Outputs: /data/jqh/Outputs/beast/outputs
+- TensorBoard logs: /data/jqh/Outputs/beast/tb_logs
+
+Command adjustment guidance
+- When loading model artifacts, prefer `/data/jqh/pretrained_checkpoints/beast/metric_checkpoint` on machines that do not have the same symlink layout.
+- When running `beast train`, configure output or checkpoint-related arguments to write under `/data/jqh/Outputs/beast/...` when possible.
+- When reading or monitoring TensorBoard logs, point tools to `/data/jqh/Outputs/beast/tb_logs` if not using the project-local symlink.
+- If future data directories are added locally, keep them under `/data/jqh/Datasets/beast/...` and pass them explicitly rather than hard-coding `/home/jqh/...` paths.
+
+Suggested smoke test
+- `beast -h`
+- `beast train -h`
+- If needed, run one lightweight command that resolves `metric_checkpoint` or writes a temporary artifact under `outputs`.
+
+Status on 2026-06-10
+- `tb_logs`, `outputs`, and `metric_checkpoint` were migrated.
+- `data` was skipped because the source directory was missing.
+- Keep any `.bak` backup directories temporarily until end-to-end validation is complete.

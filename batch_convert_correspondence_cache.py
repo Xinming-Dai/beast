@@ -6,7 +6,7 @@ Batch convert LP3D CSV predictions -> litpose_matches.npz for all sessions.
 import argparse
 from pathlib import Path
 
-from convert_csv_to_litpose_cache import convert_session
+from convert_csv_to_litpose_cache import KEYPOINT_VARIANTS, convert_session
 
 
 def parse_args():
@@ -21,7 +21,7 @@ def parse_args():
     p.add_argument("--keypoints", type=str, default=None,
                    help="Comma-separated keypoint names to include (default: all)")
     p.add_argument("--keypoint_variant", type=str, default="all28",
-                   choices=["all28", "rigidHead", "dynamicHighConf"])
+                   choices=list(KEYPOINT_VARIANTS.keys()))
     p.add_argument("--dynamic_min_confidence", type=float, default=0.95)
     p.add_argument("--backend", type=str, default="lp3d_cheese3d_320x256")
     p.add_argument("--force", action="store_true")

@@ -21,7 +21,12 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 
-from beast.data.cheese3d_dataset import Cheese3DDataset, build_frame_index, load_selected_frame_indices
+from beast.data.cheese3d_dataset import (
+    Cheese3DDataset,
+    _resolve_dataset_dir,
+    build_frame_index,
+    load_selected_frame_indices,
+)
 from beast.io import load_config
 
 
@@ -104,12 +109,13 @@ def main() -> None:
         config["training"]["sessions"] = list(args.sessions)
 
     dataset = Cheese3DDataset(config)
-    dataset_dir = Path(config["training"]["dataset_path"])
+    dataset_root = Path(config["training"]["dataset_path"])
+    dataset_dir = _resolve_dataset_dir(dataset_root)
     views = config["training"]["views"]
     sessions = config["training"].get("sessions")
 
     records, summary = build_frame_index(
-        root=dataset_dir,
+        root=dataset_root,
         views=views,
         sessions=sessions,
         start_frame=int(config["training"].get("start_frame", 0)),
@@ -121,9 +127,7 @@ def main() -> None:
     inspected_sessions = sessions or list(summary["records_per_session"].keys())
     print("Selected-frame parser check:")
     for session in inspected_sessions:
-        session_dir = dataset_dir / "cheese3d_cam" / "cheese3d_cam" / session
-        if not session_dir.exists():
-            session_dir = dataset_dir / session
+        session_dir = dataset_dir / session
         selected = load_selected_frame_indices(session_dir)
         print(f"  {session}: selected_frames={len(selected)} first5={sorted(selected)[:5]}")
 

@@ -8,11 +8,11 @@ Environment setup (required):
     NUMBA_DISABLE_JIT=1
     torch.backends.cudnn.enabled=False
 
-Usage:
+    Usage:
     python run_lp3d_cheese3d_inference.py \
-        --ckpt_dir /home/jqh/NeuralWorkshops/E-RayZer-private/checkpoints/mvt_3d_loss_450_0 \
-        --data_root /home/jqh/NeuralWorkshops/E-RayZer-private/data/cheese3d_cam/cheese3d_cam \
-        --output_dir /tmp/lp_cheese3d_preds \
+        --ckpt_dir /data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints/mvt_3d_loss_450_0 \
+        --data_root /data/jqh/Datasets/E-RayZer-private/data/cheese3d_cam/cheese3d_cam \
+        --output_dir /data/jqh/Outputs/beast/outputs/lp_cheese3d_preds \
         --sessions 20231031_B20_chew_bl_000
 """
 
@@ -25,7 +25,7 @@ from pathlib import Path
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("HF_HOME", "/home/jqh/NeuralWorkshops/E-RayZer-private/checkpoints")
+os.environ.setdefault("HF_HOME", "/data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints")
 
 import numpy as np
 import pandas as pd
@@ -45,7 +45,7 @@ def parse_args():
                    help="Path to mvt_3d_loss_450_0 checkpoint directory")
     p.add_argument("--data_root", required=True, type=Path,
                    help="Path to cheese3d_cam/cheese3d_cam root")
-    p.add_argument("--output_dir", default="/tmp/lp_cheese3d_preds", type=Path)
+    p.add_argument("--output_dir", default="/data/jqh/Outputs/beast/outputs/lp_cheese3d_preds", type=Path)
     p.add_argument("--sessions", nargs="+",
                    help="Session folders to process (default: all)")
     p.add_argument("--img_size", type=int, nargs=2, default=[320, 256],

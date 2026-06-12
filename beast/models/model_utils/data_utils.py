@@ -85,8 +85,25 @@ class SplitData(nn.Module):
             raise ValueError(
                 'Unsupported view allocation: expected either disjoint '
                 '`num_input_views + num_target_views == num_views` or full-overlap '
-                '`num_input_views == num_target_views == num_views`.'
+                '`num_input_views == num_target_views == num_views`, '
+                'or ibl_training_regime=nvs with input_view_indices / target_view_indices '
+                'set via config (context/target indices are then built in the dataset class).'
             )
+
+        # Disjoint split: use config-driven indices when available (NVS regime),
+        # otherwise fall back to GCD-based interleaving.
+        training_cfg = self.config.get('training', {})
+        regime = training_cfg.get('ibl_training_regime', 'two_input_reconstruction')
+
+        if regime == 'nvs':
+            input_view_indices = training_cfg.get('input_view_indices')
+            target_view_indices = training_cfg.get('target_view_indices')
+            if input_view_indices is not None and target_view_indices is not None:
+                return (
+                    torch.tensor(input_view_indices, dtype=torch.long),
+                    torch.tensor(target_view_indices, dtype=torch.long),
+                )
+            # Fall through to GCD-based if not configured — not recommended for NVS
 
         group_count = math.gcd(num_input_views, num_target_views)
         group_size = total_views // group_count

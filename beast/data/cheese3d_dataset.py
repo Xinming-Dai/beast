@@ -502,13 +502,35 @@ class Cheese3DDataset(Dataset):
         return records
 
     def _build_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build context and target index tensors for the two-input reconstruction regime.
+        """Build context and target index tensors.
 
-        For ``num_views == num_input_views == num_target_views`` (the Cheese3D case),
-        both input and target use the full view list — i.e. [0, 1, ...] for both.
-        SABLE's ``resolve_view_indices`` then selects per-batch via
-        ``context_indices`` / ``target_indices`` tensors.
+        Two regimes are supported:
+
+        1. ``two_input_reconstruction`` (default): ``num_views == num_input_views == num_target_views``.
+           Both context and target use the full view list; SABLE's ``resolve_view_indices``
+           then selects per-batch via the fixed ``context_indices`` / ``target_indices`` tensors.
+
+        2. ``nvs`` (novel view synthesis): ``views=[L,R,BC,TC,TL,TR]`` with
+           ``num_views=6, num_input_views=2, num_target_views=4``.
+           ``config['training']['input_view_indices']`` gives context indices,
+           ``config['training']['target_view_indices']`` gives target indices.
+           This enables held-out NVS evaluation where L,R are context and BC/TC/TL/TR are targets.
         """
+        regime = self.config.get('training', {}).get('ibl_training_regime', 'two_input_reconstruction')
+
+        if regime == 'nvs':
+            input_view_indices = self.config.get('training', {}).get('input_view_indices')
+            target_view_indices = self.config.get('training', {}).get('target_view_indices')
+            if input_view_indices is None or target_view_indices is None:
+                raise ValueError(
+                    "ibl_training_regime=nvs requires config['training']['input_view_indices'] "
+                    "and config['training']['target_view_indices'] to be set."
+                )
+            ctx = torch.tensor(input_view_indices, dtype=torch.long)
+            tgt = torch.tensor(target_view_indices, dtype=torch.long)
+            return ctx, tgt
+
+        # Default: two_input_reconstruction
         if self.num_input_views == self.num_views and self.num_target_views == self.num_views:
             indices = torch.arange(self.num_views, dtype=torch.long)
             return indices, indices.clone()
@@ -519,7 +541,8 @@ class Cheese3DDataset(Dataset):
                 f'num_input_views={self.num_input_views} + '
                 f'num_target_views={self.num_target_views} != '
                 f'num_views={self.num_views}. '
-                f'Use num_input_views=num_target_views=num_views for the two-input regime.'
+                f'Use num_input_views=num_target_views=num_views for the two-input regime, '
+                f'or ibl_training_regime=nvs with input_view_indices / target_view_indices.'
             )
         half = self.num_views // 2
         ctx = torch.arange(half, dtype=torch.long)

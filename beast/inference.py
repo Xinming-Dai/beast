@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import Any
 
 import lightning.pytorch as pl
+import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
 import yaml
 from PIL import Image
 from torchvision import transforms
@@ -744,6 +744,7 @@ def save_gaussian_pointclouds(
 
     pixelalign_xyz = result.get('pixelalign_xyz')
     images = result.get('image')
+    input_indices = result.get('input_indices')
     use_pixel_colors = (
         pixelalign_xyz is not None
         and images is not None
@@ -766,9 +767,12 @@ def save_gaussian_pointclouds(
                 .numpy()
             )
             xyz[:, [1, 2]] *= -1
+            image_views = images[sample_idx]
+            if torch.is_tensor(input_indices):
+                idx = input_indices[sample_idx].detach().long().cpu()
+                image_views = image_views[idx]
             rgb_candidate = (
-                images[sample_idx]
-                .detach().float().cpu()
+                image_views.detach().float().cpu()
                 .clamp(0, 1)
                 .permute(0, 2, 3, 1)
                 .reshape(-1, 3)

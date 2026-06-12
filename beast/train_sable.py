@@ -272,7 +272,10 @@ def train_sable(config: dict, model, output_dir: str | Path):
         if not is_lightning_ckpt or reset_training_state:
             # plain PyTorch checkpoint or explicitly resetting training state —
             # load model weights only so optimizer/scheduler start fresh
-            state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
+            state_dict = raw_ckpt.get(
+                'state_dict',
+                raw_ckpt.get('model_state_dict', raw_ckpt.get('model', raw_ckpt)),
+            )
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             if missing:
                 log_step(f'Missing keys when loading checkpoint: {missing}', level='warning')
@@ -340,6 +343,14 @@ def train_sable(config: dict, model, output_dir: str | Path):
     logger = pl.loggers.TensorBoardLogger('tb_logs', name='')
 
     log_step('Creating PyTorch Lightning Trainer', level='debug')
+    progress_override = str(training.get('enable_progress_bar', 'auto')).lower()
+    if progress_override in ('1', 'true', 'yes', 'on'):
+        enable_progress_bar = True
+    elif progress_override in ('0', 'false', 'no', 'off'):
+        enable_progress_bar = False
+    else:
+        enable_progress_bar = sys.stderr.isatty()
+
     trainer = pl.Trainer(
         accelerator='gpu',
         devices=int(training.get('num_gpus', 1)),
@@ -353,6 +364,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         logger=logger,
         sync_batchnorm=True,
         log_every_n_steps=int(training.get('tensorboard_log_every', 1)),
+        enable_progress_bar=enable_progress_bar,
     )
 
     log_step('About to call trainer.fit()', level='debug')
