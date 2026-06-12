@@ -7,6 +7,7 @@ import numpy as np
 import open3d as o3d
 import torch
 from einops import rearrange
+from PIL import Image
 
 
 def _save_icp_twoview3d_bundle(
@@ -277,8 +278,6 @@ def _save_merged_pcd_single(
     o3d.io.write_point_cloud(str(save_path / filename), pcd)
 
     if depth_maps is not None:
-        from PIL import Image
-
         for vi in range(min(v_target, depth_maps.shape[1])):
             d_u8 = depth_gray_list[vi]
             Image.fromarray(d_u8).save(save_path / f'depth_view{vi}_gray.png')

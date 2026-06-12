@@ -1,14 +1,17 @@
 """Command to extract frames from videos."""
 
+import argparse
 import logging
 from pathlib import Path
+from typing import Any, get_args
 
 from beast.cli.types import output_dir
+from beast.preprocess.extraction import ExtractionMethod
 
 _logger = logging.getLogger('BEAST.CLI.EXTRACT')
 
 
-def register_parser(subparsers):
+def register_parser(subparsers: Any) -> None:
     """Register the extract command parser."""
 
     parser = subparsers.add_parser(
@@ -42,7 +45,7 @@ def register_parser(subparsers):
     )
     optional.add_argument(
         '--method', '-m',
-        choices=['uniform', 'random', 'pca_kmeans'],
+        choices=list(get_args(ExtractionMethod)),
         default='pca_kmeans',
         help='Frame extraction method (default: pca_kmeans)',
     )
@@ -54,7 +57,7 @@ def register_parser(subparsers):
     )
 
 
-def handle(args):
+def handle(args: argparse.Namespace) -> None:
     """Handle the extract command execution."""
 
     _logger.info(f'Running frame extraction with {args.method} method')
@@ -65,7 +68,7 @@ def handle(args):
     args.output.mkdir(parents=True, exist_ok=True)
 
     # Import the actual implementation
-    from beast.extraction import extract_frames
+    from beast.preprocess.extraction import extract_frames
 
     # Call the implementation
     result = extract_frames(

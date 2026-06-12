@@ -1,0 +1,94 @@
+# SABLE Extraction Pipeline Configuration
+# Run with: beast extract_sable --config configs/multiview/extraction_pipeline_sable.yaml
+# Full documentation: docs/extract_data_for_sable.md
+
+# ---------------------------------------------------------------------------
+# Dataset identity
+# ---------------------------------------------------------------------------
+
+name: my_dataset            # short name written into dataset/info.json
+input_dir: /data/raw        # IBL-2view root with {cam}Camera.video/, timestamps/
+output_dir: /data/sable     # all pipeline outputs are written here
+anchor_view: left           # camera whose frames drive k-means selection
+cameras: [left, right]      # all cameras to extract; anchor_view must be in this list
+
+max_workers: 4
+author: anonymous
+seed: 42
+
+# null = process all sessions in both camera directories
+# or list specific session IDs: [03d9a098-07bf-..., 1735d2be-b388-...]
+sessionids: null
+
+# ---------------------------------------------------------------------------
+# Video file naming (optional)
+# Controls directory layout and file naming patterns.
+# Defaults assume IBL naming conventions.
+# ---------------------------------------------------------------------------
+video_naming:
+  camera_video_subdir: '{cam}Camera.video'                  # subdirectory for each camera's videos
+  video_filename: '_iblrig_{cam}Camera.downsampled.{session_id}.mp4'  # video file name pattern
+  timestamp_filename: '_ibl_{cam}Camera.times.{session_id}.npy'       # timestamps file pattern
+  timestamp_subdir: 'timestamps' 
+  
+# ---------------------------------------------------------------------------
+# Frame extraction (extract step)
+# ---------------------------------------------------------------------------
+frame:
+  frames_per_video: 2000  # pairs to select per session (k-means on anchor view)
+  n_digits: 8             # zero-padding: img00000000.png
+  extension: png
+  kmeans_resize: 32       # frame is resized to 32x32 for k-means pixel features
+  split_names: [train, val]
+  split_ratios: [0.9, 0.1]
+
+# ---------------------------------------------------------------------------
+# Trim (optional)
+# Clips every input video to a fixed frame range before any other steps.
+# ---------------------------------------------------------------------------
+trim:
+  enabled: false
+  start_frame: null   # frame-based bounds take priority over second-based bounds
+  end_frame: null
+  start_sec: null     # alternative: specify trim bounds in seconds
+  end_sec: null
+  ffmpeg_threads: null  # null = auto (cpu_count / max_workers)
+
+# ---------------------------------------------------------------------------
+# Downsample (optional)
+# Re-encodes videos at a lower frame rate. Reads from trim output if trim is enabled.
+# ---------------------------------------------------------------------------
+downsample:
+  enabled: false
+  target_fps: null        # null = keep original FPS
+  ffmpeg_threads: null    # null = auto (cpu_count / max_workers)
+  phase_offset_frames: 0  # skip N frames at start before downsampling begins
+
+# ---------------------------------------------------------------------------
+# VDA depth precomputation (optional)
+# Runs after frame extraction. Saves depth alongside extracted images.
+# Output: dataset/{session_id}/{cam}/vda{n_digits}.npy
+# ---------------------------------------------------------------------------
+vda:
+  enabled: true
+  encoder: vitb           # options: vits, vitb, vitl
+  checkpoint_path: null   # path to video_depth_anything_vitb.pth; null uses VDA_REPO_ROOT/checkpoints/
+  device: auto            # cuda, cpu, or auto
+  input_size: 518
+  fp32: false             # set true to disable autocast
+
+# ---------------------------------------------------------------------------
+# LitPose CSV → per-frame npy (optional)
+# Converts LitPose prediction CSVs to per-frame correspondence .npy files.
+# LitPose predict must be run separately first (see docs/extract_data_for_sable.md).
+# Output: dataset/{session_id}/{cam}/correspondence{n_digits}.npy  [K, 3] x,y,likelihood
+# ---------------------------------------------------------------------------
+litpose:
+  enabled: false
+  video_preds_dir: null          # directory containing LitPose prediction CSVs
+  keypoints: [pawL, pawR, nose]  # keypoints to extract from CSVs (defines K)
+  min_likelihood: 0.0            # keypoints below this threshold are set to confidence=0
+  keypoint_shifts:               # optional per-keypoint pixel shift after extraction
+    nose:
+      left: [0, 0]               # [dx, dy] shift applied to nose keypoint from left camera
+      right: [0, 0]              # [dx, dy] shift applied to nose keypoint from right camera

@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "beast-backbones"
-version = "1.3.0"  # Update the version according to your source
+version = "1.4.0"  # Update the version according to your source
 description = "Behavioral analysis via self-supervised pretraining of transformers"
 license = "MIT"
 readme = "README.md"
@@ -28,6 +28,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "aniposelib (>=0.8.0)",
     "einops",
     "gsplat",
     "imaug",
@@ -37,6 +38,7 @@ dependencies = [
     "open3d",
     "opencv-python-headless",
     "pillow",
+    "pydantic",
     "plyfile",
     "scikit-learn",
     "scipy",
@@ -67,30 +69,76 @@ beast = "beast.cli.main:main"
 
 [project.optional-dependencies]
 dev = [
-    "autopep8",
-    "flake8-pyproject",
-    "isort",
+    "pre-commit",
+    "pyright",
     "pytest",
+    "pytest-cov",
     "pytest-html",
     "urllib3 (>=2.7.0)",  # harder requirement than "requests" to address security vulnerability
     "requests",
+    "ruff",
 ]
 
-[tool.isort]
-line_length = 99
-profile = "black"
-src_paths = ["beast", "tests"]
-
-[tool.flake8]
-max-line-length = 99
-extend-ignore = ["E203", "W503", "F722"]  # Optional: common ignores for black compatibility
+[tool.ruff]
+line-length = 99
 exclude = [
     ".git",
     "__pycache__",
     "build",
+    "configs",
     "dist",
-    ".venv",
-    "venv"
+    "docs",
+    "scripts",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (undefined names, unused imports/variables)
+    "I",   # isort
+    "UP",  # pyupgrade (modernize syntax: Tuple->tuple, Union->|, etc.)
+    "B",   # flake8-bugbear (real bugs: mutable defaults, broad excepts, etc.)
+    # "N",   # pep8-naming
+]
+ignore = [
+    "B006",  # mutable default arguments are used intentionally in some places
+    "E203",  # whitespace before ':' conflicts with black-style slice formatting
+    "F722",  # jaxtyping dim strings (e.g. "batch channels") are not Python expressions
+    "F821",  # undefined names in __all__ are flagged incorrectly for re-exports
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["beast"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+pythonPlatform = "Linux"
+typeCheckingMode = "basic"
+include = ["beast", "tests"]
+exclude = ["build", "configs", "data", "dist", "docs", "docker", "scripts"]
+# torch stubs don't re-export public functions at the top level (torch.tensor, torch.allclose, etc.)
+reportPrivateImportUsage = "none"
+
+[tool.coverage.run]
+# store paths relative to the repo root so that codecov can match coverage
+# data against source files in the github repo, regardless of where the tests
+# are run on the build machine. omit non-source directories to keep the report
+## focused on beast/ only.
+relative_files = true
+omit = [
+    "data/*",
+    "docs/*",
+    "configs/*",
+    "htmlcov/*",
+    "scripts/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.pytest.ini_options]

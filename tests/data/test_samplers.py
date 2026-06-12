@@ -8,6 +8,7 @@ from beast.data.samplers import (
     contrastive_collate_fn,
     extract_anchor_indices,
 )
+from beast.models.vits import batch_wise_contrastive_loss, topk
 
 
 class TestExtractAnchorIndices:
@@ -74,7 +75,7 @@ class TestContrastBatchSampler:
         dataset.dataset.image_list = [f"path_{i}" for i in range(100)]
         dataset.indices = list(range(100))
 
-        with pytest.raises(AssertionError, match="Batch size must be even"):
+        with pytest.raises(ValueError, match='Batch size must be even'):
             ContrastBatchSampler(dataset, batch_size=7)
 
     def test_len(self):
@@ -254,7 +255,6 @@ class TestContrastBatchSampler:
             "Ranks should have non-overlapping anchors in the same epoch"
 
         # Verify roughly equal distribution per epoch
-        total_epoch_anchors = len(anchors_rank0_epoch1) + len(anchors_rank1_epoch1)
         assert abs(len(anchors_rank0_epoch1) - len(anchors_rank1_epoch1)) <= 2, \
             "Anchors should be roughly evenly distributed per epoch"
 
@@ -322,7 +322,7 @@ class TestContrastBatchSampler:
 
         # Collect indices from multiple epochs
         epoch_data = []
-        for epoch in range(3):
+        for _epoch in range(3):
             epoch_indices = []
             for batch in sampler:
                 epoch_indices.extend(batch)
@@ -453,7 +453,8 @@ class TestContrastBatchSampler:
                     pos_idx = batch[i + 1]
 
                     # Verify this is a valid anchor-positive relationship
-                    assert anchor_idx in sampler.pos_indices, f"Anchor {anchor_idx} should have positives"
+                    assert anchor_idx in sampler.pos_indices, \
+                        f"Anchor {anchor_idx} should have positives"
                     assert pos_idx in sampler.pos_indices[anchor_idx], \
                         f"Positive {pos_idx} should be valid for anchor {anchor_idx}"
 
@@ -539,7 +540,7 @@ class TestTopKFunction:
     def test_topk_basic(self):
         """Test basic topk functionality."""
         # Import the function
-        from beast.models.vits import topk
+
 
         # Create mock similarities and labels
         similarities = torch.tensor([
@@ -556,7 +557,7 @@ class TestTopKFunction:
 
     def test_topk_k_greater_than_batch_size(self):
         """Test topk when k is greater than batch size."""
-        from beast.models.vits import topk
+
 
         similarities = torch.tensor([
             [0.1, 0.8, 0.3],
@@ -571,7 +572,7 @@ class TestTopKFunction:
 
     def test_topk_partial_correct(self):
         """Test topk with partial correct predictions."""
-        from beast.models.vits import topk
+
 
         similarities = torch.tensor([
             [0.1, 0.8, 0.3, 0.2],  # Highest at index 1, correct
@@ -587,7 +588,7 @@ class TestTopKFunction:
 
     def test_topk_top3_accuracy(self):
         """Test top-3 accuracy calculation."""
-        from beast.models.vits import topk
+
 
         similarities = torch.tensor([
             [0.1, 0.8, 0.3, 0.2, 0.5],  # Top 3: [1, 4, 2], label 1 is in top 3
@@ -603,7 +604,7 @@ class TestTopKFunction:
 
     def test_topk_no_correct_predictions(self):
         """Test topk when no predictions are correct."""
-        from beast.models.vits import topk
+
 
         similarities = torch.tensor([
             [0.8, 0.1, 0.3, 0.2],  # Highest at index 0, but label is 1
@@ -622,7 +623,7 @@ class TestBatchWiseContrastiveLoss:
 
     def test_batch_wise_contrastive_loss_basic(self):
         """Test basic batch-wise contrastive loss functionality."""
-        from beast.models.vits import batch_wise_contrastive_loss
+
 
         # Create a mock similarity matrix for batch size 4
         # Simulate perfect similarity matrix where diagonal-like elements are high
@@ -650,7 +651,7 @@ class TestBatchWiseContrastiveLoss:
 
     def test_batch_wise_contrastive_loss_larger_batch(self):
         """Test batch-wise contrastive loss with larger batch size."""
-        from beast.models.vits import batch_wise_contrastive_loss
+
 
         # Create a mock similarity matrix for batch size 6
         batch_size = 6
@@ -675,7 +676,7 @@ class TestBatchWiseContrastiveLoss:
 
     def test_batch_wise_contrastive_loss_diagonal_removal(self):
         """Test that diagonal elements are properly removed from similarity matrix."""
-        from beast.models.vits import batch_wise_contrastive_loss
+
 
         # Create similarity matrix with high diagonal values
         sim_matrix = torch.tensor([
@@ -694,7 +695,7 @@ class TestBatchWiseContrastiveLoss:
 
     def test_batch_wise_contrastive_loss_labels_construction(self):
         """Test that labels are constructed correctly for contrastive learning."""
-        from beast.models.vits import batch_wise_contrastive_loss
+
 
         # Create a simple similarity matrix
         sim_matrix = torch.tensor([
@@ -716,7 +717,7 @@ class TestBatchWiseContrastiveLoss:
 
     def test_batch_wise_contrastive_loss_edge_cases(self):
         """Test edge cases for batch-wise contrastive loss."""
-        from beast.models.vits import batch_wise_contrastive_loss
+
 
         # Test with very small similarity values
         sim_matrix = torch.tensor([

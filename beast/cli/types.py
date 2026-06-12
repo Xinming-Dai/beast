@@ -2,32 +2,27 @@
 
 from pathlib import Path
 
-from typeguard import typechecked
 
-
-@typechecked
 def valid_file(path_str: str | Path) -> Path:
     """Validate that a path exists and is a file."""
     path = Path(path_str)
     if not path.exists():
-        raise IOError(f'File does not exist: {path}')
+        raise OSError(f'File does not exist: {path}')
     if not path.is_file():
-        raise IOError(f'Not a file: {path}')
+        raise OSError(f'Not a file: {path}')
     return path
 
 
-@typechecked
 def valid_dir(path_str: str | Path) -> Path:
     """Validate that a path exists and is a directory."""
     path = Path(path_str)
     if not path.exists():
-        raise IOError(f'Directory does not exist: {path}')
+        raise OSError(f'Directory does not exist: {path}')
     if not path.is_dir():
-        raise IOError(f'Not a directory: {path}')
+        raise OSError(f'Not a directory: {path}')
     return path
 
 
-@typechecked
 def config_file(path_str: str | Path) -> Path:
     """Validate a config file path."""
     path = valid_file(path_str)
@@ -37,7 +32,6 @@ def config_file(path_str: str | Path) -> Path:
     return path
 
 
-@typechecked
 def output_dir(path_str: str | Path) -> Path:
     """Create output directory if it does not exist."""
     path = Path(path_str)

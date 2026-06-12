@@ -1,9 +1,10 @@
 import gc
 import io
 import json
+import shutil
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pytest
 import requests
@@ -13,6 +14,7 @@ from beast.api.model import Model
 from beast.data.augmentations import expand_imgaug_str_to_dict, imgaug_pipeline
 from beast.data.datamodules import BaseDataModule
 from beast.data.datasets import BaseDataset
+from beast.io import load_config
 
 ROOT = Path(__file__).parent.parent
 
@@ -25,7 +27,7 @@ def _load_dataset_metadata(dst_dir: Path) -> dict:
     """Load metadata from dataset directory."""
     metadata_file = dst_dir / '.dataset_metadata.json'
     if metadata_file.exists():
-        with open(metadata_file, 'r') as f:
+        with open(metadata_file) as f:
             return json.load(f)
     return {}
 
@@ -72,7 +74,6 @@ def fetch_test_data_if_needed(save_dir: str | Path, dataset_name: str = 'testing
         else:
             print(f'URL changed from {cached_url} to {url}, updating dataset')
             # Remove old data
-            import shutil
             shutil.rmtree(dst_dir)
 
     # Download data
@@ -112,7 +113,6 @@ def config_ae_path() -> Path:
 
 @pytest.fixture
 def config_ae(config_ae_path, data_dir) -> dict:
-    from beast.io import load_config
     config = load_config(config_ae_path)
     config['data']['data_dir'] = data_dir
     config['training']['train_batch_size'] = 32
@@ -128,7 +128,6 @@ def config_vit_path() -> Path:
 
 @pytest.fixture
 def config_vit(config_vit_path, data_dir) -> dict:
-    from beast.io import load_config
     config = load_config(config_vit_path)
     config['data']['data_dir'] = data_dir
     config['training']['train_batch_size'] = 4
@@ -201,6 +200,7 @@ def run_model_test(tmp_path, data_dir) -> Callable:
             # run inference on labeled data
             model.predict_images(image_dir=data_dir)
             # ensure model checkpoint saved
+            assert model.model_dir is not None
             assert len(list(model.model_dir.rglob('*.ckpt'))) == 1
         finally:
             # remove tensors from gpu

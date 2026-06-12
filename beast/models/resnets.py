@@ -4,41 +4,35 @@ Adapted from https://github.com/Horizon2333/imagenet-autoencoder
 
 """
 
-from typing import Literal, Union
+from typing import Literal
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-from typeguard import typechecked
 
 from beast.models.base import BaseLightningModel
 
+_RESNET_CONFIGS: dict[str, tuple[list[int], bool]] = {
+    'resnet18': ([2, 2, 2, 2], False),
+    'resnet34': ([3, 4, 6, 3], False),
+    'resnet50': ([3, 4, 6, 3], True),
+    'resnet101': ([3, 4, 23, 3], True),
+    'resnet152': ([3, 8, 36, 3], True),
+}
 
-@typechecked
-def get_configs(arch='resnet18') -> tuple:
+
+def get_configs(arch: str = 'resnet18') -> tuple[list[int], bool]:
     """Get number and type of layers for resnet models."""
-    # True or False means wether to use BottleNeck
-
-    if arch == 'resnet18':
-        return [2, 2, 2, 2], False
-    elif arch == 'resnet34':
-        return [3, 4, 6, 3], False
-    elif arch == 'resnet50':
-        return [3, 4, 6, 3], True
-    elif arch == 'resnet101':
-        return [3, 4, 23, 3], True
-    elif arch == 'resnet152':
-        return [3, 8, 36, 3], True
-    else:
+    if arch not in _RESNET_CONFIGS:
         raise ValueError(f'{arch} is an invalid entry in model.model_params.backbone')
+    return _RESNET_CONFIGS[arch]
 
 
-@typechecked
 class ResnetAutoencoder(BaseLightningModel):
-    """Vision Transformer implementation."""
+    """ResNet autoencoder implementation."""
 
     def __init__(self, config: dict) -> None:
-
+        """Initialize encoder, decoder, and optional latent bottleneck from config."""
         super().__init__(config)
 
         resnet_config, bottleneck = get_configs(config['model']['model_params']['backbone'])
@@ -61,11 +55,16 @@ class ResnetAutoencoder(BaseLightningModel):
         x: Float[torch.Tensor, 'batch channels img_height img_width'],
     ) -> tuple[
         Float[torch.Tensor, 'batch channels img_height img_width'],         # reconstructions
-        Union[                                                              # latents
-            Float[torch.Tensor, 'batch features feat_height feat_width'],
-            Float[torch.Tensor, 'batch num_latents'],
-        ]
+        Float[torch.Tensor, 'batch features feat_height feat_width']        # latents
+        | Float[torch.Tensor, 'batch num_latents'],
     ]:
+        """Encode input image to latents and decode back to image space.
+
+        Returns
+        -------
+        tuple of (reconstructed_images, latents)
+
+        """
         features = self.encoder(x)
         if self.num_latents:
             z = self.encoder_to_latents(features)
@@ -81,6 +80,19 @@ class ResnetAutoencoder(BaseLightningModel):
         return_images: bool = True,
         return_reconstructions: bool = True,
     ) -> dict:
+        """Run forward pass and return results dict with optional images and reconstructions.
+
+        Parameters
+        ----------
+        batch_dict: dict containing 'image' tensor
+        return_images: whether to include input images in results
+        return_reconstructions: whether to include reconstructions in results
+
+        Returns
+        -------
+        dict with 'latents', and optionally 'images' and 'reconstructions'
+
+        """
         x = batch_dict['image']
         xhat, z = self.forward(x)
         results_dict = {
@@ -94,15 +106,30 @@ class ResnetAutoencoder(BaseLightningModel):
 
     def compute_loss(
         self,
-        stage: str,
+        stage: str | None,
         images: Float[torch.Tensor, 'batch channels img_height img_width'],
         reconstructions: Float[torch.Tensor, 'batch channels img_height img_width'],
-        latents: Union[
-            Float[torch.Tensor, 'batch features feat_height feat_width'],
-            Float[torch.Tensor, 'batch num_latents'],
-        ],
+        latents: (
+            Float[torch.Tensor, 'batch features feat_height feat_width']
+            | Float[torch.Tensor, 'batch num_latents']
+        ),
         **kwargs,
-    ) -> tuple[torch.tensor, list[dict]]:
+    ) -> tuple[torch.Tensor, list[dict]]:
+        """Compute MSE reconstruction loss between input images and reconstructions.
+
+        Parameters
+        ----------
+        stage: training stage ('train', 'val', 'test', or None)
+        images: original input images
+        reconstructions: model reconstructions
+        latents: encoder latent representations (unused; required by base class signature)
+        **kwargs: additional keyword arguments (ignored)
+
+        Returns
+        -------
+        tuple of (loss tensor, list of logging dicts)
+
+        """
         mse_loss = nn.functional.mse_loss(images, reconstructions, reduction='mean')
         # add all losses here for logging
         log_list = [
@@ -111,6 +138,18 @@ class ResnetAutoencoder(BaseLightningModel):
         return mse_loss, log_list
 
     def predict_step(self, batch_dict: dict, batch_idx: int) -> dict:
+        """Run inference on a single batch and return latents with metadata.
+
+        Parameters
+        ----------
+        batch_dict: dict containing 'image', 'video', 'idx', 'image_path'
+        batch_idx: index of the current batch
+
+        Returns
+        -------
+        dict with 'latents', optional 'reconstructions', and 'metadata'
+
+        """
         results_dict = self.get_model_outputs(
             batch_dict,
             return_images=False,
@@ -125,9 +164,18 @@ class ResnetAutoencoder(BaseLightningModel):
 
 
 class LatentMapping(nn.Module):
+    """Linear bottleneck layer mapping between encoder feature maps and a flat latent vector."""
 
     def __init__(self, num_latents: int, source: str, bottleneck: bool) -> None:
+        """Build linear mapping layer between encoder feature maps and a flat latent vector.
 
+        Parameters
+        ----------
+        num_latents: dimensionality of the flat latent vector
+        source: 'encoder' to map feature maps → latents, 'latents' to map latents → feature maps
+        bottleneck: whether the encoder uses bottleneck (2048-channel) blocks
+
+        """
         super().__init__()
 
         self.num_latents = num_latents
@@ -159,14 +207,15 @@ class LatentMapping(nn.Module):
 
     def forward(
         self,
-        x: Union[
-            Float[torch.Tensor, 'batch num_features feature_height feature_width'],
-            Float[torch.Tensor, 'batch num_features'],
-        ]
-    ) -> Union[
-        Float[torch.Tensor, 'batch num_features feature_height feature_width'],
-        Float[torch.Tensor, 'batch num_features'],
-    ]:
+        x: (
+            Float[torch.Tensor, 'batch num_features feature_height feature_width']
+            | Float[torch.Tensor, 'batch num_features']
+        ),
+    ) -> (
+        Float[torch.Tensor, 'batch num_features feature_height feature_width']
+        | Float[torch.Tensor, 'batch num_features']
+    ):
+        """Map between encoder feature maps and flat latent vector."""
         if self.source == 'encoder':
             if self.reduce:
                 x = self.reduce(x)
@@ -181,9 +230,17 @@ class LatentMapping(nn.Module):
 
 
 class ResNetEncoder(nn.Module):
+    """ResNet encoder that maps input images to a spatial feature map."""
 
     def __init__(self, configs: list, bottleneck: bool = False) -> None:
+        """Build encoder from per-stage layer counts.
 
+        Parameters
+        ----------
+        configs: list of four ints specifying the number of layers per stage
+        bottleneck: whether to use bottleneck blocks (True for ResNet-50/101/152)
+
+        """
         super().__init__()
 
         if len(configs) != 4:
@@ -231,7 +288,8 @@ class ResNetEncoder(nn.Module):
                 in_channels=256, hidden_channels=512, layers=configs[3], downsample_method='conv',
             )
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode input image to spatial feature map."""
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
@@ -241,9 +299,17 @@ class ResNetEncoder(nn.Module):
 
 
 class ResNetDecoder(nn.Module):
+    """ResNet decoder that upsamples a feature map back to the input image resolution."""
 
     def __init__(self, configs: list, bottleneck: bool = False) -> None:
+        """Build decoder from per-stage layer counts.
 
+        Parameters
+        ----------
+        configs: list of four ints specifying the number of layers per stage (reversed order)
+        bottleneck: whether to use bottleneck blocks (True for ResNet-50/101/152)
+
+        """
         super().__init__()
 
         if len(configs) != 4:
@@ -290,7 +356,8 @@ class ResNetDecoder(nn.Module):
 
         # self.gate = nn.Sigmoid()
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Decode feature map to reconstructed image."""
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
@@ -301,6 +368,7 @@ class ResNetDecoder(nn.Module):
 
 
 class EncoderResidualBlock(nn.Module):
+    """Stack of residual layers with optional spatial downsampling for the encoder."""
 
     def __init__(
         self,
@@ -309,7 +377,16 @@ class EncoderResidualBlock(nn.Module):
         layers: int,
         downsample_method: Literal['conv', 'pool'] = 'conv',
     ) -> None:
+        """Build residual block with given layer count and downsampling strategy.
 
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of channels in each residual layer
+        layers: number of residual layers
+        downsample_method: 'conv' for strided convolution, 'pool' for max pooling
+
+        """
         super().__init__()
 
         if downsample_method == 'conv':
@@ -354,13 +431,15 @@ class EncoderResidualBlock(nn.Module):
 
                 self.add_module(f'{i + 1} EncoderLayer', layer)
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
-        for name, layer in self.named_children():
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through all residual layers sequentially."""
+        for _name, layer in self.named_children():
             x = layer(x)
         return x
 
 
 class EncoderBottleneckBlock(nn.Module):
+    """Stack of bottleneck layers with optional spatial downsampling for the encoder."""
 
     def __init__(
         self,
@@ -370,8 +449,18 @@ class EncoderBottleneckBlock(nn.Module):
         layers: int,
         downsample_method: Literal['conv', 'pool'] = 'conv',
     ) -> None:
+        """Build bottleneck block with given layer count and downsampling strategy.
 
-        super(EncoderBottleneckBlock, self).__init__()
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of channels in the 3x3 convolution
+        up_channels: number of output channels (after the 1x1 expansion convolution)
+        layers: number of bottleneck layers
+        downsample_method: 'conv' for strided convolution, 'pool' for max pooling
+
+        """
+        super().__init__()
 
         if downsample_method == 'conv':
 
@@ -411,13 +500,15 @@ class EncoderBottleneckBlock(nn.Module):
 
                 self.add_module(f'{i + 1} EncoderLayer', layer)
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
-        for name, layer in self.named_children():
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through all bottleneck layers sequentially."""
+        for _name, layer in self.named_children():
             x = layer(x)
         return x
 
 
 class DecoderResidualBlock(nn.Module):
+    """Stack of residual layers with optional spatial upsampling for the decoder."""
 
     def __init__(
         self,
@@ -425,7 +516,15 @@ class DecoderResidualBlock(nn.Module):
         output_channels: int,
         layers: int,
     ) -> None:
+        """Build decoder residual block with upsampling applied on the last layer.
 
+        Parameters
+        ----------
+        hidden_channels: number of channels in each residual layer
+        output_channels: number of output channels after upsampling
+        layers: number of residual layers
+
+        """
         super().__init__()
 
         for i in range(layers):
@@ -445,13 +544,15 @@ class DecoderResidualBlock(nn.Module):
 
             self.add_module(f'{i} EncoderLayer', layer)
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
-        for name, layer in self.named_children():
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through all decoder residual layers sequentially."""
+        for _name, layer in self.named_children():
             x = layer(x)
         return x
 
 
 class DecoderBottleneckBlock(nn.Module):
+    """Stack of bottleneck layers with optional spatial upsampling for the decoder."""
 
     def __init__(
         self,
@@ -460,7 +561,16 @@ class DecoderBottleneckBlock(nn.Module):
         down_channels: int,
         layers: int,
     ) -> None:
+        """Build decoder bottleneck block with upsampling applied on the last layer.
 
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of channels in the 3x3 convolution
+        down_channels: number of output channels (after the 1x1 reduction convolution)
+        layers: number of bottleneck layers
+
+        """
         super().__init__()
 
         for i in range(layers):
@@ -478,13 +588,15 @@ class DecoderBottleneckBlock(nn.Module):
 
             self.add_module(f'{i} EncoderLayer', layer)
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
-        for name, layer in self.named_children():
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through all decoder bottleneck layers sequentially."""
+        for _name, layer in self.named_children():
             x = layer(x)
         return x
 
 
 class EncoderResidualLayer(nn.Module):
+    """Single residual layer with two convolutions and an optional downsampling skip connection."""
 
     def __init__(
         self,
@@ -492,7 +604,15 @@ class EncoderResidualLayer(nn.Module):
         hidden_channels: int,
         downsample: bool,
     ) -> None:
+        """Build residual layer with optional strided convolution for downsampling.
 
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of output channels
+        downsample: whether to halve the spatial resolution with stride-2 convolution
+
+        """
         super().__init__()
 
         if downsample:
@@ -537,7 +657,8 @@ class EncoderResidualLayer(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply residual layer with skip connection."""
         identity = x
         x = self.weight_layer1(x)
         x = self.weight_layer2(x)
@@ -549,6 +670,7 @@ class EncoderResidualLayer(nn.Module):
 
 
 class EncoderBottleneckLayer(nn.Module):
+    """Single bottleneck layer with 1x1/3x3/1x1 convolutions and an optional downsampling skip."""
 
     def __init__(
         self,
@@ -557,7 +679,16 @@ class EncoderBottleneckLayer(nn.Module):
         up_channels: int,
         downsample: bool,
     ) -> None:
+        """Build bottleneck layer with 1x1/3x3/1x1 convolutions and optional downsampling.
 
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of channels in the 3x3 convolution
+        up_channels: number of output channels (1x1 expansion)
+        downsample: whether to halve the spatial resolution with stride-2 convolution
+
+        """
         super().__init__()
 
         if downsample:
@@ -619,7 +750,8 @@ class EncoderBottleneckLayer(nn.Module):
 
         self.relu = nn.Sequential(nn.ReLU(inplace=True))
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply bottleneck layer with skip connection."""
         identity = x
         x = self.weight_layer1(x)
         x = self.weight_layer2(x)
@@ -634,6 +766,7 @@ class EncoderBottleneckLayer(nn.Module):
 
 
 class DecoderResidualLayer(nn.Module):
+    """Single residual layer with two convolutions and an optional upsampling skip connection."""
 
     def __init__(
         self,
@@ -641,7 +774,15 @@ class DecoderResidualLayer(nn.Module):
         output_channels: int,
         upsample: bool,
     ) -> None:
+        """Build decoder residual layer with optional transposed convolution for upsampling.
 
+        Parameters
+        ----------
+        hidden_channels: number of input and intermediate channels
+        output_channels: number of output channels
+        upsample: whether to double the spatial resolution with transposed convolution
+
+        """
         super().__init__()
 
         self.weight_layer1 = nn.Sequential(
@@ -684,7 +825,8 @@ class DecoderResidualLayer(nn.Module):
         else:
             self.upsample = None
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply decoder residual layer with skip connection."""
         identity = x
         x = self.weight_layer1(x)
         x = self.weight_layer2(x)
@@ -695,6 +837,7 @@ class DecoderResidualLayer(nn.Module):
 
 
 class DecoderBottleneckLayer(nn.Module):
+    """Single bottleneck layer with 1x1/3x3/1x1 convolutions and an optional upsampling skip."""
 
     def __init__(
         self,
@@ -703,7 +846,16 @@ class DecoderBottleneckLayer(nn.Module):
         down_channels: int,
         upsample: bool,
     ) -> None:
+        """Build decoder bottleneck layer with 1x1/3x3/1x1 convolutions and optional upsampling.
 
+        Parameters
+        ----------
+        in_channels: number of input channels
+        hidden_channels: number of channels in the 3x3 convolution
+        down_channels: number of output channels (1x1 reduction)
+        upsample: whether to double the spatial resolution with transposed convolution
+
+        """
         super().__init__()
 
         self.weight_layer1 = nn.Sequential(
@@ -766,7 +918,8 @@ class DecoderBottleneckLayer(nn.Module):
             self.upsample = None
             self.down_scale = None
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply decoder bottleneck layer with skip connection."""
         identity = x
         x = self.weight_layer1(x)
         x = self.weight_layer2(x)

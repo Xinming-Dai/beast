@@ -1,5 +1,6 @@
 """Command-line interface for beast video model pre-training package."""
 
+import importlib.metadata
 import logging
 import sys
 from argparse import ArgumentParser
@@ -11,9 +12,20 @@ from beast.cli.commands import COMMANDS
 def build_parser() -> ArgumentParser:
     """Build the main argument parser with all subcommands."""
 
+    try:
+        version = importlib.metadata.version('beast-backbones')
+    except importlib.metadata.PackageNotFoundError:
+        version = 'unknown'
+
     parser = formatting.ArgumentParser(
         prog='beast',
         description='Tools for video frame extraction and neural network pretraining.',
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'beast-backbones {version}',
     )
 
     subparsers = parser.add_subparsers(
@@ -24,13 +36,13 @@ def build_parser() -> ArgumentParser:
     )
 
     # register all commands from the commands module
-    for name, module in COMMANDS.items():
+    for _name, module in COMMANDS.items():
         module.register_parser(subparsers)
 
     return parser
 
 
-def main():
+def main() -> None:
     """Main CLI entry point."""
 
     # configure logging once at application startup

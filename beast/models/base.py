@@ -1,13 +1,19 @@
-from typing import Iterator, Literal
+"""Base Lightning module shared by all BEAST model architectures."""
+
+import logging
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from typing import Literal
 
 import lightning.pytorch as pl
 import torch
 from lightning.pytorch.utilities import rank_zero_only
-from typeguard import typechecked
+from torch.optim.lr_scheduler import MultiStepLR, OneCycleLR
+
+_logger = logging.getLogger(__name__)
 
 
-@typechecked
-class BaseLightningModel(pl.LightningModule):
+class BaseLightningModel(ABC, pl.LightningModule):
     """Base Lightning Module that specific model architectures will inherit from."""
 
     def __init__(self, config: dict) -> None:
@@ -16,7 +22,7 @@ class BaseLightningModel(pl.LightningModule):
         super().__init__()
 
         if rank_zero_only.rank == 0:
-            print(f'\nInitializing a {self._get_name()} instance.')
+            _logger.info(f'Initializing a {self._get_name()} instance.')
 
         self.config = config
         self.seed = config['model']['seed']
@@ -30,18 +36,26 @@ class BaseLightningModel(pl.LightningModule):
         self,
         optimizer: torch.optim.Optimizer
     ) -> torch.optim.lr_scheduler.LRScheduler:
+        """Build and return the learning rate scheduler specified in config.
+
+        Parameters
+        ----------
+        optimizer: the optimizer to schedule
+
+        Returns
+        -------
+        configured learning rate scheduler
+
+        """
         scheduler = self.config['optimizer']['scheduler']
         if scheduler == 'step':
             # define a scheduler that reduces the base learning rate at predefined steps
-            from torch.optim.lr_scheduler import MultiStepLR
             scheduler = MultiStepLR(
                 optimizer=optimizer,
                 milestones=self.config['optimizer']['steps'],
                 gamma=self.config['optimizer']['gamma'],
             )
         elif scheduler == 'cosine':
-            from torch.optim.lr_scheduler import OneCycleLR
-
             # compute max learning rate
             global_batch_size = (
                 self.config['training']['train_batch_size']
@@ -64,6 +78,7 @@ class BaseLightningModel(pl.LightningModule):
         return scheduler
 
     def get_parameters(self) -> Iterator:
+        """Return an iterator over trainable model parameters."""
         params = filter(lambda p: p.requires_grad, self.parameters())
         return params
 
@@ -100,7 +115,7 @@ class BaseLightningModel(pl.LightningModule):
         self,
         batch_dict: dict,
         stage: Literal['train', 'val', 'test'] | None = None,
-    ) -> torch.tensor:
+    ) -> torch.Tensor:
         """Compute and log the losses on a batch of labeled data."""
 
         # forward pass; collected true and predicted heatmaps, keypoints
@@ -152,11 +167,46 @@ class BaseLightningModel(pl.LightningModule):
         self.evaluate_batch(batch_dict, 'test')
 
     # Required Lightning methods to be implemented by children
+    @abstractmethod
     def get_model_outputs(self, batch_dict: dict) -> dict:
-        raise NotImplementedError
+        """Run forward pass and return model outputs; implemented by subclasses.
 
-    def compute_loss(self, stage: int, **kwargs) -> tuple[torch.tensor, list[dict]]:
-        raise NotImplementedError
+        Parameters
+        ----------
+        batch_dict: dict containing model inputs
 
-    def predict_step(self, batch_dict: dict, batch_idx: int) -> torch.tensor:
-        raise NotImplementedError
+        Returns
+        -------
+        dict of model outputs
+
+        """
+
+    @abstractmethod
+    def compute_loss(self, stage: str | None, **kwargs) -> tuple[torch.Tensor, list[dict]]:
+        """Compute loss from model outputs; implemented by subclasses.
+
+        Parameters
+        ----------
+        stage: training stage ('train', 'val', 'test', or None)
+        **kwargs: model output dict entries
+
+        Returns
+        -------
+        tuple of (total loss tensor, list of logging dicts)
+
+        """
+
+    @abstractmethod
+    def predict_step(self, batch_dict: dict, batch_idx: int) -> dict:
+        """Run inference on a single batch; implemented by subclasses.
+
+        Parameters
+        ----------
+        batch_dict: dict containing model inputs
+        batch_idx: index of the current batch
+
+        Returns
+        -------
+        dict of predictions and metadata
+
+        """

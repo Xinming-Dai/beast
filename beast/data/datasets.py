@@ -1,24 +1,24 @@
 """Dataset objects store images and augmentation pipeline."""
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from typing import cast
 
 import imgaug.augmenters.size as _iaa_size
 import numpy as np
 import torch
 from PIL import Image
 from torchvision import transforms
-from typeguard import typechecked
 
-from beast import log_step
 from beast.data.types import ExampleDict
+from beast.logging import log_step
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def _patched_prevent(axis_size, crop_start, crop_end):
+def _patched_prevent(axis_size: int, crop_start: int, crop_end: int) -> tuple[int, ...]:
     """Monkey patch to fix imaug 0.4.2 compatability issue with numpy 2.x"""
     result = _iaa_size._prevent_zero_sizes_after_crops_(
         np.array([axis_size], dtype=np.int32),
@@ -32,7 +32,6 @@ def _patched_prevent(axis_size, crop_start, crop_end):
 _iaa_size._prevent_zero_size_after_crop_ = _patched_prevent
 
 
-@typechecked
 class BaseDataset(torch.utils.data.Dataset):
     """Base dataset that contains images."""
 
@@ -47,7 +46,7 @@ class BaseDataset(torch.utils.data.Dataset):
         Parameters
         ----------
         data_dir: absolute path to data directory
-        imgaug_transform: imgaug transform pipeline to apply to images
+        imgaug_pipeline: imgaug transform pipeline to apply to images
         num_channels: number of output channels; 1 loads as grayscale then converts to RGB,
             3 loads directly as RGB
 
@@ -66,18 +65,26 @@ class BaseDataset(torch.utils.data.Dataset):
         scan_start = time.time()
         try:
             log_step(
-                f"Starting to scan for PNG files in {self.data_dir} (this may take a while for large directories)...", level='debug')
+                f"Starting to scan for PNG files in {self.data_dir}"
+                ' (this may take a while for large directories)...',
+                level='debug',
+            )
             self.image_list = sorted(list(self.data_dir.rglob('*.png')))
             scan_duration = time.time() - scan_start
             log_step(
-                f"Finished scanning. Found {len(self.image_list)} PNG files in {scan_duration:.2f} seconds", level='debug')
+                f"Finished scanning. Found {len(self.image_list)} PNG files"
+                f' in {scan_duration:.2f} seconds',
+                level='debug',
+            )
         except Exception as e:
             log_step(f"ERROR during file scanning: {e}", level='error')
             raise
         if len(self.image_list) == 0:
             raise ValueError(f'{self.data_dir} does not contain image data in png format')
         log_step(
-            f"BaseDataset initialization complete with {len(self.image_list)} images", level='debug')
+            f"BaseDataset initialization complete with {len(self.image_list)} images",
+            level='debug',
+        )
 
         # send image to tensor, resize to canonical dimensions, and normalize
         pytorch_transform_list = [
@@ -88,6 +95,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self.pytorch_transform = transforms.Compose(pytorch_transform_list)
 
     def __len__(self) -> int:
+        """Return number of images in the dataset."""
         return len(self.image_list)
 
     def __getitem__(self, idx: int | list) -> ExampleDict | list[ExampleDict]:
@@ -120,16 +128,18 @@ class BaseDataset(torch.utils.data.Dataset):
             image = Image.open(img_path).convert('RGB')
         if self.imgaug_pipeline is not None:
             # expands add batch dim for imgaug
-            transformed_images = self.imgaug_pipeline(images=np.expand_dims(image, axis=0))
+            transformed_images = self.imgaug_pipeline(
+                images=np.expand_dims(np.asarray(image), axis=0)
+            )
             # get rid of the batch dim
             transformed_images = transformed_images[0]
         else:
             transformed_images = image
 
-        transformed_images = self.pytorch_transform(transformed_images)
+        transformed_tensor = cast(torch.Tensor, self.pytorch_transform(transformed_images))
 
         return ExampleDict(
-            image=transformed_images,  # shape (3, img_height, img_width)
+            image=transformed_tensor,  # shape (3, img_height, img_width)
             video=img_path.parts[-2],
             idx=idx,
             image_path=str(img_path),

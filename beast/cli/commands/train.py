@@ -1,16 +1,18 @@
 """Command to train a model."""
 
+import argparse
 import datetime
 import logging
 from pathlib import Path
+from typing import Any
 
-from beast import log_step
 from beast.cli.types import config_file, output_dir
+from beast.logging import log_step
 
 _logger = logging.getLogger('BEAST.CLI.TRAIN')
 
 
-def register_parser(subparsers):
+def register_parser(subparsers: Any) -> None:
     """Register the train command parser."""
 
     parser = subparsers.add_parser(
@@ -63,7 +65,7 @@ def register_parser(subparsers):
     )
 
 
-def handle(args):
+def handle(args: argparse.Namespace) -> None:
     """Handle the train command execution."""
 
     log_step("Starting train command handler", level='info', logger=_logger)
@@ -79,7 +81,7 @@ def handle(args):
 
     # Set up logging to the model directory
     log_step("Setting up model logging", level='info', logger=_logger)
-    model_log_handler = _setup_model_logging(args.output)
+    _setup_model_logging(args.output)
     log_step("Model logging set up", level='info', logger=_logger)
 
     # try:
@@ -112,9 +114,15 @@ def handle(args):
     # Check for unsupported --checkpoint argument
     if hasattr(args, 'checkpoint') and args.checkpoint:
         log_step(
-            f"WARNING: --checkpoint argument provided but not supported: {args.checkpoint}", level='info', logger=_logger)
-        log_step("Checkpoint resuming is not currently implemented in the CLI",
-                 level='info', logger=_logger)
+            f"WARNING: --checkpoint argument provided but not supported: {args.checkpoint}",
+            level='info',
+            logger=_logger,
+        )
+        log_step(
+            "Checkpoint resuming is not currently implemented in the CLI",
+            level='info',
+            logger=_logger,
+        )
 
     # Initialize model
     log_step("Initializing model from config", level='info', logger=_logger)
@@ -146,7 +154,7 @@ def handle(args):
     #     model_log_handler.close()
 
 
-def _setup_model_logging(output_dir: Path):
+def _setup_model_logging(output_dir: Path) -> logging.FileHandler:
     """Set up additional logging to the model directory and remove original file handler."""
 
     # Create log file path

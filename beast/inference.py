@@ -1,26 +1,40 @@
+"""Inference handlers for saving model predictions on images and videos."""
+
+import logging
 from pathlib import Path
 from typing import Any
 
 import lightning.pytorch as pl
 import cv2
 import numpy as np
+import cv2
 import torch
+import torch.nn.functional as F
 import yaml
 from PIL import Image
 from torchvision import transforms
 from typeguard import typechecked
 
-from beast import log_step
+from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
 
+_logger = logging.getLogger(__name__)
 
-@typechecked
+
 class ImagePredictionHandler:
     """Handles saving predictions while preserving directory structure."""
 
     def __init__(self, output_dir: str | Path, source_dir: str | Path) -> None:
+        """Initialize handler with output and source directories.
+
+        Parameters
+        ----------
+        output_dir: directory where predictions will be saved
+        source_dir: root directory of source images, used to preserve directory structure
+
+        """
         self.output_dir = Path(output_dir)
         self.source_dir = Path(source_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -157,7 +171,7 @@ class ImagePredictionHandler:
 
     def process_predictions(
         self,
-        predictions: list[dict],
+        predictions: list,
         save_reconstructions: bool = True,
         save_latents: bool = False,
     ) -> dict[str, Any]:
@@ -215,14 +229,13 @@ class ImagePredictionHandler:
             results['latents_saved'] = len(all_saved_files['latents'])
             results['latents_dir'] = str(self.output_dir / "latents")
 
-        # Print summary
-        print(f"✓ Processed {results['num_images_processed']} images")
+        _logger.info(f"Processed {results['num_images_processed']} images")
         if save_reconstructions:
-            print(f"✓ Saved {results['reconstructions_saved']} reconstructions")
+            _logger.info(f"Saved {results['reconstructions_saved']} reconstructions")
         if save_latents:
-            print(f"✓ Saved {results['latents_saved']} latent representations")
-        print(f"✓ Results saved to: {self.output_dir}")
-        print(f"✓ Metadata saved to: {metadata_path}")
+            _logger.info(f"Saved {results['latents_saved']} latent representations")
+        _logger.info(f'Results saved to: {self.output_dir}')
+        _logger.info(f'Metadata saved to: {metadata_path}')
 
         return results
 
@@ -234,7 +247,6 @@ class ImagePredictionHandler:
         return metadata_path
 
 
-@typechecked
 class VideoPredictionHandler:
     """Handles saving predictions for video processing."""
 
@@ -278,7 +290,7 @@ class VideoPredictionHandler:
         self.mean = torch.Tensor(_IMAGENET_MEAN).view(1, 1, 3)
         self.std = torch.Tensor(_IMAGENET_STD).view(1, 1, 3)
 
-    def tensor_to_numpy_bgr(self, tensor: torch.Tensor):
+    def tensor_to_numpy_bgr(self, tensor: torch.Tensor) -> np.ndarray:
         """Convert tensor (C, H, W) to OpenCV BGR format."""
         # handle different tensor formats
         if tensor.dim() == 4:  # (B, C, H, W) - take first batch item
@@ -313,7 +325,7 @@ class VideoPredictionHandler:
             output_video_path = self.output_dir / f'{self.video_file.stem}_reconstruction.mp4'
 
             # Use mp4v codec for better compatibility
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # type: ignore[attr-defined]
 
             self.reconstruction_writer = cv2.VideoWriter(
                 str(output_video_path),
@@ -353,6 +365,8 @@ class VideoPredictionHandler:
 
                 if self.reconstruction_writer is None:
                     self._init_video_writer()
+                if self.reconstruction_writer is None:
+                    raise RuntimeError('reconstruction_writer was not initialized')
 
                 # convert tensor to BGR numpy array
                 frame_bgr = self.tensor_to_numpy_bgr(reconstructions[i])
@@ -372,7 +386,7 @@ class VideoPredictionHandler:
 
     def process_predictions(
         self,
-        predictions: list[dict],
+        predictions: list,
         save_reconstructions: bool = True,
         save_latents: bool = True,
     ) -> dict[str, Any]:
@@ -426,20 +440,18 @@ class VideoPredictionHandler:
         else:
             results['reconstruction_video'] = None
 
-        # print summary
-        print(f'✓ Processed {self.frames_processed} frames from {self.video_file.name}')
+        _logger.info(f'Processed {self.frames_processed} frames from {self.video_file.name}')
         if save_reconstructions:
-            print(f'✓ Saved reconstruction video: {results.get("reconstruction_video")}')
+            _logger.info(f'Saved reconstruction video: {results.get("reconstruction_video")}')
         if save_latents:
-            print(
-                f'✓ Saved latents array {results.get("latents_shape")} to: '
+            _logger.info(
+                f'Saved latents array {results.get("latents_shape")} to: '
                 f'{results.get("latents_file")}'
             )
 
         return results
 
 
-@typechecked
 def predict_images(
     model: BaseLightningModel,
     output_dir: str | Path,
@@ -507,6 +519,8 @@ def predict_images(
     # run inference
     trainer = pl.Trainer(accelerator='gpu', devices=1, logger=False)
     predictions = trainer.predict(model, dataloaders=dataloader, return_predictions=True)
+    if predictions is None:
+        raise RuntimeError('trainer.predict() returned None')
 
     # process outputs
     results = handler.process_predictions(
@@ -518,7 +532,6 @@ def predict_images(
     return results
 
 
-@typechecked
 def predict_video(
     model: BaseLightningModel,
     output_dir: str | Path,
@@ -526,7 +539,7 @@ def predict_video(
     batch_size: int = 32,
     save_latents: bool = True,
     save_reconstructions: bool = True,
-) -> None:
+) -> dict[str, Any]:
     """Run inference on video using a trained model and save results.
 
     Parameters
@@ -537,6 +550,16 @@ def predict_video(
     batch_size: number of images to process in each batch
     save_latents: whether to save latent representations as .npy files in a 'latents/' subdirectory
     save_reconstructions: whether to save reconstructed images as PNG files
+
+    Returns
+    -------
+    Dictionary containing inference results with keys:
+        - 'output_dir': path to output directory
+        - 'video_file': path to source video file
+        - 'frames_processed': total number of frames processed
+        - 'reconstruction_video': path to reconstruction video (if enabled, else None)
+        - 'latents_file': path to saved latents array (if enabled, else None)
+        - 'latents_shape': shape of latents array (if enabled, else None)
 
     """
 
@@ -558,9 +581,11 @@ def predict_video(
     # run inference
     trainer = pl.Trainer(accelerator='gpu', devices=1, logger=False)
     predictions = trainer.predict(model, dataloaders=dataloader, return_predictions=True)
+    if predictions is None:
+        raise RuntimeError('trainer.predict() returned None')
 
     # process outputs
-    handler.process_predictions(
+    return handler.process_predictions(
         predictions,
         save_reconstructions=save_reconstructions,
         save_latents=save_latents,
@@ -835,7 +860,7 @@ def infer_sable(
             - ``'ply_files'``: list of Path objects for all saved PLY files.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
-    from beast.data.ibl_dataset import IBLDataset
+    from beast.data.sable_dataset import SABLEDataset
     from beast.models.model_utils.data_utils import collate_with_correspondence_padding
     from beast.models.model_utils.train_vis import save_training_visuals
 
@@ -845,7 +870,7 @@ def infer_sable(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = IBLDataset(config, include_splits=include_splits)
+    dataset = SABLEDataset(config, include_splits=include_splits)
     log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
 
     training = config['training']

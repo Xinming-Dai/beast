@@ -1,6 +1,7 @@
 # beast
 
 ![GitHub](https://img.shields.io/github/license/paninski-lab/beast)
+[![codecov](https://codecov.io/gh/paninski-lab/beast/branch/main/graph/badge.svg)](https://codecov.io/gh/paninski-lab/beast)
 ![PyPI](https://img.shields.io/pypi/v/beast-backbones)
 
 **Be**havioral **a**nalysis via **s**elf-supervised pretraining of **t**ransformers
@@ -55,6 +56,9 @@ pip install beast-backbones
 
 ## Usage
 
+> The commands below are for the **single-view BEAST model**.
+> For multi-view 3D data, see the [BEAST3D documentation](docs/beast3d.md).
+
 `beast` comes with a simple command line interface. To get more information, run
 ```commandline
 beast -h
@@ -95,3 +99,22 @@ beast predict --model <model_dir> --input <video_path> [options]
 ```
 
 Type "beast predict -h" in the terminal for details on the options.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on setting up a development environment,
+code style, and submitting pull requests.
+
+## Funding
+
+We are grateful for support from the following:
+* Gatsby Charitable Foundation GAT3708
+* [NIH R50NS145433](https://reporter.nih.gov/search/Hmj4KMmLv0evcYPlPEDa-Q/project-details/11240675)
+* [NIH U19NS123716](https://reporter.nih.gov/search/Hmj4KMmLv0evcYPlPEDa-Q/project-details/11141703)
+* [NSF 1707398](https://ui.adsabs.harvard.edu/abs/2017nsf....1707398A/abstract)
+* [The NSF AI Institute for Artificial and Natural Intelligence](https://ui.adsabs.harvard.edu/abs/2023nsf....2229929Z/abstract)
+* Simons Foundation
+* Wellcome Trust 216324
+* Zuckerman Institute (Columbia University) Team Science

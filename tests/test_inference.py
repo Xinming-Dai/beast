@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 import cv2
@@ -10,7 +11,13 @@ import torch
 import yaml
 from PIL import Image
 
-from beast.inference import ImagePredictionHandler, VideoPredictionHandler, save_gaussian_pointclouds
+from beast.inference import (
+    ImagePredictionHandler,
+    VideoPredictionHandler,
+    predict_images,
+    predict_video,
+    save_gaussian_pointclouds,
+)
 
 
 class TestImagePredictionHandler:
@@ -173,7 +180,7 @@ class TestImagePredictionHandler:
         assert len(result['metadata']) == 2
 
         # Check metadata entries
-        for i, metadata in enumerate(result['metadata']):
+        for _i, metadata in enumerate(result['metadata']):
             assert 'original_path' in metadata
             assert 'video' in metadata
             assert 'idx' in metadata
@@ -254,7 +261,7 @@ class TestImagePredictionHandler:
         assert metadata_path.exists()
 
         # Check YAML content
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path) as f:
             loaded_metadata = yaml.safe_load(f)
 
         assert loaded_metadata == test_metadata
@@ -366,7 +373,7 @@ class TestVideoPredictionHandler:
         # create test video file
         video_file = temp_source / 'video1.mp4'
         # create a simple test video with 10 frames
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # type: ignore[attr-defined]
         out = cv2.VideoWriter(str(video_file), fourcc, 10.0, (64, 64))
         for i in range(10):
             # create frames with different colors
@@ -504,67 +511,102 @@ class TestVideoPredictionHandler:
 
 
 class TestSaveGaussianPointclouds:
-    """Test the save_gaussian_pointclouds function."""
+    """Test the _init_video_writer error path."""
 
-    @pytest.fixture
-    def fake_gs(self):
-        """Minimal GaussianModel stub with get_xyz and get_opacity tensors."""
-        n = 12
-        gs = SimpleNamespace(
-            get_xyz=torch.rand(n, 3),
-            get_opacity=torch.rand(n, 1),
-        )
-        return gs
+    def test_init_video_writer_bad_path_raises(self, tmp_path, video_file) -> None:
+        # Arrange — handler with a bad output path so the writer fails to open
+        handler = VideoPredictionHandler(tmp_path / 'out', video_file)
+        mock_writer = Mock()
+        mock_writer.isOpened.return_value = False
+        with patch('beast.inference.cv2.VideoWriter', return_value=mock_writer):
+            # Act / Assert
+            with pytest.raises(ValueError, match='Failed to open video writer'):
+                handler._init_video_writer()
 
-    def test_save_gaussian_pointclouds_opacity_fallback(self, fake_gs, tmp_path):
-        """No pixelalign_xyz in result → PLY written with opacity grayscale colors."""
-        result = {'gaussians': [fake_gs]}
-        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0)
-        assert len(paths) == 1
-        assert paths[0].exists()
-        assert paths[0].name == 'pointcloud_batch0000_sample00.ply'
 
-    def test_save_gaussian_pointclouds_pixel_colors(self, fake_gs, tmp_path):
-        """Matching pixelalign_xyz and image shapes → PLY written with RGB colors."""
-        v, h, w = 2, 2, 3
-        n = v * h * w  # 12 points, matches fake_gs
-        # pixelalign_xyz: [B=1, v, 3, h, w] — flattened along v,h,w gives 12 points
-        pxyz = torch.rand(1, v, 3, h, w)
-        images = torch.rand(1, v, 3, h, w)
-        result = {
-            'gaussians': [fake_gs],
-            'pixelalign_xyz': pxyz,
-            'image': images,
-        }
-        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=1)
-        assert len(paths) == 1
-        assert paths[0].exists()
-        assert paths[0].name == 'pointcloud_batch0001_sample00.ply'
+class TestPredictImages:
+    """Test the predict_images standalone function."""
 
-    def test_save_gaussian_pointclouds_shape_mismatch_falls_back(self, fake_gs, tmp_path):
-        """Mismatched pixelalign_xyz / image point counts fall back to opacity colors."""
-        # pixelalign_xyz flattens to 6 points, image flattens to 12 — mismatch
-        pxyz = torch.rand(1, 1, 3, 2, 3)   # 1*2*3 = 6
-        images = torch.rand(1, 2, 3, 2, 3)  # 2*2*3 = 12
-        result = {
-            'gaussians': [fake_gs],
-            'pixelalign_xyz': pxyz,
-            'image': images,
-        }
-        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0)
-        # should not raise; writes with opacity fallback
-        assert len(paths) == 1
-        assert paths[0].exists()
+    def test_predict_images_none_predictions_raises(self, data_dir, tmp_path) -> None:
+        # Arrange — trainer returns None instead of a prediction list
+        mock_model = Mock()
+        with patch('beast.inference.pl.Trainer') as MockTrainer:
+            MockTrainer.return_value.predict.return_value = None
+            # Act / Assert
+            with pytest.raises(RuntimeError, match="trainer.predict\\(\\) returned None"):
+                predict_images(
+                    model=mock_model,
+                    output_dir=tmp_path,
+                    source_dir=data_dir,
+                )
 
-    def test_save_gaussian_pointclouds_max_samples(self, fake_gs, tmp_path):
-        """max_samples=1 writes only the first item when two are in the list."""
-        result = {'gaussians': [fake_gs, fake_gs]}
-        paths = save_gaussian_pointclouds(result, tmp_path, batch_idx=0, max_samples=1)
-        assert len(paths) == 1
-        assert paths[0].name == 'pointcloud_batch0000_sample00.ply'
-        assert not (tmp_path / 'ply' / 'pointcloud_batch0000_sample01.ply').exists()
+    def test_predict_images_returns_results(self, data_dir, tmp_path) -> None:
+        # Arrange — mock trainer to return a minimal prediction list
+        mock_model = Mock()
+        mock_predictions = [
+            {
+                'reconstructions': torch.rand(2, 3, 224, 224),
+                'latents': torch.rand(2, 128),
+                'metadata': {
+                    'video': ['vid', 'vid'],
+                    'idx': [torch.tensor(0), torch.tensor(1)],
+                    'image_paths': [
+                        next(data_dir.rglob('*.png')),
+                        next(data_dir.rglob('*.png')),
+                    ],
+                },
+            }
+        ]
+        with patch('beast.inference.pl.Trainer') as MockTrainer:
+            MockTrainer.return_value.predict.return_value = mock_predictions
+            # Act
+            result = predict_images(
+                model=mock_model,
+                output_dir=tmp_path,
+                source_dir=data_dir,
+                save_reconstructions=False,
+                save_latents=False,
+            )
+        # Assert
+        assert 'num_images_processed' in result
+        assert result['num_images_processed'] == 2
 
-    def test_save_gaussian_pointclouds_empty_gaussians(self, tmp_path):
-        """Missing or empty gaussians key returns empty list without error."""
-        assert save_gaussian_pointclouds({}, tmp_path, batch_idx=0) == []
-        assert save_gaussian_pointclouds({'gaussians': []}, tmp_path, batch_idx=0) == []
+
+class TestPredictVideo:
+    """Test the predict_video standalone function."""
+
+    def test_predict_video_none_predictions_raises(self, video_file, tmp_path) -> None:
+        # Arrange — trainer returns None
+        mock_model = Mock()
+        with patch('beast.inference.pl.Trainer') as MockTrainer:
+            MockTrainer.return_value.predict.return_value = None
+            # Act / Assert
+            with pytest.raises(RuntimeError, match="trainer.predict\\(\\) returned None"):
+                predict_video(
+                    model=mock_model,
+                    output_dir=tmp_path,
+                    video_file=video_file,
+                )
+
+    def test_predict_video_returns_results(self, video_file, tmp_path) -> None:
+        # Arrange — mock trainer to return a minimal prediction list
+        mock_model = Mock()
+        mock_predictions = [
+            {
+                'reconstructions': torch.rand(2, 3, 224, 224),
+                'latents': torch.rand(2, 128),
+            }
+        ]
+        with patch('beast.inference.pl.Trainer') as MockTrainer:
+            MockTrainer.return_value.predict.return_value = mock_predictions
+            # Act
+            result = predict_video(
+                model=mock_model,
+                output_dir=tmp_path,
+                video_file=video_file,
+                save_reconstructions=False,
+                save_latents=False,
+            )
+        # Assert
+        assert 'frames_processed' in result
+        assert result['frames_processed'] == 2

@@ -8,6 +8,8 @@ import torch
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast import log_step, version as beast_version
+from beast.logging import log_step
+from beast.data.sable_dataset import SABLEDataset
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
