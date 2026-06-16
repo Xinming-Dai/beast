@@ -214,7 +214,8 @@ def train_sable(config: dict, model, output_dir: str | Path):
         yaml.dump(config, file)
 
     log_step('Entering train_sable()', level='debug')
-    reset_seeds(seed=int(config['model'].get('seed', 0)))
+    seed = int(config['model'].get('seed', 0))
+    reset_seeds(seed=seed)
 
     pretty_print_config(config)
 
@@ -241,6 +242,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         collate_fn=collate_with_correspondence_padding,
         persistent_workers=num_workers > 0,
         drop_last=True,
+        generator=torch.Generator().manual_seed(seed),
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,

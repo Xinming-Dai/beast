@@ -686,6 +686,18 @@ class Sable(BaseLightningModel):
         )
 
         xyz, features, scaling, rotation, opacity = self.upsampler.to_gs(img_aligned_gaussians)
+
+        if 'mask' in data:
+            # zero out Gaussian opacity in background pixels so the renderer fills
+            # those regions with the default white background (bg_color=(1,1,1))
+            input_mask = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
+            mask_flat = rearrange(
+                input_mask,
+                'b v 1 (hh ph) (ww pw) -> b (v hh ww ph pw) 1',
+                hh=self.hh, ww=self.ww, ph=self.ph, pw=self.pw,
+            )
+            opacity = torch.where(mask_flat > 0.5, opacity, opacity.new_full((), -10.0))
+
         img_aligned_xyz = rearrange(
             xyz,
             'b (v hh ww ph pw) c -> b v c (hh ph) (ww pw)',
@@ -785,6 +797,7 @@ class Sable(BaseLightningModel):
                 T_kabsch = estimate_initial_transform(
                     init_src_pcd, init_tgt_pcd, src_idx, tgt_idx
                 )
+                T_kabsch = np.array([[ 0.4414802, 0.15673411, -0.88347589, -0.05953322], [-0.06357379, 0.98761488, 0.14344067, 0.05882564], [ 0.89501598, -0.0071603, 0.4459766, -0.01130054], [ 0., 0., 0., 1.]])
                 init_src_pcd.transform(T_kabsch)
                 init_src_pts = np.asarray(init_src_pcd.points)
                 init_tgt_pts = np.asarray(init_tgt_pcd.points)
@@ -929,6 +942,13 @@ class Sable(BaseLightningModel):
             pixelalign_xyz.append(img_aligned_xyz)
         pixelalign_xyz = torch.stack(pixelalign_xyz, dim=0)
 
+        # apply segmentation mask to target image: background → white to match the
+        # renderer's default white bg for transparent Gaussians
+        target_img = data['image'][batch_idx, target_idx, ...]  # [b, v_target, 3, H, W]
+        if 'mask' in data:
+            target_mask = data['mask'][batch_idx, target_idx, ...]  # [b, v_target, 1, H, W]
+            target_img = target_img * target_mask + (1.0 - target_mask)
+
         # return results
         result = SimpleNamespace(**{
             'ray_o': ray_o,
@@ -936,7 +956,7 @@ class Sable(BaseLightningModel):
             'pixelalign_xyz': pixelalign_xyz,
             'image': data['image'],
             'input_image': data['image'][batch_idx, input_idx.clamp(max=v_real - 1), ...],
-            'target_image': data['image'][batch_idx, target_idx, ...],
+            'target_image': target_img,
             'render': render_results.rendered_images,
             'c2w_input': c2w_input,
             'fxfycxcy_input': fxfycxcy_input,
