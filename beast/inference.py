@@ -855,9 +855,9 @@ def infer_sable(
             - ``'ply_files'``: list of Path objects for all saved PLY files.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
-    from beast.data.sable_dataset import SABLEDataset
     from beast.models.model_utils.data_utils import collate_with_correspondence_padding
     from beast.models.model_utils.train_vis import save_training_visuals
+    from beast.train_sable import _resolve_dataset_class
 
     if include_splits is None:
         include_splits = ['train', 'val']
@@ -865,10 +865,13 @@ def infer_sable(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = SABLEDataset(config, include_splits=include_splits)
+    training = config['training']
+    dataset_cls = _resolve_dataset_class(
+        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
+    )
+    dataset = dataset_cls(config, include_splits=include_splits)
     log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
 
-    training = config['training']
     num_workers = int(training.get('num_workers', 4))
     batch_size = int(training.get('batch_size_per_gpu', 1))
 
