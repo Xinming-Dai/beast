@@ -97,20 +97,30 @@ def _save_pair_images_and_corr_overlays(
     *,
     save_dir: str,
     rgb_bgr_views: list[np.ndarray],
-    depth_gray_u8_views: list[np.ndarray],
-    depth_bgr_views: list[np.ndarray | None],
+    masked_rgb_bgr_views: list[np.ndarray] | None,
     corr_left_xy: np.ndarray | None,
     corr_right_xy: np.ndarray | None,
 ) -> None:
-    """Save per-view RGB (and optional depth) plus correspondence overlays."""
+    """Save side-by-side RGB (and optional masked) images plus correspondence overlay."""
     import cv2
 
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
     n = len(rgb_bgr_views)
-    has_depth = len(depth_gray_u8_views) == n and len(depth_bgr_views) == n
-    for vi in range(n):
-        cv2.imwrite(str(save_path / f'pair_view{vi}_rgb.png'), rgb_bgr_views[vi])
+
+    if n >= 2:
+        sep = np.full((rgb_bgr_views[0].shape[0], 8, 3), 255, dtype=np.uint8)
+        cv2.imwrite(
+            str(save_path / 'pair_rgb_sidebyside.png'),
+            np.hstack([rgb_bgr_views[0], sep, rgb_bgr_views[1]]),
+        )
+
+    if masked_rgb_bgr_views is not None and len(masked_rgb_bgr_views) >= 2:
+        sep = np.full((masked_rgb_bgr_views[0].shape[0], 8, 3), 255, dtype=np.uint8)
+        cv2.imwrite(
+            str(save_path / 'pair_rgb_masked_sidebyside.png'),
+            np.hstack([masked_rgb_bgr_views[0], sep, masked_rgb_bgr_views[1]]),
+        )
 
     if (
         corr_left_xy is not None
@@ -120,37 +130,13 @@ def _save_pair_images_and_corr_overlays(
         and n >= 2
     ):
         green = (0, 255, 0)
-        magenta = (255, 0, 255)
         o0 = _draw_xy_points_bgr(rgb_bgr_views[0], corr_left_xy, color_bgr=green, with_index=True)
         o1 = _draw_xy_points_bgr(rgb_bgr_views[1], corr_right_xy, color_bgr=green, with_index=True)
-        cv2.imwrite(str(save_path / 'pair_view0_rgb_corr_overlay.png'), o0)
-        cv2.imwrite(str(save_path / 'pair_view1_rgb_corr_overlay.png'), o1)
-
-        if has_depth:
-            dg0 = cv2.cvtColor(depth_gray_u8_views[0], cv2.COLOR_GRAY2BGR)
-            dg1 = cv2.cvtColor(depth_gray_u8_views[1], cv2.COLOR_GRAY2BGR)
-            cv2.imwrite(
-                str(save_path / 'pair_view0_depth_gray_corr_overlay.png'),
-                _draw_xy_points_bgr(dg0, corr_left_xy, color_bgr=magenta),
-            )
-            cv2.imwrite(
-                str(save_path / 'pair_view1_depth_gray_corr_overlay.png'),
-                _draw_xy_points_bgr(dg1, corr_right_xy, color_bgr=magenta),
-            )
-
-            if depth_bgr_views[0] is not None and depth_bgr_views[1] is not None:
-                cv2.imwrite(
-                    str(save_path / 'pair_view0_depth_turbo_corr_overlay.png'),
-                    _draw_xy_points_bgr(depth_bgr_views[0], corr_left_xy, color_bgr=green),
-                )
-                cv2.imwrite(
-                    str(save_path / 'pair_view1_depth_turbo_corr_overlay.png'),
-                    _draw_xy_points_bgr(depth_bgr_views[1], corr_right_xy, color_bgr=green),
-                )
-
         sep = np.full((o0.shape[0], 8, 3), 255, dtype=np.uint8)
-        grid = np.hstack([o0, sep, o1])
-        cv2.imwrite(str(save_path / 'pair_rgb_sidebyside_corr_overlay.png'), grid)
+        cv2.imwrite(
+            str(save_path / 'pair_rgb_sidebyside_corr_overlay.png'),
+            np.hstack([o0, sep, o1]),
+        )
 
 
 def _save_merged_pcd_single(
@@ -177,6 +163,7 @@ def _save_merged_pcd_single(
     """Save debug outputs for a single batch item."""
     color_list = []
     rgb_bgr_views: list[np.ndarray] = []
+    masked_views: list[np.ndarray] = []
     depth_gray_list: list[np.ndarray] = []
     depth_bgr_list: list[np.ndarray | None] = []
     for vi in range(v_target):
@@ -189,6 +176,14 @@ def _save_merged_pcd_single(
             align_corners=True,
         )[0]
         rgb_bgr_views.append(_chw01_to_bgr_u8(img_resized))
+        if 'mask' in data:
+            mask = data['mask'][batch_idx, view_global].float()
+            mask_resized = torch.nn.functional.interpolate(
+                mask.unsqueeze(0),
+                size=(pcd_h, pcd_w),
+                mode='nearest',
+            )[0]
+            masked_views.append(_chw01_to_bgr_u8(img_resized * mask_resized + (1 - mask_resized)))
         img_flat = rearrange(
             img_resized,
             'c (hh ph) (ww pw) -> (hh ww ph pw) c',
@@ -229,8 +224,6 @@ def _save_merged_pcd_single(
 
     if depth_maps is not None:
         for vi in range(min(v_target, depth_maps.shape[1])):
-            d_u8 = depth_gray_list[vi]
-            Image.fromarray(d_u8).save(save_path / f'depth_view{vi}_gray.png')
             d_bgr = depth_bgr_list[vi]
             if d_bgr is not None:
                 Image.fromarray(d_bgr[..., ::-1]).save(
@@ -240,8 +233,7 @@ def _save_merged_pcd_single(
     _save_pair_images_and_corr_overlays(
         save_dir=batch_save_dir,
         rgb_bgr_views=rgb_bgr_views,
-        depth_gray_u8_views=depth_gray_list,
-        depth_bgr_views=depth_bgr_list,
+        masked_rgb_bgr_views=masked_views if masked_views else None,
         corr_left_xy=corr_left_xy,
         corr_right_xy=corr_right_xy,
     )
