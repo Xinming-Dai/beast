@@ -79,7 +79,11 @@ training:
 
   # Cheese3D-specific dataset settings
   cheese3d_session_names:
-    - 20231031_B20_chew_bl_000
+    - 20231031_B20_chew_bl_000    
+    - 20231031_B20_chew_br_000
+    - 20231031_B21_chew_bl_000
+    - 20231031_B26_chew_bl_000
+    - 20231031_B31_chew_bl_000
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
   cheese3d_use_segmentation: true

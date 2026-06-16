@@ -65,8 +65,7 @@ declared as typed fields in `beast/config.py`.
 
 ## Segmentation masking
 
-SAM3 segmentation masks can optionally be applied to zero out background pixels in
-both the left and right images:
+SAM3 segmentation masks can optionally be loaded alongside the raw frames:
 
 ```yaml
 training:
@@ -89,8 +88,20 @@ enabled:
 
 - only frame indices that have a mask for **both** the left and right cameras (in
   addition to having both PNG frames) are included in the dataset;
-- each mask is resized (nearest-neighbor) to `image_size x image_size` and multiplied
-  elementwise into the corresponding image, zeroing out background pixels.
+- each mask is resized (nearest-neighbor) to `image_size x image_size` and returned
+  under the `'mask'` key as a `[V, 1, H, W]` float32 tensor (1 = foreground,
+  0 = background);
+- `data['image']` always contains the **raw** frames — masks are **not** pre-applied —
+  so VDA, the image tokeniser, and DINO all receive full scene context.
+
+The SABLE model (`beast/models/sable.py`) applies the masks in two places:
+
+1. **Gaussian opacity**: background Gaussians (mask = 0) have their logit-opacity
+   forced to −10 (sigmoid ≈ 0, fully transparent).  The renderer fills those pixels
+   with its default white background `(1, 1, 1)`.
+2. **Target image**: the ground-truth frame used in the loss is
+   `raw * mask + (1 − mask)`, giving a white background in masked-out regions to
+   match the rendered output.
 
 ## Running training
 

@@ -844,14 +844,17 @@ class Cheese3DDataset(SABLEDataset):
       ``_CHEESE3D_FIXED_CONFIDENCE``), identical for every scene and camera, rescaled
       from native (320x256) pixel space to ``image_size x image_size``.
 
-    Optionally, SAM3 segmentation masks can be applied to zero out background pixels.
+    Optionally, SAM3 segmentation masks can be loaded alongside the raw frames.
     Masks are read from::
 
         {segmentation_root}/{session_id}_{camera}_*/masks/mask{frame_idx:08d}.png
 
     When ``training.cheese3d_use_segmentation`` is true, only frame indices with a
-    mask available for both cameras are included, and ``image`` is multiplied by the
-    (resized) binary mask in :meth:`__getitem__`.
+    mask available for both cameras are included.  The raw images are returned
+    unchanged in ``data['image']`` so that VDA, the image tokeniser, and DINO all
+    receive full scene context.  The masks are returned separately under
+    ``data['mask']`` (shape ``[V, 1, H, W]``, float32, 1 = foreground); the model
+    applies them at loss time (white background on the target) and to Gaussian opacity.
 
     Config keys read:
 
@@ -1061,22 +1064,24 @@ class Cheese3DDataset(SABLEDataset):
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """Load one stereo pair.
 
+        Raw images are always returned unchanged under ``image`` so that VDA, the
+        image tokeniser, and DINO receive full scene context.  When segmentation is
+        enabled, the binary masks are returned separately under ``mask`` (shape
+        ``[V, 1, H, W]``, float32, 1 = foreground, 0 = background).  The model
+        applies masks at loss time and to Gaussian opacity.
+
         Args:
             idx: dataset index.
 
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``.
+            ``scene_name``, and optionally ``mask``.
         """
         rec = self._records[idx]
 
         left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
         right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
-
-        if rec.left_mask_path is not None and rec.right_mask_path is not None:
-            left_img = left_img * self._load_mask(rec.left_mask_path)
-            right_img = right_img * self._load_mask(rec.right_mask_path)
 
         image_tensor = torch.stack([left_img, right_img], dim=0)   # [V, 3, H, W]
         depth_tensor = torch.zeros(
@@ -1089,7 +1094,7 @@ class Cheese3DDataset(SABLEDataset):
             right_orig_size=(right_orig_w, right_orig_h),
         )
 
-        return {
+        result = {
             'image': image_tensor,
             'context_indices': context_indices,
             'target_indices': target_indices,
@@ -1099,6 +1104,13 @@ class Cheese3DDataset(SABLEDataset):
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
         }
+
+        if rec.left_mask_path is not None and rec.right_mask_path is not None:
+            left_mask = self._load_mask(rec.left_mask_path)    # [1, H, W]
+            right_mask = self._load_mask(rec.right_mask_path)  # [1, H, W]
+            result['mask'] = torch.stack([left_mask, right_mask], dim=0)  # [V, 1, H, W]
+
+        return result
 
     def _fixed_correspondences(
         self,
