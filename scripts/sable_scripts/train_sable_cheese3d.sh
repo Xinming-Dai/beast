@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:30:00
+#SBATCH -t 0-24:00:00
 #SBATCH -J sable_cheese3d_train
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/train_sable_cheese3d_%j.log
 #SBATCH --export=ALL

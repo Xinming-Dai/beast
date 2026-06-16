@@ -69,7 +69,7 @@ optimizer:
   wd: 0.05
   beta1: 0.9
   beta2: 0.95
-  warmup: 0
+  warmup: 1500
   div_factor: 1.0
   final_div_factor: 1.0
   scheduler: cosine
@@ -116,7 +116,7 @@ training:
 
   resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 2
+  max_fwdbwd_passes: 10000
   print_every: 10
   save_visuals: true
   vis_num_samples: 1
