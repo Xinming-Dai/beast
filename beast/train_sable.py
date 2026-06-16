@@ -336,6 +336,15 @@ def train_sable(config: dict, model, output_dir: str | Path):
 
     logger = pl.loggers.TensorBoardLogger('tb_logs', name='')
 
+    val_every = int(training.get('val_every', 10))
+    val_check_interval = max(1, min(val_every, len(train_loader)))
+    if val_check_interval != val_every:
+        log_step(
+            f'Clamping val_every from {val_every} to {val_check_interval} '
+            f'(number of training batches)',
+            level='info',
+        )
+
     log_step('Creating PyTorch Lightning Trainer', level='debug')
     trainer = pl.Trainer(
         accelerator='gpu',
@@ -344,7 +353,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         max_steps=max_steps_this_run,
         accumulate_grad_batches=int(training.get('grad_accum_steps', 1)),
         precision=precision,
-        val_check_interval=int(training.get('val_every', 10)),
+        val_check_interval=val_check_interval,
         gradient_clip_val=float(training.get('grad_clip_norm', 1.0)),
         callbacks=callbacks,
         logger=logger,
