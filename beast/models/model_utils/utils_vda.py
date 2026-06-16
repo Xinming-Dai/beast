@@ -279,7 +279,12 @@ def depth_map_normalized(depth: torch.Tensor, eps: float = 1e-8) -> torch.Tensor
     return out.view_as(depth)
 
 
-def pseudo_pointcloud_normalized(depth: torch.Tensor, ph: int, pw: int) -> torch.Tensor:
+def pseudo_pointcloud_normalized(
+    depth: torch.Tensor,
+    ph: int,
+    pw: int,
+    fg_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Build a normalised pseudo point cloud from a single-view depth map.
 
     Points are arranged in patch-major order matching einops pattern
@@ -289,6 +294,9 @@ def pseudo_pointcloud_normalized(depth: torch.Tensor, ph: int, pw: int) -> torch
         depth: depth tensor of shape (H, W).
         ph: patch height (must divide H).
         pw: patch width (must divide W).
+        fg_mask: optional foreground mask of shape (H, W) with values in {0, 1}.
+            When provided, background pixels (fg_mask <= 0.5) have their normalised
+            Z coordinate forced to 0.5 (far end) after depth normalisation.
 
     Returns:
         point cloud tensor of shape (H*W, 3).
@@ -314,6 +322,8 @@ def pseudo_pointcloud_normalized(depth: torch.Tensor, ph: int, pw: int) -> torch
     X = (u - W / 2) / W
     Y = (v - H / 2) / H
     Z = depth_map_normalized(depth)
+    if fg_mask is not None:
+        Z = torch.where(fg_mask > 0.5, Z, Z.new_full((), 0.5))
 
     points_hw = torch.stack([-X, Y, Z], dim=-1)
     points = rearrange(

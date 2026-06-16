@@ -53,6 +53,7 @@ model:
     metric: false
     debug_save: false
     debug_dir: null
+    mask_depth: true   # after depth normalisation, push background pixels to Z=0.5 (far end)
   use_deferred_rendering: false
   use_gsplat: true
   mask_ratio: 0.75

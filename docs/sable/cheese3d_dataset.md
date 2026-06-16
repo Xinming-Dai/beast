@@ -94,7 +94,7 @@ enabled:
 - `data['image']` always contains the **raw** frames — masks are **not** pre-applied —
   so VDA, the image tokeniser, and DINO all receive full scene context.
 
-The SABLE model (`beast/models/sable.py`) applies the masks in two places:
+The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 
 1. **Gaussian opacity**: background Gaussians (mask = 0) have their logit-opacity
    forced to −10 (sigmoid ≈ 0, fully transparent).  The renderer fills those pixels
@@ -102,6 +102,11 @@ The SABLE model (`beast/models/sable.py`) applies the masks in two places:
 2. **Target image**: the ground-truth frame used in the loss is
    `raw * mask + (1 − mask)`, giving a white background in masked-out regions to
    match the rendered output.
+3. **Depth map** (requires `model.vda.mask_depth: true`): after VDA generates depth
+   and `pseudo_pointcloud_normalized` normalises it to [−0.5, 0.5], background pixels
+   have their Z coordinate forced to 0.5 (the far end).  This ensures background
+   Gaussians initialise far from the camera rather than at an arbitrary depth.  Raw
+   images are always passed to VDA unmasked; masking is applied only after normalisation.
 
 ## Running training
 

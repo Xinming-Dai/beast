@@ -750,10 +750,23 @@ class Sable(BaseLightningModel):
         if self.init_gs:
             depth_for_pcd = depth_output.clone()
             depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_target)
+            depth_masks: list[torch.Tensor | None]
+            if 'mask' in data and self.config['model']['vda'].get('mask_depth', False):
+                mask_bv1hw = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
+                mask_bv1pq = torch.nn.functional.interpolate(
+                    rearrange(mask_bv1hw, 'b v 1 h w -> (b v) 1 h w'),
+                    size=(pcd_h, pcd_w),
+                    mode='nearest',
+                )
+                depth_masks = list(
+                    rearrange(mask_bv1pq, '(b v) 1 h w -> (b v) h w', b=b, v=v_input)
+                )
+            else:
+                depth_masks = [None] * len(depth_for_pcd)
             xyz_flat = torch.stack(
                 [
-                    pseudo_pointcloud_normalized(d, self.ph, self.pw)
-                    for d in depth_for_pcd
+                    pseudo_pointcloud_normalized(d, self.ph, self.pw, m)
+                    for d, m in zip(depth_for_pcd, depth_masks)
                 ],
                 dim=0,
             )
