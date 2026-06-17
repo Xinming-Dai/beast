@@ -296,7 +296,7 @@ def pseudo_pointcloud_normalized(
         pw: patch width (must divide W).
         fg_mask: optional foreground mask of shape (H, W) with values in {0, 1}.
             When provided, background pixels (fg_mask <= 0.5) have their normalised
-            Z coordinate forced to 0.5 (far end) after depth normalisation.
+            Z coordinate forced to -0.5 (far end) after depth normalisation.
 
     Returns:
         point cloud tensor of shape (H*W, 3).
@@ -323,7 +323,7 @@ def pseudo_pointcloud_normalized(
     Y = (v - H / 2) / H
     Z = depth_map_normalized(depth)
     if fg_mask is not None:
-        Z = torch.where(fg_mask > 0.5, Z, Z.new_full((), 0.5))
+        Z = torch.where(fg_mask > 0.5, Z, Z.new_full((), -0.5))
 
     points_hw = torch.stack([-X, Y, Z], dim=-1)
     points = rearrange(
