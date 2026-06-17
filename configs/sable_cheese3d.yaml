@@ -20,7 +20,6 @@ model:
     image_size: 320
     in_channels: 3
     patch_size: 16
-    use_off_the_shelf: false
   input_with_pe: true
   near_plane: 0.2
   pose_latent:
