@@ -687,17 +687,6 @@ class Sable(BaseLightningModel):
 
         xyz, features, scaling, rotation, opacity = self.upsampler.to_gs(img_aligned_gaussians)
 
-        if 'mask' in data:
-            # zero out Gaussian opacity in background pixels so the renderer fills
-            # those regions with the default white background (bg_color=(1,1,1))
-            input_mask = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
-            mask_flat = rearrange(
-                input_mask,
-                'b v 1 (hh ph) (ww pw) -> b (v hh ww ph pw) 1',
-                hh=self.hh, ww=self.ww, ph=self.ph, pw=self.pw,
-            )
-            opacity = torch.where(mask_flat > 0.5, opacity, opacity.new_full((), -10.0))
-
         img_aligned_xyz = rearrange(
             xyz,
             'b (v hh ww ph pw) c -> b v c (hh ph) (ww pw)',
@@ -752,14 +741,14 @@ class Sable(BaseLightningModel):
             depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_target)
             depth_masks: list[torch.Tensor | None]
             if 'mask' in data and self.config['model']['vda'].get('mask_depth', False):
-                mask_bv1hw = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
-                mask_bv1pq = torch.nn.functional.interpolate(
-                    rearrange(mask_bv1hw, 'b v 1 h w -> (b v) 1 h w'),
+                seg_mask = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
+                seg_mask = torch.nn.functional.interpolate(
+                    rearrange(seg_mask, 'b v 1 h w -> (b v) 1 h w'),
                     size=(pcd_h, pcd_w),
                     mode='nearest',
                 )
                 depth_masks = list(
-                    rearrange(mask_bv1pq, '(b v) 1 h w -> (b v) h w', b=b, v=v_input)
+                    rearrange(seg_mask, '(b v) 1 h w -> (b v) h w', b=b, v=v_input)
                 )
             else:
                 depth_masks = [None] * len(depth_for_pcd)
