@@ -136,7 +136,6 @@ training:
   lpips_loss_weight: 0.0
   perceptual_loss_weight: 0.3
   gs_reg_loss_weight: 1.0
-  gs_decay_steps: 0
 
   scene_scale_factor: 1.35
   image_preprocess: stretch  # stretch | square_crop | stereo_square_crop_anchor
