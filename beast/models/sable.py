@@ -782,6 +782,10 @@ class Sable(BaseLightningModel):
                 self.debug_merged_pcd_num_batches = int(self.config['model']['merge_pcd'].get('debug_merged_pcd_num_batches', 1))
                 n_dbg_save = min(self.debug_merged_pcd_num_batches, b)
 
+            T_kabsch_config = self.config['model']['merge_pcd'].get('affine_transformation', None)
+            if T_kabsch_config is not None:
+                T_kabsch_fixed = np.array(T_kabsch_config, dtype=np.float64)
+
             for b_i in range(b):
                 corr_xy_from_pixels = None
                 src_idx = []
@@ -791,26 +795,28 @@ class Sable(BaseLightningModel):
                 init_src_pcd.points = o3d.utility.Vector3dVector(xyz_init_src_pts[b_i])
                 init_tgt_pcd.points = o3d.utility.Vector3dVector(xyz_init_tgt_pts[b_i])
 
-                # use GT animal pose as correspondences for kabsch; padding entries have confidence == 0
-                valid = data['confidence'][b_i] > 0
-                left_xy_np = data['leftcamera_xy'][b_i][valid].cpu().numpy()
-                right_xy_np = data['rightcamera_xy'][b_i][valid].cpu().numpy()
-                if len(left_xy_np) >= 3:
-                    src_idx = pixel_xy_to_pointcloud_flat_indices(
-                        left_xy_np, pcd_h, pcd_w, self.ph, self.pw
-                    )
-                    tgt_idx = pixel_xy_to_pointcloud_flat_indices(
-                        right_xy_np, pcd_h, pcd_w, self.ph, self.pw
-                    )
-                    corr_xy_from_pixels = (
-                        np.ascontiguousarray(left_xy_np, dtype=np.float32),
-                        np.ascontiguousarray(right_xy_np, dtype=np.float32),
+                if T_kabsch_config is not None:
+                    T_kabsch = T_kabsch_fixed
+                else:
+                    # use GT animal pose as correspondences for kabsch; padding entries have confidence == 0
+                    valid = data['confidence'][b_i] > 0
+                    left_xy_np = data['leftcamera_xy'][b_i][valid].cpu().numpy()
+                    right_xy_np = data['rightcamera_xy'][b_i][valid].cpu().numpy()
+                    if len(left_xy_np) >= 3:
+                        src_idx = pixel_xy_to_pointcloud_flat_indices(
+                            left_xy_np, pcd_h, pcd_w, self.ph, self.pw
+                        )
+                        tgt_idx = pixel_xy_to_pointcloud_flat_indices(
+                            right_xy_np, pcd_h, pcd_w, self.ph, self.pw
+                        )
+                        corr_xy_from_pixels = (
+                            np.ascontiguousarray(left_xy_np, dtype=np.float32),
+                            np.ascontiguousarray(right_xy_np, dtype=np.float32),
+                        )
+                    T_kabsch = estimate_initial_transform(
+                        init_src_pcd, init_tgt_pcd, src_idx, tgt_idx
                     )
 
-                T_kabsch = estimate_initial_transform(
-                    init_src_pcd, init_tgt_pcd, src_idx, tgt_idx
-                )
-                T_kabsch = np.array([[ 0.4414802, 0.15673411, -0.88347589, -0.05953322], [-0.06357379, 0.98761488, 0.14344067, 0.05882564], [ 0.89501598, -0.0071603, 0.4459766, -0.01130054], [ 0., 0., 0., 1.]])
                 init_src_pcd.transform(T_kabsch)
                 init_src_pts = np.asarray(init_src_pcd.points)
                 init_tgt_pts = np.asarray(init_tgt_pcd.points)
