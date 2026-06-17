@@ -59,7 +59,7 @@ model:
   mask_ratio: 0.75
   merge_pcd:
     num_points: 3
-    debug_merged_pcd: true
+    debug_merged_pcd: false
     debug_merged_pcd_num_batches: 16
     correspondence_cache_root: null
 
