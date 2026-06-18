@@ -853,7 +853,7 @@ class Cheese3DDataset(SABLEDataset):
 
         {segmentation_root}/{session_id}_{camera}_*/masks/mask{frame_idx:08d}.png
 
-    When ``training.cheese3d_use_segmentation`` is true, only frame indices with a
+    When ``training.use_segmentation.enabled`` is true, only frame indices with a
     mask available for all cameras are included.  The raw images are returned
     unchanged in ``data['image']`` so that VDA, the image tokeniser, and DINO all
     receive full scene context.  The masks are returned separately under
@@ -868,8 +868,8 @@ class Cheese3DDataset(SABLEDataset):
       ``training.cheese3d_right_camera`` (default ``'TR'``),
       ``training.cheese3d_center_camera`` (default ``None``; set to e.g. ``'TC'`` to
       enable three-view training).
-    * ``training.cheese3d_use_segmentation`` (default ``False``),
-      ``training.cheese3d_segmentation_root`` (required if the above is true).
+    * ``training.use_segmentation.enabled`` (default ``False``),
+      ``training.use_segmentation.cache_root`` (required when enabled).
     * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
       ``training.ibl_training_regime``.
     """
@@ -905,14 +905,15 @@ class Cheese3DDataset(SABLEDataset):
         center_camera: str | None = str(center_camera_raw) if center_camera_raw else None
         self._num_views: int = 3 if center_camera else 2
 
-        use_segmentation = bool(training.get('cheese3d_use_segmentation', False))
+        seg_cfg: dict = training.get('use_segmentation') or {}
+        use_segmentation = bool(seg_cfg.get('enabled', False))
         segmentation_root: Path | None = None
         if use_segmentation:
-            segmentation_root_raw = training.get('cheese3d_segmentation_root')
+            segmentation_root_raw = seg_cfg.get('cache_root')
             if not segmentation_root_raw:
                 raise ValueError(
-                    'training.cheese3d_segmentation_root must be set when '
-                    'training.cheese3d_use_segmentation is true.'
+                    'training.use_segmentation.cache_root must be set when '
+                    'training.use_segmentation.enabled is true.'
                 )
             segmentation_root = Path(segmentation_root_raw)
         self._use_segmentation = use_segmentation

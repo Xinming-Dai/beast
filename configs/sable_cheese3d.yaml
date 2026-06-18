@@ -92,8 +92,9 @@ training:
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
   cheese3d_center_camera: TC
-  cheese3d_use_segmentation: true
-  cheese3d_segmentation_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
+  use_segmentation:
+    enabled: true
+    cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
 
   # Validation
   val_split_ratio: 0.1
