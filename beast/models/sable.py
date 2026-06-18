@@ -285,7 +285,6 @@ class Sable(BaseLightningModel):
         self.num_register_tokens = 4
         self.camera_token = nn.Parameter(torch.randn(1, 1, self.d))
         self.register_token = nn.Parameter(torch.randn(1, self.num_register_tokens, self.d))
-        self.num_cls_tokens = 2
 
         # Initialize parameters with small values
         nn.init.normal_(self.camera_token, std=1e-6)
@@ -640,8 +639,8 @@ class Sable(BaseLightningModel):
         all_tokens = torch.cat([cls_tokens, all_tokens], dim=1)
 
         # encoder layers, predict depths and feature vectors
-        all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input*n, d]
-        frame_cls_tokens, all_tokens = all_tokens.split([self.num_cls_tokens, v_input * n], dim=1)
+        all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input + v_input*n, d]
+        frame_cls_tokens, all_tokens = all_tokens.split([v_input, v_input * n], dim=1)
         # cls_3d_out is for neural encoding; has extra 3d info compared with dino_cls_tokens
         cls_3d_out = latent_tensor_export_if_requested(
             frame_cls_tokens,

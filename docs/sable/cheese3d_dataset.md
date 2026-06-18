@@ -2,8 +2,9 @@
 
 `Cheese3DDataset` (in
 [beast/data/sable_dataset.py](../../beast/data/sable_dataset.py)) trains SABLE on
-two-view stereo pairs from the Cheese3D multi-camera frame dumps, without requiring
-precomputed VDA depth or real correspondence files.
+multi-view frames from the Cheese3D multi-camera frame dumps, without requiring
+precomputed VDA depth or real correspondence files.  The default setup uses two views
+(TL + TR); a third center view (TC) can be enabled via config.
 
 ## Expected directory layout
 
@@ -17,12 +18,15 @@ precomputed VDA depth or real correspondence files.
     TR/
       img00000000.png
       ...
+    TC/                 # optional; required when cheese3d_center_camera is set
+      img00000000.png
+      ...
 ```
 
 For each session in `training.cheese3d_session_names`, the dataset pairs frames from
-the left/right camera directories by matching frame index (intersection of indices
-present in both). The per-frame `.npy` files are static camera calibration dicts, not
-segmentation masks, and are not loaded.
+the camera directories by matching frame index (intersection of indices present in all
+configured cameras). The per-frame `.npy` files are static camera calibration dicts,
+not segmentation masks, and are not loaded.
 
 ## Config
 
@@ -36,17 +40,21 @@ training:
   cheese3d_session_names:
     - 20231031_B20_chew_bl_000
     - ...
-  cheese3d_left_camera: TL   # default
-  cheese3d_right_camera: TR  # default
+  cheese3d_left_camera: TL    # default
+  cheese3d_right_camera: TR   # default
+  cheese3d_center_camera: TC  # optional; omit or set to null for two-view training
 
 model:
   vda:
     mode: online   # required -- see "Depth" below
 ```
 
-`cheese3d_session_names`, `cheese3d_left_camera`, and `cheese3d_right_camera` are read
-directly from the config dict (`extra='allow'` on `SableTrainingConfig`); they are not
-declared as typed fields in `beast/config.py`.
+When `cheese3d_center_camera` is set, also update `num_views`, `num_input_views`,
+`num_target_views`, and `vis_max_views` to `3` in the config.
+
+`cheese3d_session_names`, `cheese3d_left_camera`, `cheese3d_right_camera`, and
+`cheese3d_center_camera` are read directly from the config dict (`extra='allow'` on
+`SableTrainingConfig`); they are not declared as typed fields in `beast/config.py`.
 
 ## Behavior notes
 
@@ -86,8 +94,9 @@ Expected layout:
 There must be exactly one `{session_id}_{camera}_*` directory per session/camera. When
 enabled:
 
-- only frame indices that have a mask for **both** the left and right cameras (in
-  addition to having both PNG frames) are included in the dataset;
+- only frame indices that have a mask for **all configured cameras** (left, right, and
+  optionally center, in addition to having the corresponding PNG frames) are included
+  in the dataset;
 - each mask is resized (nearest-neighbor) to `image_size x image_size` and returned
   under the `'mask'` key as a `[V, 1, H, W]` float32 tensor (1 = foreground,
   0 = background);

@@ -173,7 +173,7 @@ and correspondences from alongside the images:
 training:
   dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
   dataset_path: /path/to/output_dir/dataset
-  ibl_training_regime: two_input_reconstruction
+  ibl_training_regime: all_views_reconstruction
   val_split_ratio: 0.1
 
 model:

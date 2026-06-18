@@ -5,7 +5,7 @@ model:
   model_class: sable
   seed: 0
   gaussians:
-    init_gs: true
+    init_gs: false
     n_gaussians: 1
     range_setting:
       type: linear_depth
@@ -91,6 +91,7 @@ training:
     - 20231031_B31_chew_bl_000
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
+  cheese3d_center_camera: TC
   cheese3d_use_segmentation: true
   cheese3d_segmentation_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
 
@@ -124,7 +125,7 @@ training:
   print_every: 10
   save_visuals: true
   vis_num_samples: 1
-  vis_max_views: 2
+  vis_max_views: 3
   render_video: false
 
   grad_checkpoint_every: 1
@@ -142,10 +143,10 @@ training:
   random_split: false
   random_shuffle: false
 
-  ibl_training_regime: two_input_reconstruction
-  num_views: 2
-  num_input_views: 2
-  num_target_views: 2
+  ibl_training_regime: all_views_reconstruction
+  num_views: 3
+  num_input_views: 3
+  num_target_views: 3
   ibl_context_camera: left
   ibl_target_camera: right
 
