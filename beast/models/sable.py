@@ -720,22 +720,22 @@ class Sable(BaseLightningModel):
 
         pcd_h = int(self.config['model']['target_image']['height'])
         pcd_w = int(self.config['model']['target_image']['width'])
-        # VDA depth
-        depth_output = self._resolve_depth_output_for_input_views(
-            data=data,
-            b=b,
-            v_input=v_input,
-            pcd_h=pcd_h,
-            pcd_w=pcd_w,
-            batch_idx=batch_idx,
-            input_idx=input_idx,
-        ).detach()
 
+        depth_output = None
         xyz_norm = None
         xyz_init_norm = None
         gs_reg_loss = xyz.new_zeros(())
 
         if self.init_gs:
+            depth_output = self._resolve_depth_output_for_input_views(
+                data=data,
+                b=b,
+                v_input=v_input,
+                pcd_h=pcd_h,
+                pcd_w=pcd_w,
+                batch_idx=batch_idx,
+                input_idx=input_idx,
+            ).detach()
             depth_for_pcd = depth_output.clone()
             depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_target)
             depth_masks: list[torch.Tensor | None]

@@ -695,7 +695,7 @@ def predict_sable(
             'render': render,
             'render_video': render_video,
             'c2w': out['c2w'][b_i],
-            'depth_output': out['depth_output'][b_i],
+            'depth_output': out['depth_output'][b_i] if out['depth_output'] is not None else None,
         })
 
     return results
