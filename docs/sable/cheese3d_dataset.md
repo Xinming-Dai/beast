@@ -77,8 +77,9 @@ SAM3 segmentation masks can optionally be loaded alongside the raw frames:
 
 ```yaml
 training:
-  cheese3d_use_segmentation: true
-  cheese3d_segmentation_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
+  use_segmentation:
+    enabled: true
+    cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
 ```
 
 Expected layout:
