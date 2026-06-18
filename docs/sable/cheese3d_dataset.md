@@ -13,7 +13,7 @@ precomputed VDA depth or real correspondence files.  The default setup uses two 
   {session_id}/
     TL/
       img00000000.png
-      img00000000.npy   # camera intrinsics/extrinsics, ignored
+      img00000000.npy   # camera intrinsics/extrinsics; loaded when use_camera_params: true
       ...
     TR/
       img00000000.png
@@ -25,8 +25,10 @@ precomputed VDA depth or real correspondence files.  The default setup uses two 
 
 For each session in `training.cheese3d_session_names`, the dataset pairs frames from
 the camera directories by matching frame index (intersection of indices present in all
-configured cameras). The per-frame `.npy` files are static camera calibration dicts,
-not segmentation masks, and are not loaded.
+configured cameras). The per-frame `.npy` files are static camera calibration dicts.
+When `training.use_camera_params: true`, they are loaded and returned as `c2w` and
+`fxfycxcy` tensors so the SABLE model uses the calibrated cameras instead of learning
+them via its pose predictor.
 
 ## Config
 
@@ -43,6 +45,7 @@ training:
   cheese3d_left_camera: TL    # default
   cheese3d_right_camera: TR   # default
   cheese3d_center_camera: TC  # optional; omit or set to null for two-view training
+  use_camera_params: true     # load .npy calibration files; false to learn camera params
 
 model:
   vda:

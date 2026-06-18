@@ -826,6 +826,30 @@ _CHEESE3D_FIXED_XY = torch.tensor(
 _CHEESE3D_FIXED_CONFIDENCE = torch.ones(3, dtype=torch.float32)
 
 
+def _npy_to_c2w_fxfycxcy(npy_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load a .npy calibration file and return c2w and normalised fxfycxcy.
+
+    Intrinsics are normalised by the original image dimensions so that after the
+    model de-normalises by [target_w, target_h, target_w, target_h] the result is
+    the correct pixel-space focal length / principal point for the stretched image.
+
+    Args:
+        npy_path: path to an ``img<index>.npy`` file with keys ``intrinsics``,
+            ``extrinsics``, ``width``, ``height``.
+
+    Returns:
+        c2w: float32 ``[4, 4]`` camera-to-world matrix.
+        fxfycxcy: float32 ``[4]`` normalised intrinsics ``[fx/W, fy/H, cx/W, cy/H]``.
+    """
+    cam = np.load(npy_path, allow_pickle=True).item()
+    w2c = cam['extrinsics'].astype(np.float32)
+    c2w = np.linalg.inv(w2c)
+    K = cam['intrinsics'].astype(np.float32)
+    W, H = float(cam['width']), float(cam['height'])
+    fxfycxcy = np.array([K[0, 0] / W, K[1, 1] / H, K[0, 2] / W, K[1, 2] / H], dtype=np.float32)
+    return c2w, fxfycxcy
+
+
 class Cheese3DDataset(SABLEDataset):
     """Multi-view dataset for Cheese3D camera frames.
 
@@ -837,8 +861,9 @@ class Cheese3DDataset(SABLEDataset):
     ``training.cheese3d_left_camera`` and ``training.cheese3d_right_camera`` (default
     ``'TL'``/``'TR'``) by matching frame index.  Optionally includes a third center
     camera (``training.cheese3d_center_camera``, e.g. ``'TC'``).  The accompanying
-    per-frame ``.npy`` files (static camera intrinsics/extrinsics, not segmentation
-    masks) are ignored.
+    per-frame ``.npy`` files (static camera intrinsics/extrinsics) are loaded when
+    ``training.use_camera_params`` is ``true``, returning pre-calibrated ``c2w`` and
+    ``fxfycxcy`` tensors that the model uses in place of its learned pose predictor.
 
     Unlike :class:`SABLEDataset`:
 
@@ -870,6 +895,9 @@ class Cheese3DDataset(SABLEDataset):
       enable three-view training).
     * ``training.use_segmentation.enabled`` (default ``False``),
       ``training.use_segmentation.cache_root`` (required when enabled).
+    * ``training.use_camera_params`` (default ``False``) — when ``true``, load per-frame
+      ``.npy`` calibration files and return ``c2w`` ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``
+      in the batch dict so the model can skip its learned pose predictor.
     * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
       ``training.ibl_training_regime``.
     """
@@ -917,6 +945,7 @@ class Cheese3DDataset(SABLEDataset):
                 )
             segmentation_root = Path(segmentation_root_raw)
         self._use_segmentation = use_segmentation
+        self._use_camera_params: bool = bool(training.get('use_camera_params', False))
 
         val_split_ratio = float(training.get('val_split_ratio', 0.0))
         split_seed = int(model_cfg.get('seed', 0))
@@ -1141,7 +1170,9 @@ class Cheese3DDataset(SABLEDataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``, optionally ``centercamera_xy``, and optionally ``mask``.
+            ``scene_name``, optionally ``centercamera_xy``, optionally ``mask``,
+            and (when ``training.use_camera_params`` is ``true``) ``c2w`` ``[V, 4, 4]``
+            and ``fxfycxcy`` ``[V, 4]``.
         """
         rec = self._records[idx]
 
@@ -1190,6 +1221,20 @@ class Cheese3DDataset(SABLEDataset):
             if rec.center_mask_path is not None:
                 masks.append(self._load_mask(rec.center_mask_path))  # [1, H, W]
             result['mask'] = torch.stack(masks, dim=0)  # [V, 1, H, W]
+
+        if self._use_camera_params:
+            left_c2w, left_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.left_path.with_suffix('.npy'))
+            right_c2w, right_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.right_path.with_suffix('.npy'))
+            c2w_arrays = [left_c2w, right_c2w]
+            fxfycxcy_arrays = [left_fxfycxcy, right_fxfycxcy]
+            if rec.center_path is not None:
+                center_c2w, center_fxfycxcy = _npy_to_c2w_fxfycxcy(
+                    rec.center_path.with_suffix('.npy'),
+                )
+                c2w_arrays.append(center_c2w)
+                fxfycxcy_arrays.append(center_fxfycxcy)
+            result['c2w'] = torch.from_numpy(np.stack(c2w_arrays))            # [V, 4, 4]
+            result['fxfycxcy'] = torch.from_numpy(np.stack(fxfycxcy_arrays))  # [V, 4]
 
         return result
 
