@@ -563,11 +563,21 @@ class Sable(BaseLightningModel):
         cam_tokens, _, _ = all_tokens.split([1, self.num_register_tokens, n], dim=1)
 
         # get se3 poses and intrinsics
-        cam_tokens = cam_tokens[:, 0]                                     # [b*v_all, d]
-        cam_info = self.pose_predictor(cam_tokens, v_all)                 # [b*v_all, num_pose_element+3+4], rot, 3d trans, 4d fxfycxcy
-        pred_c2w, pred_fxfycxcy = get_cam_se3(cam_info)  # [b*v_all, 4, 4], [b*v_all, 4]
-        pred_c2w = rearrange(pred_c2w, '(b v) n d -> b v n d', b=b)
-        pred_fxfycxcy = rearrange(pred_fxfycxcy, '(b v) d -> b v d', b=b).detach()
+        if 'c2w' in data and 'fxfycxcy' in data:
+            # use calibrated camera parameters from the dataset; skip the learned pose predictor
+            pred_c2w = data['c2w']               # [b, v_real, 4, 4]
+            pred_fxfycxcy = data['fxfycxcy']     # [b, v_real, 4]
+            if pad_input:
+                pad_c2w = pred_c2w[:, -1:].repeat(1, pad_views, 1, 1)
+                pad_fxfycxcy = pred_fxfycxcy[:, -1:].repeat(1, pad_views, 1)
+                pred_c2w = torch.cat([pred_c2w, pad_c2w], dim=1)
+                pred_fxfycxcy = torch.cat([pred_fxfycxcy, pad_fxfycxcy], dim=1)
+        else:
+            cam_tokens = cam_tokens[:, 0]                                     # [b*v_all, d]
+            cam_info = self.pose_predictor(cam_tokens, v_all)                 # [b*v_all, num_pose_element+3+4], rot, 3d trans, 4d fxfycxcy
+            pred_c2w, pred_fxfycxcy = get_cam_se3(cam_info)                   # [b*v_all, 4, 4], [b*v_all, 4]
+            pred_c2w = rearrange(pred_c2w, '(b v) n d -> b v n d', b=b)
+            pred_fxfycxcy = rearrange(pred_fxfycxcy, '(b v) d -> b v d', b=b).detach()
         normalized = True
 
         # dino image tokenization
