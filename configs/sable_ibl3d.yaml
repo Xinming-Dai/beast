@@ -123,7 +123,7 @@ training:
   random_split: false
   random_shuffle: false
 
-  ibl_training_regime: two_input_reconstruction
+  ibl_training_regime: all_views_reconstruction
   num_views: 2
   num_input_views: 2
   num_target_views: 2
