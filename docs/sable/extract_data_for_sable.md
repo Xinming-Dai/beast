@@ -126,18 +126,24 @@ output_dir/
 ├── videos/                      # (downsample.enabled) downsampled videos
 │   ├── leftCamera/
 │   └── rightCamera/
-└── dataset/
+└── dataset/                     # point training.dataset_path here
     ├── info.json                # dataset-level metadata
-    └── {session_id}/
-        ├── pair_metadata.json   # list of frame pairs with splits and frame indices
-        ├── left/
-        │   ├── img00000042.png              # extracted frame (native resolution)
-        │   ├── vda00000042.npy              # (vda.enabled) float32 depth map
-        │   └── correspondence00000042.npy  # (litpose.enabled) float32 [K, 3]
-        └── right/
-            ├── img00000042.png              # same frame index as left
-            ├── vda00000042.npy
-            └── correspondence00000042.npy
+    ├── {session_id}/
+    │   ├── pair_metadata.json   # list of frame pairs with splits and frame indices
+    │   ├── left/
+    │   │   └── img00000042.png  # extracted frame (native resolution)
+    │   └── right/
+    │       └── img00000042.png  # same frame index as left
+    ├── depth_map/               # (vda.enabled)
+    │   └── {session_id}/
+    │       ├── left/
+    │       │   └── depth00000042.npy   # float32 depth map
+    │       └── right/
+    │           └── depth00000042.npy
+    └── litpose_correspondences/ # (litpose.enabled)
+        └── processed_correspondences/
+            └── {session_id}/
+                └── correspondences00000042.npz  # float32 .npz: left_xy [K,2], right_xy [K,2], confidence [K]
 ```
 
 `pair_metadata.json` format:
@@ -165,9 +171,10 @@ output_dir/
 ## Training Dataset Class
 
 Point `training.dataset_path` to `output_dir/dataset/` in your training config.
+`depth_map/` and `litpose_correspondences/` are resolved relative to this path.
 
 Use `IBLTwoViewDataset` for the `extract_sable` pipeline output — it reads VDA depth
-and correspondences from alongside the images:
+from `depth_map/` and correspondences from `litpose_correspondences/`:
 
 ```yaml
 training:
@@ -273,7 +280,7 @@ VDA depth precomputation, runs after the extract step.
 | `input_size` | `518` | VDA inference spatial resolution |
 | `fp32` | `false` | Disable autocast (use full FP32) |
 
-Output: `dataset/{session_id}/{cam}/vda{n_digits}.npy` (float32 depth map).
+Output: `dataset/depth_map/{session_id}/{cam}/depth{n_digits}.npy` (float32 depth map).
 
 ### `litpose`
 
@@ -299,8 +306,8 @@ keypoint_shifts:
     side: [1, 0]
 ```
 
-Output: `dataset/{session_id}/{cam}/correspondence{n_digits}.npy`
-(float32 `[K, 3]` array: x, y, likelihood per keypoint).
+Output: `dataset/litpose_correspondences/processed_correspondences/{session_id}/correspondences{n_digits}.npz`
+(float32 `.npz` bundle: `left_xy [K, 2]`, `right_xy [K, 2]`, `confidence [K]`).
 
 ---
 
