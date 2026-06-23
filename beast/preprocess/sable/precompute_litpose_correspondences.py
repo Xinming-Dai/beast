@@ -2,8 +2,13 @@
 """Build LitPose keypoint correspondence bundles for Sable training.
 
 Reads raw LitPose DLC-style CSVs (left camera 256×320, right camera 320×256) and writes
-one ``.npz`` bundle per stereo pair under
-``{output_root}/{session_id}/pair_{pair_idx:06d}/litpose_matches.npz``.
+one ``.npz`` bundle per frame pair under
+``{output_root}/litpose_correspondences/processed_correspondences/{session_id}/``
+``correspondences{pair_idx:0{n_digits}d}.npz``.
+
+Session discovery scans the extracted-frames ``input_dir`` from the extraction pipeline
+config. Pass ``--config configs/multiview/extraction_pipeline_sable.yaml`` to supply
+most parameters without repeating them on the command line.
 
 With ``--no-left-frames-stretched`` (the default), left-camera coordinates are stored in raw
 256×320 pixel space. ``SABLEDataset`` rescales them to the model's ``image_size`` at load time.
@@ -27,16 +32,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 # IBL rig left-camera geometry: raw CSV is 256 wide × 320 tall; stretched to 320×256.
 _LEFT_CSV_SRC_W, _LEFT_CSV_SRC_H = 256, 320
 _LEFT_CSV_DST_W, _LEFT_CSV_DST_H = 320, 256
 
-_BUNDLE_FILENAME = 'litpose_matches.npz'
 _UUID_RE = re.compile(
     r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
 )
-_PAIR_IDX_RE = re.compile(r'(\d+)$')
 
 
 # ---------------------------------------------------------------------------
@@ -53,23 +57,6 @@ def _parse_xy_pair(text: str) -> tuple[float, float]:
         return float(a.strip()), float(b.strip())
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f'invalid float pair: {text!r}') from exc
-
-
-def _load_pair_list(dataset_list: Path) -> list[Path]:
-    """Read a text file of pair-JSON paths, one per line."""
-    lines = dataset_list.read_text(encoding='utf-8').splitlines()
-    return [Path(l.strip()) for l in lines if l.strip()]
-
-
-def _session_id_from_path(pair_json: Path) -> str:
-    return pair_json.resolve().parent.parent.name
-
-
-def _pair_idx_from_path(pair_json: Path) -> int:
-    m = _PAIR_IDX_RE.search(pair_json.stem)
-    if m is None:
-        raise RuntimeError(f'cannot parse pair_idx from filename: {pair_json}')
-    return int(m.group(1))
 
 
 def _eid_from_csv_name(csv_path: Path) -> str | None:
@@ -239,7 +226,8 @@ def _build_keypoint_arrays(
         shift_nose_right: (dx, dy) pixel shift baked into the nose keypoint for right camera.
         left_already_stretched: if True, left (x,y) are already in stretched 320×256 space.
             If False, they are in raw 256×320 space and the stretch is NOT applied here
-            (``--no-left-frames-stretched`` mode: coordinates stay raw for SABLEDataset to rescale).
+            (``--no-left-frames-stretched`` mode: coordinates stay raw for SABLEDataset to
+            rescale at load time).
 
     Returns:
         tuple of (left_xy, right_xy, confidence, labels) or None when no valid keypoints.
@@ -299,8 +287,17 @@ def _build_keypoint_arrays(
 # Bundle I/O
 # ---------------------------------------------------------------------------
 
-def _output_bundle_path(output_root: Path, *, session_id: str, pair_idx: int) -> Path:
-    return output_root / session_id / f'pair_{pair_idx:06d}' / _BUNDLE_FILENAME
+def _output_bundle_path(
+    output_root: Path,
+    *,
+    session_id: str,
+    pair_idx: int,
+    n_digits: int,
+) -> Path:
+    fname = f'correspondences{pair_idx:0{n_digits}d}.npz'
+    return (
+        output_root / 'litpose_correspondences' / 'processed_correspondences' / session_id / fname
+    )
 
 
 def _save_correspondence_bundle(
@@ -312,7 +309,7 @@ def _save_correspondence_bundle(
     labels: list[str],
     metadata: dict[str, Any],
 ) -> None:
-    """Save a litpose_matches.npz correspondence bundle.
+    """Save a correspondence bundle as a .npz file.
 
     Args:
         output_path: path to write the .npz file.
@@ -336,127 +333,89 @@ def _save_correspondence_bundle(
 
 
 # ---------------------------------------------------------------------------
-# Pair metadata
+# Pair records
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class _PairRecord:
-    pair_json: Path
+    pair_json: Path | None
     session_id: str
     pair_idx: int
     left_source_frame_index: int
     right_source_frame_index: int
 
 
-def _load_pair_frame_index_map(pair_metadata_json: Path) -> dict[int, tuple[int, int]]:
-    payload = json.loads(pair_metadata_json.read_text(encoding='utf-8'))
-    pairs = payload.get('pairs')
-    if not isinstance(pairs, list):
-        raise RuntimeError(f'missing pairs list: {pair_metadata_json}')
-    out: dict[int, tuple[int, int]] = {}
-    for item in pairs:
-        if not isinstance(item, dict):
+# ---------------------------------------------------------------------------
+# Session discovery from input_dir
+# ---------------------------------------------------------------------------
+
+def _discover_sessions(
+    input_dir: Path,
+    anchor_cam: str,
+    cam_subdir_tmpl: str,
+    ext: str,
+    eids: set[str] | None,
+) -> dict[str, list[_PairRecord]]:
+    """Discover sessions and frame pairs by scanning an extracted-frames directory.
+
+    Expects ``{input_dir}/{cam_subdir}/`` to contain subdirectories whose names include
+    a session UUID. Each subdirectory is scanned for ``img*.{ext}`` image files; the
+    numeric index in the filename is used as both ``pair_idx`` and source frame index
+    (cameras are synchronized).
+
+    Args:
+        input_dir: root of the extracted-frames directory (``input_dir`` from config).
+        anchor_cam: camera name used to discover sessions (e.g. ``'left'``).
+        cam_subdir_tmpl: template for the camera subdirectory (e.g. ``'{cam}Camera.video'``).
+        ext: image file extension without leading dot (e.g. ``'png'``).
+        eids: if not None, only return sessions whose UUID is in this set.
+
+    Returns:
+        mapping from session_id to list of _PairRecord, sorted by pair_idx.
+
+    Raises:
+        FileNotFoundError: if the anchor camera subdirectory does not exist.
+        ValueError: if no sessions are found.
+    """
+    cam_subdir = cam_subdir_tmpl.format(cam=anchor_cam)
+    cam_root = input_dir / cam_subdir
+    if not cam_root.is_dir():
+        raise FileNotFoundError(f'camera directory not found: {cam_root}')
+
+    img_re = re.compile(rf'^img(\d+)\.{re.escape(ext)}$', re.IGNORECASE)
+    grouped: dict[str, list[_PairRecord]] = {}
+
+    for session_dir in sorted(cam_root.iterdir()):
+        if not session_dir.is_dir():
             continue
-        try:
-            out[int(item['pair_idx'])] = (
-                int(item['left_source_frame_index']),
-                int(item['right_source_frame_index']),
-            )
-        except (KeyError, TypeError, ValueError):
+        m = _UUID_RE.search(session_dir.name)
+        if not m:
             continue
-    return out
-
-
-def _load_pair_record(pair_json: Path) -> _PairRecord:
-    payload = json.loads(pair_json.read_text(encoding='utf-8'))
-    frames = payload.get('frames')
-    if not isinstance(frames, list) or not frames:
-        raise RuntimeError(f'invalid frames payload: {pair_json}')
-    session_id = str(payload.get('session_id') or pair_json.resolve().parent.parent.name)
-    pair_idx = int(payload.get('pair_id', payload.get('pair_idx', 0)))
-    left_idx: int | None = None
-    right_idx: int | None = None
-    for frame in frames:
-        if not isinstance(frame, dict):
-            raise RuntimeError(f'invalid frame in {pair_json}')
-        cam = str(frame.get('camera_name', '')).lower()
-        if cam == 'left' and left_idx is None:
-            left_idx = int(frame['source_frame_index'])
-        elif cam == 'right' and right_idx is None:
-            right_idx = int(frame['source_frame_index'])
-    if left_idx is None or right_idx is None:
-        raise RuntimeError(f'missing left/right camera_name in {pair_json}')
-    return _PairRecord(
-        pair_json=pair_json,
-        session_id=session_id,
-        pair_idx=pair_idx,
-        left_source_frame_index=left_idx,
-        right_source_frame_index=right_idx,
-    )
-
-
-def _records_for_session(
-    *,
-    session_id: str,
-    pair_entries: list[tuple[int, Path]],
-    dataset_root: Path,
-) -> tuple[list[_PairRecord], list[dict[str, Any]]]:
-    early: list[dict[str, Any]] = []
-    metadata_path = (
-        dataset_root / 'processed' / 'precached_video' / session_id / 'pair_metadata.json'
-    )
-    pair_index_map: dict[int, tuple[int, int]] | None = None
-    if metadata_path.is_file():
-        try:
-            print(f'[info] loading pair metadata: {metadata_path}', flush=True)
-            pair_index_map = _load_pair_frame_index_map(metadata_path)
+        session_id = m.group(1)
+        if eids is not None and session_id not in eids:
+            continue
+        records: list[_PairRecord] = []
+        for img_file in session_dir.iterdir():
+            mm = img_re.match(img_file.name)
+            if not mm:
+                continue
+            frame_idx = int(mm.group(1))
+            records.append(_PairRecord(
+                pair_json=None,
+                session_id=session_id,
+                pair_idx=frame_idx,
+                left_source_frame_index=frame_idx,
+                right_source_frame_index=frame_idx,
+            ))
+        records.sort(key=lambda r: r.pair_idx)
+        if records:
+            grouped[session_id] = records
             print(
-                f'[info] loaded pair metadata session={session_id} '
-                f'indexed_pairs={len(pair_index_map)}',
+                f'[info] discovered session={session_id} frames={len(records)}',
                 flush=True,
             )
-        except Exception as exc:
-            print(
-                f'[warn] pair metadata unreadable session={session_id} ({exc}); '
-                f'falling back to pair JSON',
-                file=sys.stderr,
-            )
-            pair_index_map = None
-    else:
-        print(
-            f'[info] no pair_metadata.json for session={session_id}; using pair JSON',
-            flush=True,
-        )
 
-    records: list[_PairRecord] = []
-    if pair_index_map is not None:
-        for pair_idx, pair_json in pair_entries:
-            frames = pair_index_map.get(pair_idx)
-            if frames is None:
-                early.append({
-                    'pair_json': str(pair_json),
-                    'session_id': session_id,
-                    'status': 'pair_idx_missing_in_pair_metadata',
-                    'pair_idx': pair_idx,
-                })
-                continue
-            li, ri = frames
-            records.append(_PairRecord(
-                pair_json=pair_json,
-                session_id=session_id,
-                pair_idx=pair_idx,
-                left_source_frame_index=li,
-                right_source_frame_index=ri,
-            ))
-        return records, early
-
-    for pair_idx, pair_json in pair_entries:
-        try:
-            records.append(_load_pair_record(pair_json))
-        except Exception as exc:
-            early.append({'pair_json': str(pair_json), 'status': f'error_load_payload:{exc}'})
-            print(f'[warn] skip (payload): {pair_json}: {exc}', file=sys.stderr)
-    return records, early
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -466,8 +425,7 @@ def _records_for_session(
 def _build_session_rows(
     *,
     session_id: str,
-    pair_entries: list[tuple[int, Path]],
-    dataset_root: Path,
+    records: list[_PairRecord],
     csv_dir: Path,
     output_root: Path,
     keypoints: list[str],
@@ -476,40 +434,32 @@ def _build_session_rows(
     shift_right: tuple[float, float],
     left_frames_stretched: bool,
     overwrite: bool,
+    n_digits: int,
 ) -> list[dict[str, Any]]:
     """Process one session: load CSVs, extract keypoints, write .npz bundles.
 
     Args:
         session_id: session UUID string.
-        pair_entries: list of (pair_idx, pair_json_path) tuples.
-        dataset_root: root directory of the dataset (parent of ``processed/``).
+        records: list of _PairRecord for this session.
         csv_dir: directory containing LitPose prediction CSV files.
         output_root: root directory for output bundle files.
         keypoints: list of keypoint names to extract.
         min_likelihood: minimum per-keypoint likelihood to include a match.
         shift_left: (dx, dy) pixel shift to bake into the left-camera nose keypoint.
         shift_right: (dx, dy) pixel shift to bake into the right-camera nose keypoint.
-        left_frames_stretched: if True, left CSV rows are already stretched to 320×256
-            (apply stretch in-memory). If False, keep raw 256×320 coordinates.
+        left_frames_stretched: if True, left CSV rows are already stretched to 320×256.
+            If False, keep raw 256×320 coordinates.
         overwrite: if False, skip pairs whose output bundle already exists.
+        n_digits: zero-padding width for output filenames.
 
     Returns:
         list of status dicts, one per pair.
     """
     rows: list[dict[str, Any]] = []
-    print(f'[info] start session={session_id} pairs={len(pair_entries)}', flush=True)
-    records, early = _records_for_session(
-        session_id=session_id,
-        pair_entries=pair_entries,
-        dataset_root=dataset_root,
-    )
-    rows.extend(early)
+    print(f'[info] start session={session_id} pairs={len(records)}', flush=True)
 
     if not records:
-        print(
-            f'[warn] skip session={session_id}: no usable pair entries',
-            file=sys.stderr,
-        )
+        print(f'[warn] skip session={session_id}: no usable pair entries', file=sys.stderr)
         return rows
 
     left_csv, right_csv = _litpose_csv_paths(csv_dir, session_id)
@@ -517,7 +467,7 @@ def _build_session_rows(
         msg = f'missing_csv left={left_csv.is_file()} right={right_csv.is_file()}'
         print(f'[warn] skip: {msg} :: session={session_id}', file=sys.stderr)
         for rec in records:
-            rows.append({'pair_json': str(rec.pair_json), 'session_id': session_id, 'status': msg})
+            rows.append({'session_id': session_id, 'pair_idx': rec.pair_idx, 'status': msg})
         return rows
 
     for csv_path, name in ((left_csv, 'left'), (right_csv, 'right')):
@@ -526,7 +476,7 @@ def _build_session_rows(
             msg = f'eid_mismatch_{name}_file_eid={eid}'
             print(f'[warn] {msg} :: session={session_id}', file=sys.stderr)
             for rec in records:
-                rows.append({'pair_json': str(rec.pair_json), 'status': msg})
+                rows.append({'session_id': session_id, 'pair_idx': rec.pair_idx, 'status': msg})
             return rows
 
     try:
@@ -550,22 +500,36 @@ def _build_session_rows(
     except (OSError, ValueError) as exc:
         print(f'[warn] skip csv session={session_id}: {exc}', file=sys.stderr)
         for rec in records:
-            rows.append({'pair_json': str(rec.pair_json), 'status': f'csv_parse:{exc}'})
+            rows.append({
+                'session_id': session_id,
+                'pair_idx': rec.pair_idx,
+                'status': f'csv_parse:{exc}',
+            })
         return rows
 
     if bp_l != bp_r:
         print(f'[warn] bodyparts mismatch :: session={session_id}', file=sys.stderr)
         for rec in records:
-            rows.append({'pair_json': str(rec.pair_json), 'status': 'bodyparts_mismatch'})
+            rows.append({
+                'session_id': session_id,
+                'pair_idx': rec.pair_idx,
+                'status': 'bodyparts_mismatch',
+            })
         return rows
 
     kp_starts = _keypoint_starts(bp_l, keypoints)
 
     for rec in records:
-        out_path = _output_bundle_path(output_root, session_id=rec.session_id, pair_idx=rec.pair_idx)
+        out_path = _output_bundle_path(
+            output_root,
+            session_id=rec.session_id,
+            pair_idx=rec.pair_idx,
+            n_digits=n_digits,
+        )
         if out_path.exists() and not overwrite:
             rows.append({
-                'pair_json': str(rec.pair_json),
+                'session_id': session_id,
+                'pair_idx': rec.pair_idx,
                 'bundle_path': str(out_path),
                 'status': 'skipped_existing',
             })
@@ -577,11 +541,13 @@ def _build_session_rows(
             print(
                 f'[warn] skip: missing CSV row '
                 f'left_idx={rec.left_source_frame_index} '
-                f'right_idx={rec.right_source_frame_index} :: {rec.pair_json}',
+                f'right_idx={rec.right_source_frame_index} '
+                f':: session={session_id} pair={rec.pair_idx}',
                 file=sys.stderr,
             )
             rows.append({
-                'pair_json': str(rec.pair_json),
+                'session_id': session_id,
+                'pair_idx': rec.pair_idx,
                 'status': 'missing_frame_row',
                 'left_index': rec.left_source_frame_index,
                 'right_index': rec.right_source_frame_index,
@@ -600,14 +566,20 @@ def _build_session_rows(
             left_already_stretched=left_frames_stretched,
         )
         if built is None:
-            print(f'[warn] skip: no valid keypoints :: {rec.pair_json}', file=sys.stderr)
-            rows.append({'pair_json': str(rec.pair_json), 'status': 'no_keypoints'})
+            print(
+                f'[warn] skip: no valid keypoints :: session={session_id} pair={rec.pair_idx}',
+                file=sys.stderr,
+            )
+            rows.append({
+                'session_id': session_id,
+                'pair_idx': rec.pair_idx,
+                'status': 'no_keypoints',
+            })
             continue
 
         left_xy, right_xy, confidence, labels = built
         metadata: dict[str, Any] = {
             'backend': 'litpose_keypoints',
-            'pair_json': str(rec.pair_json),
             'session_id': rec.session_id,
             'pair_idx': rec.pair_idx,
             'left_csv': str(left_csv),
@@ -636,7 +608,8 @@ def _build_session_rows(
             metadata=metadata,
         )
         rows.append({
-            'pair_json': str(rec.pair_json),
+            'session_id': session_id,
+            'pair_idx': rec.pair_idx,
             'bundle_path': str(out_path),
             'status': 'written',
             'n': int(len(confidence)),
@@ -653,8 +626,8 @@ def _build_session_rows(
 @dataclass(frozen=True)
 class _SessionJob:
     session_id: str
-    pair_entries: tuple[tuple[int, str], ...]
-    dataset_root: str
+    # (pair_idx, left_source_frame_index, right_source_frame_index)
+    pair_entries: tuple[tuple[int, int, int], ...]
     csv_dir: str
     output_root: str
     keypoints: tuple[str, ...]
@@ -663,13 +636,23 @@ class _SessionJob:
     shift_right: tuple[float, float]
     left_frames_stretched: bool
     overwrite: bool
+    n_digits: int
 
 
 def _run_session_job(job: _SessionJob) -> list[dict[str, Any]]:
+    records = [
+        _PairRecord(
+            pair_json=None,
+            session_id=job.session_id,
+            pair_idx=idx,
+            left_source_frame_index=li,
+            right_source_frame_index=ri,
+        )
+        for idx, li, ri in job.pair_entries
+    ]
     return _build_session_rows(
         session_id=job.session_id,
-        pair_entries=[(idx, Path(p)) for idx, p in job.pair_entries],
-        dataset_root=Path(job.dataset_root),
+        records=records,
         csv_dir=Path(job.csv_dir),
         output_root=Path(job.output_root),
         keypoints=list(job.keypoints),
@@ -678,6 +661,7 @@ def _run_session_job(job: _SessionJob) -> list[dict[str, Any]]:
         shift_right=job.shift_right,
         left_frames_stretched=job.left_frames_stretched,
         overwrite=job.overwrite,
+        n_digits=job.n_digits,
     )
 
 
@@ -688,31 +672,41 @@ def _run_session_job(job: _SessionJob) -> list[dict[str, Any]]:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
-        '--dataset-list',
+        '--config',
         type=Path,
-        required=True,
-        help='path to opencv_cameras_pairs.txt (one pair-JSON path per line)',
+        default=None,
+        metavar='YAML',
+        help='path to extraction_pipeline_sable.yaml; supplies defaults for most flags',
     )
     p.add_argument(
         '--litpose-root',
         type=Path,
-        required=True,
-        help='root containing video_preds/ subdirectory with LitPose CSV files',
+        default=None,
+        help=(
+            'root containing video_preds/ subdirectory with LitPose CSV files. '
+            'Overrides litpose.video_preds_dir from --config (which is used directly '
+            'as the CSV dir without appending video_preds/).'
+        ),
     )
     p.add_argument(
         '--output-root',
         type=Path,
         default=None,
-        help='where to write bundles (default: {litpose-root}/processed_correspondences)',
+        help='where to write bundles. Overrides output_dir/dataset from --config.',
     )
     p.add_argument(
         '--keypoints',
         type=str,
-        default='pawL,pawR,nose',
-        help='comma-separated bodypart names (default: pawL,pawR,nose)',
+        default=None,
+        help='comma-separated bodypart names (default from config or: pawL,pawR,nose)',
     )
-    p.add_argument('--min-likelihood', type=float, default=0.0)
-    p.add_argument('--overwrite', action='store_true')
+    p.add_argument('--min-likelihood', type=float, default=None)
+    p.add_argument(
+        '--overwrite',
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help='overwrite existing bundles (default: --no-overwrite)',
+    )
     p.add_argument(
         '--left-frames-stretched',
         action=argparse.BooleanOptionalAction,
@@ -727,112 +721,202 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         '--shift-nose-leftCamera',
         type=_parse_xy_pair,
-        default=(0.0, 0.0),
+        default=None,
         metavar='X,Y',
         help='pixel shift (dx,dy) baked into the left-camera nose row',
     )
     p.add_argument(
         '--shift-nose-rightCamera',
         type=_parse_xy_pair,
-        default=(0.0, 0.0),
+        default=None,
         metavar='X,Y',
         help='pixel shift (dx,dy) baked into the right-camera nose row',
+    )
+    p.add_argument(
+        '--n-digits',
+        type=int,
+        default=None,
+        metavar='N',
+        help='zero-padding width for output filenames (default from config or: 8)',
     )
     p.add_argument(
         '--eids',
         nargs='+',
         metavar='EID',
         default=None,
-        help='only process these session UUIDs',
+        help='only process these session UUIDs (overrides sessionids from --config)',
     )
     p.add_argument(
-        '--jobs', '-j',
+        '--max-workers',
         type=int,
-        default=1,
+        default=None,
         metavar='N',
-        help='parallel sessions (0 = min(cpu_count, n_sessions); default: 1)',
+        help='parallel sessions (0 = min(cpu_count, n_sessions); default from config or: 1)',
     )
     return p
+
+
+def _load_yaml_config(path: Path) -> dict[str, Any]:
+    """Load a YAML config file.
+
+    Args:
+        path: path to the YAML file.
+
+    Returns:
+        parsed config as a dict.
+
+    Raises:
+        ValueError: if the file does not contain a YAML mapping.
+    """
+    with path.open(encoding='utf-8') as f:
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError(f'expected a YAML mapping in {path}')
+    return cfg
 
 
 def main() -> None:
     """Entry point."""
     args = _build_parser().parse_args()
-    dataset_list = args.dataset_list.expanduser().resolve()
-    dataset_root = dataset_list.parent
-    litpose_root = args.litpose_root.expanduser().resolve()
-    csv_dir = litpose_root / 'video_preds'
-    output_root = (
-        args.output_root.expanduser().resolve()
-        if args.output_root is not None
-        else litpose_root / 'processed_correspondences'
-    )
-    keypoints = [s.strip() for s in str(args.keypoints).split(',') if s.strip()]
-    shift_left: tuple[float, float] = tuple(float(x) for x in args.shift_nose_leftCamera)
-    shift_right: tuple[float, float] = tuple(float(x) for x in args.shift_nose_rightCamera)
 
-    print(f'[info] dataset_list={dataset_list}', flush=True)
+    cfg: dict[str, Any] = {}
+    if args.config is not None:
+        cfg = _load_yaml_config(args.config.expanduser().resolve())
+
+    litpose_cfg: dict[str, Any] = cfg.get('litpose') or {}
+    frame_cfg: dict[str, Any] = cfg.get('frame') or {}
+    video_naming_cfg: dict[str, Any] = cfg.get('video_naming') or {}
+
+    # ---------------------------------------------------------------------------
+    # Resolve csv_dir
+    # ---------------------------------------------------------------------------
+    if args.litpose_root is not None:
+        csv_dir = args.litpose_root.expanduser().resolve() / 'video_preds'
+    else:
+        vp = litpose_cfg.get('video_preds_dir')
+        if not vp:
+            raise ValueError(
+                'LitPose CSV directory unknown: pass --litpose-root or set '
+                'litpose.video_preds_dir in --config'
+            )
+        csv_dir = Path(str(vp)).expanduser().resolve()
+
+    # ---------------------------------------------------------------------------
+    # Resolve output_root
+    # ---------------------------------------------------------------------------
+    if args.output_root is not None:
+        output_root = args.output_root.expanduser().resolve()
+    elif cfg.get('output_dir'):
+        output_root = Path(str(cfg['output_dir'])).expanduser().resolve()
+    else:
+        raise ValueError(
+            'output directory unknown: pass --output-root or set output_dir in --config'
+        )
+
+    # ---------------------------------------------------------------------------
+    # Resolve input_dir for session discovery
+    # ---------------------------------------------------------------------------
+    if not cfg.get('input_dir'):
+        raise ValueError('input_dir must be set in --config for session discovery')
+    input_dir = Path(str(cfg['input_dir'])).expanduser().resolve()
+
+    # ---------------------------------------------------------------------------
+    # Scalar parameters: CLI overrides config overrides default
+    # ---------------------------------------------------------------------------
+    keypoints = (
+        [s.strip() for s in str(args.keypoints).split(',') if s.strip()]
+        if args.keypoints is not None
+        else [str(k) for k in litpose_cfg.get('keypoints', ['pawL', 'pawR', 'nose'])]
+    )
+    min_likelihood = (
+        args.min_likelihood if args.min_likelihood is not None
+        else float(litpose_cfg.get('min_likelihood', 0.0))
+    )
+    n_digits = (
+        args.n_digits if args.n_digits is not None
+        else int(frame_cfg.get('n_digits', 8))
+    )
+    max_workers = (
+        args.max_workers if args.max_workers is not None
+        else int(cfg.get('max_workers', 1))
+    )
+    anchor_cam = str(cfg.get('anchor_view', 'left'))
+    cam_subdir_tmpl = str(video_naming_cfg.get('camera_video_subdir', '{cam}Camera.video'))
+    ext = str(frame_cfg.get('extension', 'png'))
+
+    nose_shifts = (litpose_cfg.get('keypoint_shifts') or {}).get('nose') or {}
+    default_shift_left: tuple[float, float] = tuple(
+        float(v) for v in (nose_shifts.get('left') or [0.0, 0.0])
+    )
+    default_shift_right: tuple[float, float] = tuple(
+        float(v) for v in (nose_shifts.get('right') or [0.0, 0.0])
+    )
+    shift_left: tuple[float, float] = (
+        args.shift_nose_leftCamera if args.shift_nose_leftCamera is not None
+        else default_shift_left
+    )
+    shift_right: tuple[float, float] = (
+        args.shift_nose_rightCamera if args.shift_nose_rightCamera is not None
+        else default_shift_right
+    )
+
+    # session filter: CLI --eids overrides config sessionids
+    if args.eids is not None:
+        eids: set[str] | None = set(args.eids)
+    else:
+        cfg_eids = cfg.get('sessionids')
+        eids = {str(e) for e in cfg_eids} if cfg_eids else None
+
+    print(f'[info] input_dir={input_dir}', flush=True)
     print(f'[info] csv_dir={csv_dir}', flush=True)
     print(f'[info] output_root={output_root}', flush=True)
     print(
         f'[info] left_frames_stretched={args.left_frames_stretched} '
-        f'keypoints={keypoints} min_likelihood={args.min_likelihood}',
+        f'keypoints={keypoints} min_likelihood={min_likelihood} n_digits={n_digits}',
         flush=True,
     )
 
-    pairs = _load_pair_list(dataset_list)
-    total_pairs = len(pairs)
-    print(f'[info] total pairs: {total_pairs}', flush=True)
+    # ---------------------------------------------------------------------------
+    # Discover sessions
+    # ---------------------------------------------------------------------------
+    grouped = _discover_sessions(
+        input_dir=input_dir,
+        anchor_cam=anchor_cam,
+        cam_subdir_tmpl=cam_subdir_tmpl,
+        ext=ext,
+        eids=eids,
+    )
+    if not grouped:
+        raise ValueError(f'no sessions discovered under {input_dir}')
 
-    grouped: dict[str, list[tuple[int, Path]]] = {}
-    rows_out: list[dict[str, Any]] = []
-    processed = 0
-
-    for i, pair_json in enumerate(pairs, start=1):
-        try:
-            session_id = _session_id_from_path(pair_json)
-            pair_idx = _pair_idx_from_path(pair_json)
-        except (RuntimeError, OSError, ValueError) as exc:
-            rows_out.append({'pair_json': str(pair_json), 'status': f'error_parse_path:{exc}'})
-            processed += 1
-            _pair_progress(processed, total_pairs)
-            print(f'[warn] skip (path): {pair_json}: {exc}', file=sys.stderr)
-            continue
-        grouped.setdefault(session_id, []).append((pair_idx, pair_json))
-        _report_progress(i, total_pairs, label='loaded pair paths', every=500)
-
-    if args.eids is not None:
-        want = set(args.eids)
-        unknown = sorted(want - set(grouped))
-        if unknown:
-            print(
-                f'[warn] --eids not found in pair paths (ignored): {", ".join(unknown)}',
-                file=sys.stderr,
-            )
-        grouped = {sid: pe for sid, pe in grouped.items() if sid in want}
-        print(f'[info] after --eids filter: sessions={len(grouped)}', flush=True)
-        if not grouped:
-            raise ValueError('no sessions left after --eids filter')
+    n_sessions = len(grouped)
+    total_pairs = sum(len(v) for v in grouped.values())
+    print(f'[info] sessions={n_sessions} total_pairs={total_pairs}', flush=True)
 
     session_order = list(grouped.keys())
-    n_sessions = len(session_order)
     cpus = os.cpu_count() or 1
-    job_workers = max(1, min(cpus, n_sessions)) if args.jobs <= 0 else max(1, min(args.jobs, n_sessions))
+    job_workers = (
+        max(1, min(cpus, n_sessions)) if max_workers <= 0
+        else max(1, min(max_workers, n_sessions))
+    )
+
+    rows_out: list[dict[str, Any]] = []
+    processed = 0
 
     if job_workers <= 1 or n_sessions <= 1:
         for session_id in session_order:
             for row in _build_session_rows(
                 session_id=session_id,
-                pair_entries=grouped[session_id],
-                dataset_root=dataset_root,
+                records=grouped[session_id],
                 csv_dir=csv_dir,
                 output_root=output_root,
                 keypoints=keypoints,
-                min_likelihood=float(args.min_likelihood),
+                min_likelihood=min_likelihood,
                 shift_left=shift_left,
                 shift_right=shift_right,
                 left_frames_stretched=args.left_frames_stretched,
                 overwrite=args.overwrite,
+                n_digits=n_digits,
             ):
                 rows_out.append(row)
                 processed += 1
@@ -842,16 +926,19 @@ def main() -> None:
         jobs = [
             _SessionJob(
                 session_id=sid,
-                pair_entries=tuple((idx, str(p)) for idx, p in grouped[sid]),
-                dataset_root=str(dataset_root),
+                pair_entries=tuple(
+                    (rec.pair_idx, rec.left_source_frame_index, rec.right_source_frame_index)
+                    for rec in grouped[sid]
+                ),
                 csv_dir=str(csv_dir),
                 output_root=str(output_root),
                 keypoints=tuple(keypoints),
-                min_likelihood=float(args.min_likelihood),
+                min_likelihood=float(min_likelihood),
                 shift_left=shift_left,
                 shift_right=shift_right,
                 left_frames_stretched=args.left_frames_stretched,
                 overwrite=args.overwrite,
+                n_digits=n_digits,
             )
             for sid in session_order
         ]
@@ -866,8 +953,9 @@ def main() -> None:
                 processed += 1
                 _pair_progress(processed, total_pairs)
 
-    summary_path = output_root / 'litpose_correspondence_precompute_summary.json'
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_dir = output_root / 'litpose_correspondences'
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_dir / 'litpose_correspondence_precompute_summary.json'
     summary_path.write_text(json.dumps(rows_out, indent=2), encoding='utf-8')
     print(
         json.dumps({
