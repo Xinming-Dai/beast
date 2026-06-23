@@ -68,27 +68,108 @@ is controlled by template constants at the top of
 
 ## Step 1 (optional): LitPose predict
 
-If you want precomputed keypoint correspondences, run LitPose predict first.
-This step requires the separate `lp` conda environment.
+If you want precomputed keypoint correspondences, run LitPose predict first to generate
+per-session CSVs. The predict script lives at
+`beast/preprocess/sable/run_litpose_predict_sable.py`.
+
+### 1.1 Environment
+
+Create a `lp` conda environment using the
+[Lightning Pose installation guide](https://lightning-pose.readthedocs.io/en/latest/source/installation_guide.html#step-2-create-conda-environment).
+
+Alternatively, pass `--litpose-repo` (see §1.3) to run directly from the Lightning Pose
+source repo without activating a separate environment.
+
+### 1.2 Model directory layout
+
+The `--model-dir` argument should point to a trained Lightning Pose model directory:
+
+```text
+<model_dir>/
+├── config.yaml
+├── tb_logs/         ← model weights
+└── video_preds/     ← prediction CSVs are written here after litpose predict
+```
+
+### 1.3 Run prediction
+
+**Option A — via `lp` conda environment:**
 
 ```bash
 conda activate lp
-python beast/preprocess/run_litpose_predict_sable.py \
+python beast/preprocess/sable/run_litpose_predict_sable.py \
   --root /work/hdd/bfsr/xdai3/IBL-2view \
   --model-dir /path/to/lightning_pose_model \
   --config configs/multiview/extraction_pipeline_sable.yaml \
-  [--sessionids <eid1> <eid2>] \
+  [--session-ids <eid1> <eid2>] \
   [--skip-existing] \
   [-- --skip_viz]
 ```
 
-Using `--config` reads `cameras` and `sessionids` from the extraction config so you
-don't have to repeat them.  `--sessionids` on the command line takes precedence over
-the config value.
+**Option B — via Lightning Pose source repo (no env activation needed):**
 
-LitPose writes CSVs to `<model-dir>/video_preds/`.  Set `litpose.video_preds_dir` in
-the extraction config to that path before running `beast extract_sable` with
-`litpose.enabled: true`.
+```bash
+python beast/preprocess/sable/run_litpose_predict_sable.py \
+  --root /work/hdd/bfsr/xdai3/IBL-2view \
+  --model-dir /path/to/lightning_pose_model \
+  --config configs/multiview/extraction_pipeline_sable.yaml \
+  --litpose-repo /u/xdai3/project3d/lightning-pose \
+  [-- --skip_viz]
+```
+
+With `--litpose-repo`, the script calls
+`python -m lightning_pose.cli.main predict` with `PYTHONPATH` set to the repo — no
+`litpose` binary or `lp` environment activation required.
+
+`--config` reads `cameras` and `sessionids` from the extraction config so you don't have
+to repeat them. `--session-ids` on the command line takes precedence over the config value.
+
+### 1.4 Outputs
+
+Lightning Pose writes under the model directory:
+
+- `<model_dir>/video_preds/<mp4_stem>.csv` — per-camera keypoint predictions
+- `<model_dir>/video_preds/labeled_videos/` — overlay videos (skip with `--skip_viz`)
+
+### 1.5 Extra `litpose predict` options
+
+Anything after `--` is forwarded to `litpose predict`:
+
+```bash
+python beast/preprocess/sable/run_litpose_predict_sable.py \
+  --root /work/hdd/bfsr/xdai3/IBL-2view \
+  --model-dir /path/to/lightning_pose_model \
+  --config configs/multiview/extraction_pipeline_sable.yaml \
+  -- --skip_viz
+```
+
+`--skip_viz` skips labeled overlay MP4s and keeps only the CSV predictions.
+
+### 1.6 Argument reference
+
+| Argument | Description |
+|---|---|
+| `--root` | IBL-2view root with per-camera video subdirectories |
+| `--model-dir` | Lightning Pose model directory |
+| `--config` | Path to `extraction_pipeline_sable.yaml`; cameras and sessionids are read from it |
+| `--session-ids` / `--only-eids` | Optional session ID subset; overrides config `sessionids` |
+| `--output-dir` | Optional: copy per-session CSVs here after each run |
+| `--litpose-repo` | Lightning Pose source repo directory; runs via `python -m lightning_pose.cli.main` (mutually exclusive with `--litpose-bin`) |
+| `--litpose-bin` | Explicit `litpose` executable path (default: `litpose`; mutually exclusive with `--litpose-repo`) |
+| `--skip-existing` | Skip sessions whose prediction CSVs already exist |
+| `--dry-run` | Print commands without running |
+| After `--` | Passed through to `litpose predict` |
+
+### After prediction
+
+```yaml
+litpose:
+  enabled: true
+  video_preds_dir: /path/to/lightning_pose_model/video_preds
+```
+
+Then run `beast extract_sable` with `litpose.enabled: true` to convert the CSVs to
+per-frame `.npz` bundles.
 
 ---
 

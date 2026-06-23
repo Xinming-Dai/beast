@@ -289,7 +289,7 @@ Supports two `training.dataset_path` layouts:
 | `context_indices` | `[n_ctx]` long | from `ibl_training_regime` |
 | `target_indices` | `[n_tgt]` long | from `ibl_training_regime` |
 | `depth_vda` | `[V, 1, H, W]` float32 | `{model.vda.cache_root}/{session_id}/{camera}/{frame:06d}.npy` |
-| `leftcamera_xy` | `[512, 2]` float32 | `{model.merge_pcd.correspondence_cache_root}/{session_id}/pair_{pair_idx:06d}/litpose_matches.npz`; coordinates rescaled to `image_size` space |
+| `leftcamera_xy` | `[512, 2]` float32 | `{model.merge_pcd.correspondence_cache_root}/litpose_correspondences/processed_correspondences/{session_id}/correspondences{pair_idx:08d}.npz`; coordinates rescaled to `image_size` space |
 | `rightcamera_xy` | `[512, 2]` float32 | same bundle; coordinates rescaled to `image_size` space |
 | `confidence` | `[512]` float32 | same bundle; padding slots are `0.0` |
 | `scene_name` | str | |
@@ -372,33 +372,53 @@ Usage (equivalent mapping):
 
 ### Correspondence precompute script
 
-**`scripts/prepare_sable_data/precompute_litpose_correspondences.py`** — self-contained
+**`beast/preprocess/sable/precompute_litpose_correspondences.py`** — self-contained
 (no `erayzer_core` imports) replacement for the erayzer-owned
 `src/erayzer_core/data/ibl_datasets/precompute_litpose_roma2_bundles.py`.
 
-Reads LitPose DLC-style CSVs from `{litpose-root}/video_preds/` and writes one bundle per
-stereo pair to `{output_root}/{session_id}/pair_{pair_idx:06d}/litpose_matches.npz`.
+Reads LitPose DLC-style CSVs from `litpose.video_preds_dir` (set in the extraction config)
+and writes one bundle per frame pair to:
+`{output_dir}/litpose_correspondences/processed_correspondences/{session_id}/correspondences{pair_idx:08d}.npz`
 
-Key difference from the erayzer source script:
+Session and frame discovery is driven by scanning `input_dir` from the extraction config
+(no pair-JSON list needed). Frame indices are read directly from `img*.png` filenames in
+`{input_dir}/{cam}Camera.video/_iblrig_{cam}Camera.downsampled.{session_id}/`. Since the
+cameras are synchronized, `pair_idx == source_frame_index` for both left and right.
 
+Key differences from the erayzer source script:
+
+- **No `--dataset-list`**: sessions are discovered from `input_dir` in the config.
 - Default is `--no-left-frames-stretched` (`left_frames_stretched=False`): left-camera
-  coordinates are saved in **raw 256×320 pixel space**.  `IBLDataset` rescales them to
+  coordinates are saved in **raw 256×320 pixel space**. `IBLDataset` rescales them to
   `image_size` at load time (see coordinate rescaling note above).
-- Output subdirectory is `pair_{pair_idx:06d}` (matches `IBLDataset._load_correspondences`).
+- Output path uses `correspondences{pair_idx:08d}.npz` (matches `n_digits` from
+  `frame.n_digits` in the config, default 8).
 
-Equivalent invocation:
+Typical invocation — pass the extraction config and everything else is read from it:
 
 ```bash
-python scripts/prepare_sable_data/precompute_litpose_correspondences.py \
-  --dataset-list $DATASET_LIST \
-  --litpose-root $LITPOSE_CORRESPONDENCES_ROOT \
-  --output-root $LITPOSE_CORRESPONDENCES_ROOT/processed_correspondences \
-  --no-left-frames-stretched \
-  --shift-nose-leftCamera "5,0" \
-  --shift-nose-rightCamera="-10,0"
+python beast/preprocess/sable/precompute_litpose_correspondences.py \
+  --config configs/multiview/extraction_pipeline_sable.yaml
 ```
 
-Set `model.merge_pcd.correspondence_cache_root` to the `--output-root` value above.
+A SLURM wrapper is at `scripts/sable_scripts/precompute_litpose_correspondences.sh`.
+
+CLI flags that override config values:
+
+| Flag | Overrides config field |
+|---|---|
+| `--litpose-root PATH` | `litpose.video_preds_dir` (appends `/video_preds/`) |
+| `--output-root PATH` | `output_dir/dataset` |
+| `--keypoints A,B,C` | `litpose.keypoints` |
+| `--min-likelihood F` | `litpose.min_likelihood` |
+| `--shift-nose-leftCamera X,Y` | `litpose.keypoint_shifts.nose.left` |
+| `--shift-nose-rightCamera X,Y` | `litpose.keypoint_shifts.nose.right` |
+| `--n-digits N` | `frame.n_digits` |
+| `--max-workers N` | `max_workers` |
+| `--eids EID ...` | `sessionids` |
+
+Set `model.merge_pcd.correspondence_cache_root` to `{output_dir}` so
+`IBLDataset` resolves correspondence bundles at the correct path.
 
 ### `valid_mask` removed from correspondence data
 
