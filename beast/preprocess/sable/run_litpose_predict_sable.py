@@ -36,8 +36,72 @@ import sys
 import argparse
 from pathlib import Path
 
-from beast.preprocess.config_sable import SABLEConfig, VideoNamingConfig, load_sable_config
-from beast.preprocess.extraction_sable import _video_path, discover_sessions
+_IBL_CAMERAS = ['left', 'right']
+_IBL_VIDEO_SUBDIR = '{cam}Camera.video'
+_IBL_VIDEO_FILENAME = '_iblrig_{cam}Camera.downsampled.{session_id}.mp4'
+
+
+def _ibl_video_path(root: Path, cam: str, session_id: str) -> Path:
+    """Return the default IBL-2view mp4 path for one camera and session.
+
+    Args:
+        root: IBL-2view root directory.
+        cam: camera name (e.g. 'left').
+        session_id: session identifier.
+
+    Returns:
+        path to the mp4 file.
+    """
+    return (
+        root
+        / _IBL_VIDEO_SUBDIR.format(cam=cam)
+        / _IBL_VIDEO_FILENAME.format(cam=cam, session_id=session_id)
+    )
+
+
+def _discover_sessions_ibl(
+    root: Path,
+    cameras: list[str],
+    session_ids: list[str] | None,
+) -> list[str]:
+    """Discover sessions from IBL-2view camera video directories.
+
+    Args:
+        root: IBL-2view root directory.
+        cameras: camera names to require.
+        session_ids: optional explicit list to filter to.
+
+    Returns:
+        sorted list of session ID strings present in all camera dirs.
+
+    Raises:
+        FileNotFoundError: if any camera video directory is missing.
+        RuntimeError: if no matching sessions are found.
+    """
+    import re
+
+    per_cam: list[set[str]] = []
+    for cam in cameras:
+        cam_dir = root / _IBL_VIDEO_SUBDIR.format(cam=cam)
+        if not cam_dir.is_dir():
+            raise FileNotFoundError(f'camera video directory not found: {cam_dir}')
+        sentinel = '__SID__'
+        escaped = re.escape(_IBL_VIDEO_FILENAME.format(cam=cam, session_id=sentinel))
+        pattern = re.compile('^' + escaped.replace(re.escape(sentinel), r'(.+)') + '$')
+        per_cam.append({m.group(1) for f in cam_dir.iterdir() if (m := pattern.match(f.name))})
+
+    ids = sorted(set.intersection(*per_cam)) if per_cam else []
+
+    if session_ids:
+        requested = set(session_ids)
+        missing = sorted(requested - set(ids))
+        if missing:
+            print(f'warning: session IDs not found in camera dirs: {missing}', file=sys.stderr)
+        ids = [s for s in ids if s in requested]
+
+    if not ids:
+        raise RuntimeError(f'no matching session IDs found under {root} (cameras={cameras})')
+    return ids
 
 
 def _should_skip_session(
@@ -232,19 +296,23 @@ def main() -> None:
     litpose_repo = args.litpose_repo.expanduser().resolve() if args.litpose_repo is not None else None
 
     if args.config is not None:
+        from beast.preprocess.config_sable import load_sable_config
+        from beast.preprocess.extraction_sable import _video_path, discover_sessions
         cfg = load_sable_config(args.config)
         cameras = list(cfg.cameras)
         video_naming = cfg.video_naming
         config_sessionids = list(cfg.sessionids) if cfg.sessionids else None
+        sessionids: list[str] | None = (
+            args.session_ids if args.session_ids is not None else config_sessionids
+        )
+        session_ids = discover_sessions(root, cameras, video_naming, sessionids)
+        resolve_path = lambda cam, sid: _video_path(root, cam, sid, video_naming=video_naming)
     else:
-        _defaults = SABLEConfig()
-        cameras = list(_defaults.cameras)
-        video_naming = VideoNamingConfig()
-        config_sessionids = None
-
-    sessionids: list[str] | None = args.session_ids if args.session_ids is not None else config_sessionids
-    if not sessionids and args.config is None:
-        build_parser().error('--session-ids is required when --config is not given')
+        if not args.session_ids:
+            build_parser().error('--session-ids is required when --config is not given')
+        cameras = _IBL_CAMERAS
+        session_ids = _discover_sessions_ibl(root, cameras, args.session_ids)
+        resolve_path = lambda cam, sid: _ibl_video_path(root, cam, sid)
 
     if not args.dry_run:
         if litpose_repo is not None:
@@ -263,17 +331,12 @@ def main() -> None:
                     'or pass --litpose-repo /path/to/lightning-pose-source.'
                 )
 
-    session_ids = discover_sessions(root, cameras, video_naming, sessionids)
-
     extra = list(args.litpose_argv)
     if extra and extra[0] == '--':
         extra = extra[1:]
 
     for session_id in session_ids:
-        cam_videos = {
-            cam: _video_path(root, cam, session_id, video_naming=video_naming)
-            for cam in cameras
-        }
+        cam_videos = {cam: resolve_path(cam, session_id) for cam in cameras}
         for cam, vpath in cam_videos.items():
             if not vpath.is_file():
                 raise FileNotFoundError(
