@@ -66,14 +66,15 @@ optimizer:
   wd: 0.05
   beta1: 0.9
   beta2: 0.95
-  warmup: 600
+  warmup: 1500
   div_factor: 1.0
   final_div_factor: 1.0
   scheduler: cosine
 
 training:
-  dataset_name: beast.data.sable_dataset.SABLEDataset
-  dataset_path: null
+  dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
+  dataset_path: null        # raw IBL frames root (leftCamera.video/ / rightCamera.video/ layout)
+  session_names: null       # list of session IDs; auto-discovers from dataset_path when null
 
   # Validation
   val_split_ratio: 0.1 
@@ -96,12 +97,12 @@ training:
   use_tf32: true
 
   checkpoint_dir: path/to/ckpt_folder
-  checkpoint_every: 2000
+  checkpoint_every: 4000
   checkpoint_steps: [4000]
 
   resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 4000
+  max_fwdbwd_passes: 10000
   print_every: 10
   save_visuals: true
   vis_num_samples: 1
