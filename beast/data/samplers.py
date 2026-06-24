@@ -1,7 +1,7 @@
 """Custom batch samplers for contrastive learning with temporally adjacent frame pairs."""
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Sequence, Sized
 from pathlib import Path
 from typing import Any
 
@@ -240,6 +240,53 @@ class ContrastBatchSampler(Sampler):
     def __len__(self) -> int:
         """Return the number of batches this sampler will yield per epoch."""
         return self.num_batches
+
+
+class ResumableRandomSampler(Sampler):
+    """Random sampler with state_dict/load_state_dict for checkpoint resumability.
+
+    Generates the same permutation for a given (seed, epoch) pair, allowing
+    mid-epoch resumption: save _pos items consumed; on resume, regenerate the
+    same permutation and skip those items.
+
+    Args:
+        data_source: dataset (only len() is used)
+        seed: base random seed; combined with epoch number for per-epoch shuffling
+    """
+
+    def __init__(self, data_source: Sized, seed: int = 0) -> None:
+        """Initialize with dataset size and random seed."""
+        super().__init__()
+        self._n = len(data_source)
+        self._seed = seed
+        self._epoch = 0
+        self._pos = 0
+
+    def __len__(self) -> int:
+        """Return the number of samples."""
+        return self._n
+
+    def __iter__(self) -> Iterator[int]:
+        """Yield all indices in a deterministic random order, resuming from _pos."""
+        g = torch.Generator()
+        g.manual_seed(self._seed + self._epoch)
+        perm = torch.randperm(self._n, generator=g).tolist()
+        start = self._pos
+        for i, idx in enumerate(perm[start:]):
+            self._pos = start + i + 1
+            yield idx
+        self._epoch += 1
+        self._pos = 0
+
+    def state_dict(self) -> dict[str, int]:
+        """Return sampler state for checkpointing."""
+        return {'epoch': self._epoch, 'pos': self._pos, 'seed': self._seed}
+
+    def load_state_dict(self, state_dict: dict[str, int]) -> None:
+        """Restore sampler state from a checkpoint."""
+        self._epoch = state_dict['epoch']
+        self._pos = state_dict['pos']
+        self._seed = state_dict.get('seed', self._seed)
 
 
 def contrastive_collate_fn(batch_of_dicts: list[dict]) -> dict[str, torch.Tensor]:
