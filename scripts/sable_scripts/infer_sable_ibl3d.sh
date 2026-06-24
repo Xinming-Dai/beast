@@ -17,13 +17,10 @@ conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID=18441450
+JOB_ID="${JOB_ID:-19575256}"
 
 STAGE=finetune
-DATASET_ROOT="${DATASET_ROOT:-/work/nvme/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
-DATASET_PATH="${DATASET_PATH:-$DATASET_ROOT/opencv_cameras_pairs_${EID}.txt}"
-VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/processed/precached_video}"
-CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
+DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
 MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/$EID/$JOB_ID}"
@@ -56,8 +53,6 @@ Job ID:                ${SLURM_JOB_ID:-local}
 Running on node(s):    ${SLURM_NODELIST:-$(hostname)}
 Model dir:             $MODEL_DIR
 Dataset path:          $DATASET_PATH
-VDA cache root:        $VDA_CACHE_ROOT
-Correspondence cache:  $CORRESPONDENCE_CACHE_ROOT
 Output dir:            $OUTPUT_DIR
 Splits:                $SPLITS
 Save visuals:          $SAVE_VISUALS
@@ -80,15 +75,14 @@ PY
 echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting inference..."
 
 [ -d "$MODEL_DIR" ]    || { echo "ERROR: Model dir not found: $MODEL_DIR"; exit 1; }
-[ -f "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
+[ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
 
 cd "$REPO_ROOT"
 
 PREDICT_ARGS=(
     --model "$MODEL_DIR"
     --input "$DATASET_PATH"
-    --vda-cache-root "$VDA_CACHE_ROOT"
-    --correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT"
+    --session-names "$EID"
     --output "$OUTPUT_DIR"
     --splits $SPLITS
 )

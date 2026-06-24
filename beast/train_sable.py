@@ -279,9 +279,10 @@ def train_sable(config: dict, model, output_dir: str | Path):
             if unexpected:
                 log_step(f'Unexpected keys when loading checkpoint: {unexpected}', level='warning')
             ckpt_path_for_trainer = None
-        global_step_at_resume = int(
-            raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0))
-        )
+        else:
+            global_step_at_resume = int(
+                raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0))
+            )
 
     max_steps_this_run: int = max(0, max_fwdbwd_passes - global_step_at_resume)
     if global_step_at_resume > 0:

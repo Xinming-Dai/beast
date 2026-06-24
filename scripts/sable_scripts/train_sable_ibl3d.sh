@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-04:00:00
-#SBATCH -J erz_train
+#SBATCH -t 0-24:00:00
+#SBATCH -J sable_ibl
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/train_sable_ibl3d_%j.log
 #SBATCH --export=ALL
 
@@ -19,14 +19,14 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 CONFIG="${CONFIG:-$REPO_ROOT/configs/sable_ibl3d.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
-#   sbatch --export=ALL,DATASET_PATH=/path/to/pairs.txt scripts/train_sable_ibl3d.sh)
+#   sbatch --export=ALL,EID=<session-id>,DATASET_PATH=/path/to/frames scripts/train_sable_ibl3d.sh)
 STAGE=finetune
-DATASET_ROOT="${DATASET_ROOT:-/work/nvme/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
+DATASET_ROOT="${DATASET_ROOT:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
+DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-DATASET_PATH="${DATASET_PATH:-$DATASET_ROOT/opencv_cameras_pairs_${EID}.txt}"
-VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/processed/precached_video}"
+VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/depth_map}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
-RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
+RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/19427118/tb_logs/version_0/checkpoints/epoch=52-step=7588-best.ckpt}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/${EID}}"
 
@@ -59,6 +59,7 @@ Job ID: ${SLURM_JOB_ID:-local}
 Running on node(s): ${SLURM_NODELIST:-$(hostname)}
 Config: $CONFIG
 Dataset path: $DATASET_PATH
+Session ID: $EID
 VDA cache root: $VDA_CACHE_ROOT
 Correspondence cache root: $CORRESPONDENCE_CACHE_ROOT
 Resume ckpt: ${RESUME_CKPT:-(none)}
@@ -81,13 +82,13 @@ PY
 echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
 
 [ -f "$CONFIG" ] || { echo "ERROR: Config not found: $CONFIG"; exit 1; }
-[ -f "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
+[ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
 
 cd "$REPO_ROOT"
 
-# Build overrides list; only include resume_ckpt when it is set.
 OVERRIDES=(
     "training.dataset_path=$DATASET_PATH"
+    "training.session_names=$EID"
     "model.vda.cache_root=$VDA_CACHE_ROOT"
     "model.merge_pcd.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
     "training.checkpoint_dir=$CHECKPOINT_DIR"

@@ -92,6 +92,12 @@ def register_parser(subparsers: Any) -> None:
         default=None,
         help='Stop after this many batches (useful for smoke tests)',
     )
+    sable_group.add_argument(
+        '--session-names',
+        nargs='+',
+        metavar='SESSION',
+        help='session IDs to load (default: use value from saved training config)',
+    )
 
 
 def handle(args: argparse.Namespace) -> None:
@@ -113,7 +119,7 @@ def _handle_sable(args, model):
     """Run Sable inference over a scene dataset."""
 
     if args.input is None:
-        _logger.error('Sable models require --input pointing to the scene dataset file')
+        _logger.error('Sable models require --input')
         return
 
     output_dir = args.output or args.model / 'inference'
@@ -128,6 +134,7 @@ def _handle_sable(args, model):
         splits=args.splits,
         save_visuals=args.save_visuals,
         max_batches=args.max_batches,
+        session_names=args.session_names,
     )
 
 

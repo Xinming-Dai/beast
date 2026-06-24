@@ -160,24 +160,31 @@ class Model:
 
     def infer_sable(
         self,
-        dataset_path: str | Path,
+        dataset_path: str | Path | None = None,
         output_dir: str | Path | None = None,
         vda_cache_root: str | Path | None = None,
         correspondence_cache_root: str | Path | None = None,
         splits: list[str] | None = None,
         save_visuals: bool = False,
         max_batches: int | None = None,
+        session_names: list[str] | str | None = None,
     ) -> dict[str, Any]:
         """Run Sable inference over a scene dataset and save PLY point clouds.
 
         Args:
-            dataset_path: path to the scene dataset file (e.g. IBL camera-pairs .txt).
+            dataset_path: path to the scene dataset. For IBL: raw frames root
+                (``leftCamera.video/`` / ``rightCamera.video/`` layout). For
+                Cheese3D: root Cheese3D directory.
             output_dir: root directory for outputs; defaults to <model_dir>/inference.
-            vda_cache_root: root directory of precomputed VDA depth cache.
-            correspondence_cache_root: root directory of precomputed correspondence cache.
+            vda_cache_root: root directory of precomputed VDA depth cache. When
+                ``None``, the value from the saved training config is used.
+            correspondence_cache_root: root directory of precomputed correspondence
+                cache. When ``None``, the value from the saved training config is used.
             splits: dataset splits to run inference on (default: ['train', 'val']).
             save_visuals: whether to also save render-vs-target PNG grids.
             max_batches: stop after this many batches; None runs the full dataset.
+            session_names: session IDs to load. Accepts a list or a single string.
+                When ``None``, the value from the saved training config is used.
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files', 'vis_files'.
@@ -187,7 +194,10 @@ class Model:
         config = {**self.config}
         config['inference'] = True
         config['training'] = {**config.get('training', {})}
-        config['training']['dataset_path'] = str(dataset_path)
+        if dataset_path is not None:
+            config['training']['dataset_path'] = str(dataset_path)
+        if session_names is not None:
+            config['training']['session_names'] = session_names
         if vda_cache_root is not None:
             config['model'] = {**config.get('model', {})}
             config['model']['vda'] = {**config['model'].get('vda', {})}

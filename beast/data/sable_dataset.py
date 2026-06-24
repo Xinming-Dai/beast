@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -538,33 +539,30 @@ class SABLEDataset(Dataset):
 
 
 class IBLTwoViewDataset(SABLEDataset):
-    """Two-view IBL dataset reading from the reorganized ``beast extract_sable`` pipeline output.
+    """Two-view IBL dataset that discovers frame pairs from the raw IBL filesystem layout.
 
     Like :class:`~beast.data.sable_dataset.SABLEDataset` but:
 
+    * Records are discovered from the filesystem using ``training.dataset_path``, which
+      should point to the root containing ``leftCamera.video/`` and ``rightCamera.video/``
+      subdirectories (i.e. the raw IBL extracted-frames root).
     * VDA depth is **optional** — loaded from
-      ``{dataset_path}/depth_map/{session_id}/{camera}/depth{frame_idx:08d}.npy``.
-      Returns a zero depth tensor with a debug log when the file is absent, allowing
-      training without precomputed depth (the model handles online VDA inference via
-      ``model.vda.mode: online`` in the training config).
-    * Correspondence files are **optional** — a session-level ``.npz`` bundle is
-      loaded from
-      ``{dataset_path}/litpose_correspondences/processed_correspondences/{session_id}/
+      ``{model.vda.cache_root}/{session_id}/{camera}/depth{frame_idx:08d}.npy``.
+      Returns a zero depth tensor with a debug log when the file is absent.
+    * Correspondence files are **optional** — loaded from
+      ``{model.merge_pcd.correspondence_cache_root}/{session_id}/
       correspondences{pair_idx:08d}.npz``.
       The bundle contains ``left_xy [K, 2]``, ``right_xy [K, 2]``, and
       ``confidence [K]`` arrays in native IBL pixel space; coordinates are rescaled
       to ``image_size × image_size`` and padded to ``_MAX_MATCHES`` at load time.
       Returns zero tensors when the bundle is absent.
 
-    ``dataset_path`` should point to the ``dataset/`` directory that contains
-    per-session subdirectories (each with ``pair_metadata.json`` and
-    ``{camera}/img*.png``), as well as sibling ``depth_map/`` and
-    ``litpose_correspondences/`` directories.
+    Config keys read:
 
-    Config keys read (same as :class:`SABLEDataset` except ``model.vda.cache_root``
-    is not used):
-
-    * ``training.dataset_path``
+    * ``training.dataset_path`` — raw IBL frames root (required)
+    * ``training.session_names`` — list of session IDs to load; auto-discovers when null
+    * ``model.vda.cache_root`` — precomputed VDA depth cache root
+    * ``model.merge_pcd.correspondence_cache_root`` — precomputed correspondence cache root
     * ``model.image_tokenizer.image_size``
     * ``training.ibl_training_regime``
     * ``training.val_split_ratio``
@@ -595,23 +593,151 @@ class IBLTwoViewDataset(SABLEDataset):
             raise ValueError('training.dataset_path must be set.')
         val_split_ratio = float(training.get('val_split_ratio', 0.0))
         split_seed = int(model_cfg.get('seed', 0))
-        self._records: list[_PrecacheRecord] = self._load_records(
-            Path(dataset_path),
+
+        self._records: list[_PrecacheRecord] = self._discover_filesystem_records(
+            image_root=Path(dataset_path),
+            session_names=training.get('session_names'),
             include_splits=include_splits,
             val_split_ratio=val_split_ratio,
             split_seed=split_seed,
         )
 
-        # VDA and correspondence roots are not used directly; depth and
-        # correspondences are loaded from the reorganized dataset layout
-        self._vda_cache_root = None  # type: ignore[assignment]
-        self._corr_root = None
-        self._dataset_root: Path = Path(dataset_path)
+        vda_cfg = model_cfg.get('vda', {}) or {}
+        vda_cache_root = vda_cfg.get('cache_root')
+        self._vda_cache_root: Path | None = Path(vda_cache_root) if vda_cache_root else None
+
+        merge_pcd_cfg = model_cfg.get('merge_pcd', {}) or {}
+        corr_root = merge_pcd_cfg.get('correspondence_cache_root')
+        self._corr_root: Path | None = Path(corr_root) if corr_root else None
+
+        # dataset_path is the raw frames root, not a precache dir, so the depth/
+        # correspondence fallback via _dataset_root is not applicable here.
+        self._dataset_root: Path | None = None
 
         self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
         self._training_regime: str = str(
             training.get('ibl_training_regime', 'all_views_reconstruction')
         ).strip().lower()
+
+    # ------------------------------------------------------------------
+    # filesystem discovery (no JSON required)
+    # ------------------------------------------------------------------
+
+    def _discover_filesystem_records(
+        self,
+        image_root: Path,
+        session_names: list[str] | str | None,
+        include_splits: list[str] | None,
+        val_split_ratio: float,
+        split_seed: int,
+    ) -> list[_PrecacheRecord]:
+        """Discover stereo pairs from the IBL filesystem layout without a JSON index.
+
+        Left images are expected at::
+
+            {image_root}/leftCamera.video/_iblrig_leftCamera.downsampled.{session_id}/img{N:08d}.png
+
+        Right images at::
+
+            {image_root}/rightCamera.video/_iblrig_rightCamera.downsampled.{session_id}/img{N:08d}.png
+
+        Frame indices are parsed from filenames. The sorted position of each frame
+        index within a session becomes its ``pair_idx`` (used for correspondence
+        file lookup); the index value itself becomes ``source_frame_index`` (used
+        for depth file lookup).
+
+        Args:
+            image_root: base directory containing ``leftCamera.video/`` and
+                ``rightCamera.video/`` subdirectories.
+            session_names: explicit session IDs to use. Accepts a list of strings or
+                a single string (for CLI override convenience). When ``None``,
+                auto-discovers sessions by scanning ``{image_root}/leftCamera.video/``.
+            include_splits: split filter passed to :meth:`_split_records`.
+            val_split_ratio: fraction of records reserved for validation.
+            split_seed: RNG seed for the deterministic train/val split.
+
+        Returns:
+            list of ``_PrecacheRecord`` instances.
+
+        Raises:
+            RuntimeError: if no valid stereo pairs are found.
+        """
+        left_video_dir = image_root / 'leftCamera.video'
+        right_video_dir = image_root / 'rightCamera.video'
+
+        if session_names is None:
+            session_ids = sorted(
+                p.name.split('.')[-1]
+                for p in left_video_dir.iterdir()
+                if p.is_dir() and p.name.startswith('_iblrig_leftCamera.downsampled.')
+            )
+        elif isinstance(session_names, str):
+            session_ids = [session_names]
+        else:
+            session_ids = list(session_names)
+
+        records: list[_PrecacheRecord] = []
+        for session_id in session_ids:
+            left_dir = left_video_dir / f'_iblrig_leftCamera.downsampled.{session_id}'
+            right_dir = right_video_dir / f'_iblrig_rightCamera.downsampled.{session_id}'
+
+            if not left_dir.is_dir() or not right_dir.is_dir():
+                _logger.warning(
+                    'skipping session %s: image dirs not found (%s, %s)',
+                    session_id,
+                    left_dir,
+                    right_dir,
+                )
+                continue
+
+            left_indices = self._parse_frame_indices(left_dir)
+            right_indices = self._parse_frame_indices(right_dir)
+            common = sorted(left_indices & right_indices)
+
+            if not common:
+                _logger.warning('skipping session %s: no common frame indices', session_id)
+                continue
+
+            for pair_idx, source_frame_index in enumerate(common):
+                records.append(_PrecacheRecord(
+                    session_id=session_id,
+                    pair_idx=pair_idx,
+                    left_path=left_dir / f'img{source_frame_index:08d}.png',
+                    right_path=right_dir / f'img{source_frame_index:08d}.png',
+                    left_source_frame_index=source_frame_index,
+                    right_source_frame_index=source_frame_index,
+                    scene_name=f'{session_id}_pair_{pair_idx:06d}',
+                ))
+
+        if not records:
+            raise RuntimeError(
+                f'No valid stereo pairs found under {image_root} for sessions {session_ids}'
+            )
+
+        return self._split_records(
+            records,
+            include_splits=include_splits,
+            val_split_ratio=val_split_ratio,
+            split_seed=split_seed,
+            source_desc=str(image_root),
+        )
+
+    @staticmethod
+    def _parse_frame_indices(directory: Path) -> set[int]:
+        """Parse integer frame indices from ``img*.png`` filenames in a directory.
+
+        Args:
+            directory: directory containing ``img{N:08d}.png`` image files.
+
+        Returns:
+            set of integer frame indices found.
+        """
+        indices: set[int] = set()
+        for p in directory.glob('img*.png'):
+            m = re.search(r'(\d+)\.png$', p.name)
+            if m:
+                indices.add(int(m.group(1)))
+        return indices
 
     # ------------------------------------------------------------------
     # overrides
@@ -633,11 +759,9 @@ class IBLTwoViewDataset(SABLEDataset):
         left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
         right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
 
-        camera_left = rec.left_path.parent.name
-        camera_right = rec.right_path.parent.name
         vda_depths = [
-            self._load_vda_depth_sable(rec.session_id, camera_left, rec.left_source_frame_index),
-            self._load_vda_depth_sable(rec.session_id, camera_right, rec.right_source_frame_index),
+            self._load_vda_depth_sable(rec.session_id, 'left', rec.left_source_frame_index),
+            self._load_vda_depth_sable(rec.session_id, 'right', rec.right_source_frame_index),
         ]
 
         image_tensor = torch.stack([left_img, right_img], dim=0)   # [V, 3, H, W]
@@ -672,12 +796,15 @@ class IBLTwoViewDataset(SABLEDataset):
         camera_name: str,
         source_frame_index: int,
     ) -> torch.Tensor:
-        """Load VDA depth from the reorganized depth_map directory.
+        """Load VDA depth from the configured cache root or the dataset layout.
 
-        Expected path:
-            ``{dataset_root}/depth_map/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
+        Path resolution (first that applies):
 
-        Returns a zero depth tensor with a debug log when the file is absent.
+        1. ``model.vda.cache_root`` is set →
+           ``{vda_cache_root}/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
+        2. ``training.dataset_path`` is set →
+           ``{dataset_root}/depth_map/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
+        3. Neither set → returns zeros with a debug log.
 
         Args:
             session_id: session identifier (subdirectory name).
@@ -687,13 +814,28 @@ class IBLTwoViewDataset(SABLEDataset):
         Returns:
             float32 tensor [1, H, W] where H = W = ``image_size``.
         """
-        depth_path = (
-            self._dataset_root
-            / 'depth_map'
-            / session_id
-            / camera_name
-            / f'depth{source_frame_index:08d}.npy'
-        )
+        if self._vda_cache_root is not None:
+            depth_path = (
+                self._vda_cache_root
+                / session_id
+                / camera_name
+                / f'depth{source_frame_index:08d}.npy'
+            )
+        elif self._dataset_root is not None:
+            depth_path = (
+                self._dataset_root
+                / 'depth_map'
+                / session_id
+                / camera_name
+                / f'depth{source_frame_index:08d}.npy'
+            )
+        else:
+            log_step(
+                f'no VDA cache root configured, returning zeros for session {session_id} '
+                f'camera {camera_name} frame {source_frame_index}',
+                level='debug',
+            )
+            return torch.zeros(1, self._image_size, self._image_size, dtype=torch.float32)
         if not depth_path.exists():
             log_step(
                 f'VDA depth not found (using zeros): {depth_path}. '
@@ -726,9 +868,14 @@ class IBLTwoViewDataset(SABLEDataset):
     ) -> dict[str, torch.Tensor]:
         """Load a session-level correspondence bundle and rescale to image_size.
 
-        Expected path:
-            ``{dataset_root}/litpose_correspondences/processed_correspondences/
-            {session_id}/correspondences{pair_idx:08d}.npz``
+        Path resolution (first that applies):
+
+        1. ``model.merge_pcd.correspondence_cache_root`` is set →
+           ``{correspondence_cache_root}/{session_id}/correspondences{pair_idx:08d}.npz``
+        2. ``training.dataset_path`` is set →
+           ``{dataset_root}/litpose_correspondences/processed_correspondences/
+           {session_id}/correspondences{pair_idx:08d}.npz``
+        3. Neither set → returns empty tensors.
 
         The .npz bundle contains ``left_xy [K, 2]``, ``right_xy [K, 2]``, and
         ``confidence [K]`` arrays in native IBL pixel space.  Coordinates are
@@ -746,13 +893,23 @@ class IBLTwoViewDataset(SABLEDataset):
         Returns:
             dict with keys ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``.
         """
-        bundle_path = (
-            self._dataset_root
-            / 'litpose_correspondences'
-            / 'processed_correspondences'
-            / session_id
-            / f'correspondences{pair_idx:08d}.npz'
-        )
+        if self._corr_root is not None:
+            bundle_path = self._corr_root / session_id / f'correspondences{pair_idx:08d}.npz'
+        elif self._dataset_root is not None:
+            bundle_path = (
+                self._dataset_root
+                / 'litpose_correspondences'
+                / 'processed_correspondences'
+                / session_id
+                / f'correspondences{pair_idx:08d}.npz'
+            )
+        else:
+            log_step(
+                f'no correspondence cache root configured, returning empty for session {session_id} '
+                f'pair {pair_idx}',
+                level='debug',
+            )
+            return self._empty_correspondences()
         if not bundle_path.exists():
             log_step(
                 f'correspondence bundle not found, using empty: {bundle_path}',
@@ -840,7 +997,7 @@ class Cheese3DDataset(SABLEDataset):
 
         {dataset_path}/{session_id}/{camera}/img{frame_idx:08d}.png
 
-    For each session in ``training.cheese3d_session_names``, pairs frames from
+    For each session in ``training.session_names``, pairs frames from
     ``training.cheese3d_left_camera`` and ``training.cheese3d_right_camera`` (default
     ``'TL'``/``'TR'``) by matching frame index.  Optionally includes a third center
     camera (``training.cheese3d_center_camera``, e.g. ``'TC'``).  The accompanying
@@ -871,7 +1028,7 @@ class Cheese3DDataset(SABLEDataset):
     Config keys read:
 
     * ``training.dataset_path`` — root Cheese3D directory.
-    * ``training.cheese3d_session_names`` — required list of session subdirectory names.
+    * ``training.session_names`` — required list of session subdirectory names.
     * ``training.cheese3d_left_camera`` (default ``'TL'``),
       ``training.cheese3d_right_camera`` (default ``'TR'``),
       ``training.cheese3d_center_camera`` (default ``None``; set to e.g. ``'TC'`` to
@@ -907,9 +1064,9 @@ class Cheese3DDataset(SABLEDataset):
         dataset_path = training.get('dataset_path')
         if not dataset_path:
             raise ValueError('training.dataset_path must be set.')
-        session_names = training.get('cheese3d_session_names')
+        session_names = training.get('session_names')
         if not session_names:
-            raise ValueError('training.cheese3d_session_names must be a non-empty list.')
+            raise ValueError('training.session_names must be a non-empty list.')
         left_camera = str(training.get('cheese3d_left_camera', 'TL'))
         right_camera = str(training.get('cheese3d_right_camera', 'TR'))
         center_camera_raw = training.get('cheese3d_center_camera')
