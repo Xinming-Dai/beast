@@ -845,12 +845,10 @@ def main() -> None:
     ext = str(frame_cfg.get('extension', 'png'))
 
     nose_shifts = (litpose_cfg.get('keypoint_shifts') or {}).get('nose') or {}
-    default_shift_left: tuple[float, float] = tuple(
-        float(v) for v in (nose_shifts.get('left') or [0.0, 0.0])
-    )
-    default_shift_right: tuple[float, float] = tuple(
-        float(v) for v in (nose_shifts.get('right') or [0.0, 0.0])
-    )
+    _raw_left = nose_shifts.get('left') or [0.0, 0.0]
+    default_shift_left: tuple[float, float] = (float(_raw_left[0]), float(_raw_left[1]))
+    _raw_right = nose_shifts.get('right') or [0.0, 0.0]
+    default_shift_right: tuple[float, float] = (float(_raw_right[0]), float(_raw_right[1]))
     shift_left: tuple[float, float] = (
         args.shift_nose_leftCamera if args.shift_nose_leftCamera is not None
         else default_shift_left
