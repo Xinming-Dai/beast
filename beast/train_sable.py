@@ -11,6 +11,7 @@ import torch
 from lightning.pytorch.utilities import rank_zero_only
 
 from beast.logging import log_step
+from beast.data.samplers import ResumableRandomSampler
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
@@ -237,12 +238,11 @@ def train_sable(config: dict, model, output_dir: str | Path):
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=ResumableRandomSampler(train_dataset, seed=seed),
         num_workers=num_workers,
         collate_fn=collate_with_correspondence_padding,
         persistent_workers=num_workers > 0,
         drop_last=True,
-        generator=torch.Generator().manual_seed(seed),
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
