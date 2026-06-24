@@ -293,13 +293,17 @@ def train_sable(config: dict, model, output_dir: str | Path):
             level='info',
         )
 
+    # when Lightning restores a full checkpoint it already sets its internal global_step,
+    # so callbacks must not add an extra offset — only offset when Lightning starts from 0.
+    callback_step_offset = 0 if ckpt_path_for_trainer is not None else global_step_at_resume
+
     # reuse get_callbacks from train.py for LR monitor + val-best checkpoint;
     # append a step-based periodic checkpoint on top if configured.
     print_every = int(training.get('print_every', 10))
     callbacks = [LossLoggerCallback(
         max_steps=max_fwdbwd_passes,
         log_every=print_every,
-        global_step_offset=global_step_at_resume,
+        global_step_offset=callback_step_offset,
     )]
     callbacks += get_callbacks(
         lr_monitor=True,
@@ -326,7 +330,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
                 max_views=int(training.get('vis_max_views', 2)),
             )
         )
-    callbacks.append(StepAccumulatorCallback(global_step_at_resume))
+    callbacks.append(StepAccumulatorCallback(callback_step_offset))
 
     # precision
     precision: str | int = 32
