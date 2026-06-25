@@ -616,6 +616,10 @@ class Sable(BaseLightningModel):
         gaussian_mask = None
         if self.training and self.mask_ratio > 0:
             keep = (torch.rand((b, v_input, n), device=img_tokens_input.device) >= self.mask_ratio)
+            if 'context_full_mask' in data:
+                # [b, v_input] bool; True = zero out all tokens for that view
+                full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
+                keep = keep & ~full_mask.unsqueeze(-1)  # broadcast over n → [b, v_input, n]
             masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
             pixel_mask, gaussian_mask = build_token_masks(keep, b, v_input, self.hh, self.ww, self.ph, self.pw)
         else:
