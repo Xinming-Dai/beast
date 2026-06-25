@@ -1285,13 +1285,17 @@ class Cheese3DDataset(SABLEDataset):
         """Resolve context and target view indices for the training regime.
 
         For ``all_views_reconstruction`` all views are both context and target.
+        For ``center_camera_holdout`` all views are both context and target, but
+        ``__getitem__`` additionally returns ``context_full_mask`` so the model
+        zeros all image tokens for the center camera (index 2) while still using
+        its pose (Plucker ray) embeddings.
         For ``fixed_1to1`` index 0 is context, index 1 is target.
 
         Returns:
             tuple of (context_indices, target_indices) as long tensors.
         """
         all_idx = torch.arange(self._num_views, dtype=torch.long)
-        if self._training_regime == 'all_views_reconstruction':
+        if self._training_regime in ('all_views_reconstruction', 'center_camera_holdout'):
             return all_idx, all_idx.clone()
         return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
 
@@ -1353,6 +1357,15 @@ class Cheese3DDataset(SABLEDataset):
 
         if 'centercamera_xy' in correspondences:
             result['centercamera_xy'] = correspondences['centercamera_xy']
+
+        if self._training_regime == 'center_camera_holdout':
+            if self._num_views != 3:
+                raise ValueError(
+                    f"'center_camera_holdout' requires 3 views "
+                    f"(cheese3d_center_camera must be set); got {self._num_views}"
+                )
+            # center camera is at index 2; zero out all its image tokens in the model
+            result['context_full_mask'] = torch.tensor([False, False, True], dtype=torch.bool)
 
         if rec.left_mask_path is not None and rec.right_mask_path is not None:
             left_mask = self._load_mask(rec.left_mask_path)    # [1, H, W]
