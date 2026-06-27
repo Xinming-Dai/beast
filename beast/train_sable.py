@@ -4,14 +4,13 @@ import importlib
 import sys
 from pathlib import Path
 
+import lightning.pytorch as pl
+from lightning.pytorch.utilities import rank_zero_only
+import torch
 import yaml
 
-import lightning.pytorch as pl
-import torch
-from lightning.pytorch.utilities import rank_zero_only
-
-from beast.logging import log_step
 from beast.data.samplers import ResumableRandomSampler
+from beast.logging import log_step
 from beast.models.model_utils.data_utils import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
@@ -52,9 +51,9 @@ class LossLoggerCallback(pl.Callback):
     def on_train_batch_end(
         self,
         trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-        outputs,
-        batch,
+        _pl_module: pl.LightningModule,
+        _outputs,
+        _batch,
         batch_idx: int,
     ) -> None:
         """Print per-step train losses at the configured interval."""
@@ -75,7 +74,7 @@ class LossLoggerCallback(pl.Callback):
     def on_validation_epoch_end(
         self,
         trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
+        _pl_module: pl.LightningModule,
     ) -> None:
         """Print aggregated val losses at the end of each validation run."""
         if trainer.sanity_checking:
@@ -118,8 +117,10 @@ class ValVisualizationCallback(pl.Callback):
                 val_loader = val_loader[0]
             batch = next(iter(val_loader))
             batch = pl_module.transfer_batch_to_device(batch, pl_module.device, dataloader_idx=0)
+            pl_module.eval()
             with torch.no_grad():
                 result = pl_module(batch)
+            pl_module.train()
             saved_paths = save_training_visuals(
                 self._vis_dir,
                 result=result,
@@ -133,7 +134,7 @@ class ValVisualizationCallback(pl.Callback):
         except Exception as exc:
             log_step(f'ValVisualizationCallback: failed to save initial visuals: {exc}', level='warning')
 
-    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+    def on_validation_epoch_start(self, _trainer: pl.Trainer, _pl_module: pl.LightningModule) -> None:
         """Reset per-epoch save flag at the start of each validation run."""
         self._saved_this_epoch = False
 
@@ -141,7 +142,7 @@ class ValVisualizationCallback(pl.Callback):
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
-        outputs,
+        _outputs,
         batch: dict,
         batch_idx: int,
     ) -> None:
@@ -183,7 +184,7 @@ class StepAccumulatorCallback(pl.Callback):
     def on_save_checkpoint(
         self,
         trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
+        _pl_module: pl.LightningModule,
         checkpoint: dict,
     ) -> None:
         """Inject total_steps_trained = prior steps + current job's global_step."""
@@ -224,7 +225,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
 
     log_step('Building IBL datasets (train / val splits)', level='info')
     dataset_cls = _resolve_dataset_class(
-        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
+        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset'),
     )
     train_dataset = dataset_cls(config, include_splits=['train'])
     val_dataset = dataset_cls(config, include_splits=['val'])
@@ -254,9 +255,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         drop_last=False,
     )
 
-    # ----------------------------------------------------------------------------------
-    # Set up and run training
-    # ----------------------------------------------------------------------------------
+    # set up and run training
 
     # load checkpoint early so we can read global_step and compute remaining steps
     max_fwdbwd_passes: int = int(training.get('max_fwdbwd_passes', 4000))
@@ -281,7 +280,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
             ckpt_path_for_trainer = None
         else:
             global_step_at_resume = int(
-                raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0))
+                raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0)),
             )
 
     max_steps_this_run: int = max(0, max_fwdbwd_passes - global_step_at_resume)
@@ -332,7 +331,6 @@ def train_sable(config: dict, model, output_dir: str | Path):
         )
     callbacks.append(StepAccumulatorCallback(callback_step_offset))
 
-    # precision
     precision: str | int = 32
     if training.get('use_amp', False):
         amp_dtype = str(training.get('amp_dtype', 'bf16')).lower()
