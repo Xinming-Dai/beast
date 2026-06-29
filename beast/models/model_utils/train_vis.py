@@ -35,6 +35,7 @@ def save_training_visuals(
         return []
 
     depth_target = getattr(result, 'depth_output', None)
+    depth_num_real_views = getattr(result, 'depth_num_real_views', None)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,7 @@ def save_training_visuals(
             targets[sample_idx],
             max_views=max_views,
             depth_target_views=depth_target_views,
+            depth_num_real_views=depth_num_real_views,
         )
         filename = f'step_{step:06d}_{_sanitize_filename(scene_name)}_sample{sample_idx:02d}.png'
         path = output_dir / filename
@@ -72,6 +74,7 @@ def build_render_target_visual(
     pad: int = 8,
     label_height: int = 18,
     depth_target_views: torch.Tensor | None = None,
+    depth_num_real_views: int | None = None,
 ) -> Image.Image:
     """Build a grid image with rendered and target views side by side.
 
@@ -82,6 +85,9 @@ def build_render_target_visual(
         pad: pixel padding between cells.
         label_height: pixel height for row labels.
         depth_target_views: optional ``[V, H, W]`` or ``[V, 1, H, W]`` depth maps.
+        depth_num_real_views: how many of the depth views have valid (non-pseudo) depth.
+            Views beyond this count are shown as a gray placeholder tile.
+            Defaults to all views when not provided.
 
     Returns:
         PIL Image with rows: render, target, (optionally) depth.
@@ -99,10 +105,14 @@ def build_render_target_visual(
         and int(depth_target_views.shape[0]) >= view_count
     )
     if has_depth:
-        depth_images = [
-            _depth_to_uint8(depth_target_views[idx], apply_cmap=True)
-            for idx in range(view_count)
-        ]
+        n_real = depth_num_real_views if depth_num_real_views is not None else view_count
+        depth_images = []
+        for idx in range(view_count):
+            if idx < n_real:
+                depth_images.append(_depth_to_uint8(depth_target_views[idx], apply_cmap=True))
+            else:
+                # pseudo/holdout view has no valid depth — show neutral gray tile
+                depth_images.append(np.full((height, width, 3), 180, dtype=np.uint8))
         dh, dw = depth_images[0].shape[:2]
         if (dh, dw) != (height, width):
             depth_images = [
