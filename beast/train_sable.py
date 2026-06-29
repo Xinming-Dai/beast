@@ -11,7 +11,7 @@ import yaml
 
 from beast.data.samplers import ResumableRandomSampler
 from beast.logging import log_step
-from beast.models.model_utils.data_utils import collate_with_correspondence_padding
+from beast.data.sable_dataset import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
 from beast.train import get_callbacks, pretty_print_config, reset_seeds
 

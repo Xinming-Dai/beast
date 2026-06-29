@@ -855,7 +855,7 @@ def infer_sable(
             - ``'ply_files'``: list of Path objects for all saved PLY files.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
-    from beast.models.model_utils.data_utils import collate_with_correspondence_padding
+    from beast.data.sable_dataset import collate_with_correspondence_padding
     from beast.models.model_utils.train_vis import save_training_visuals
     from beast.train_sable import _resolve_dataset_class
 

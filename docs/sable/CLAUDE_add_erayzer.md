@@ -35,7 +35,7 @@ namespace into `beast.models` and `beast.models.model_utils`.
 
 | Source (relative to `src/erayzer_core/training/`) | Destination filename |
 |---|---|
-| `data_utils.py` | `data_utils.py` |
+| `data_utils.py` | deleted — collate helpers moved to `beast/data/sable_dataset.py`; `SplitData` deleted entirely |
 | `latent_partition_cfg.py` | `latent_partition_cfg.py` |
 | `losses.py` | `losses.py` |
 | `patch_masking.py` | `patch_masking.py` (later deleted — see Post-Migration Removals) |
@@ -73,7 +73,7 @@ blind copy — each file needs the following fixes applied:
 `easydict` is not used in beast. All `edict(...)` calls create dot-accessible dicts. The
 drop-in replacement is `types.SimpleNamespace` from the standard library.
 
-Files affected: `erayzer.py`, `utils_gaussian.py`, `data_utils.py`, `losses.py`,
+Files affected: `erayzer.py`, `utils_gaussian.py`, `sable_dataset.py`, `losses.py`,
 `patch_masking.py`.
 
 Replacement pattern:
@@ -105,7 +105,7 @@ equivalents. Keep `import os` only if `os` is used for non-path operations (e.g.
 Per CLAUDE.md: use `X | Y`, `list[X]`, `dict[K, V]` syntax; avoid `typing` imports for these.
 
 Files affected: `utils_icp.py`, `utils_vits.py`, `utils_vda.py`, `latent_partition_cfg.py`,
-`data_utils.py`, `camera_overrides.py`, `camera_utils.py`, `gaussians_renderer.py`.
+`sable_dataset.py`, `camera_overrides.py`, `camera_utils.py`, `gaussians_renderer.py`.
 
 | Old | New |
 |---|---|
@@ -424,7 +424,7 @@ Set `model.merge_pcd.correspondence_cache_root` to `{output_dir}` so
 
 `valid_mask` (`[N]` bool, first N slots True) has been **removed** from the
 correspondence pipeline. It appeared in the erayzer source repo's dataset output,
-`data_utils.pad_correspondence_fields_to_batch_max`, and `ERayZer.forward`.
+`sable_dataset.pad_correspondence_fields_to_batch_max`, and `ERayZer.forward`.
 
 **For any future preprocessing scripts** that produce `.npz` correspondence bundles:
 do **not** include a `valid_mask` array. Produce `left_xy`, `right_xy`, and
