@@ -261,7 +261,7 @@ from `depth_map/` and correspondences from `litpose_correspondences/`:
 training:
   dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
   dataset_path: /path/to/output_dir/dataset
-  ibl_training_regime: all_views_reconstruction
+  training_regime: all_views_reconstruction
   val_split_ratio: 0.1
 
 model:

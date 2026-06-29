@@ -56,7 +56,7 @@ model:
   mask_ratio: 0.75
   merge_pcd:
     num_points: 3
-    debug_merged_pcd: false
+    debug_merged_pcd: true
     debug_merged_pcd_num_batches: 16
     correspondence_cache_root: path/to/litpose_correspondences/processed_correspondences
 
@@ -124,12 +124,10 @@ training:
   random_split: false
   random_shuffle: false
 
-  ibl_training_regime: all_views_reconstruction
+  training_regime: all_views_reconstruction
   num_views: 2
   num_input_views: 2
   num_target_views: 2
-  ibl_context_camera: left
-  ibl_target_camera: right
 
   view_selector:
     type: all

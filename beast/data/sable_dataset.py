@@ -67,7 +67,7 @@ class SABLEDataset(Dataset):
             config: full beast config dict. Reads keys:
                 ``training.dataset_path``, ``model.merge_pcd.correspondence_cache_root``,
                 ``model.vda.cache_root``, ``model.image_tokenizer.image_size``,
-                ``training.ibl_training_regime``, ``training.val_split_ratio``,
+                ``training.training_regime``, ``training.val_split_ratio``,
                 ``model.seed``.
             include_splits: for the precache directory format, only load pairs whose
                 ``split`` field is in this list (e.g. ``['train']``, ``['val']``).
@@ -104,7 +104,7 @@ class SABLEDataset(Dataset):
 
         self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
         self._training_regime: str = str(
-            training.get('ibl_training_regime', 'all_views_reconstruction')
+            training.get('training_regime', 'all_views_reconstruction')
         ).strip().lower()
 
     def __len__(self) -> int:
@@ -531,11 +531,22 @@ class SABLEDataset(Dataset):
 
         Returns:
             tuple of (context_indices, target_indices) as long tensors.
+
+        Raises:
+            ValueError: if ``training_regime`` is not a recognised built-in value.
+                Subclass and override this method to add a custom regime.
         """
-        all_idx = torch.arange(2, dtype=torch.long)
         if self._training_regime == 'all_views_reconstruction':
+            all_idx = torch.arange(2, dtype=torch.long)
             return all_idx, all_idx.clone()
-        return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+        elif self._training_regime == 'fixed_1to1':
+            return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+        else:
+            raise ValueError(
+                f'Unsupported training_regime: {self._training_regime!r}. '
+                'Built-in values: all_views_reconstruction, fixed_1to1. '
+                'To use a custom regime, subclass and override _resolve_view_indices.'
+            )
 
 
 class IBLTwoViewDataset(SABLEDataset):
@@ -564,7 +575,7 @@ class IBLTwoViewDataset(SABLEDataset):
     * ``model.vda.cache_root`` — precomputed VDA depth cache root
     * ``model.merge_pcd.correspondence_cache_root`` — precomputed correspondence cache root
     * ``model.image_tokenizer.image_size``
-    * ``training.ibl_training_regime``
+    * ``training.training_regime``
     * ``training.val_split_ratio``
     * ``model.seed``
     """
@@ -616,7 +627,7 @@ class IBLTwoViewDataset(SABLEDataset):
 
         self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
         self._training_regime: str = str(
-            training.get('ibl_training_regime', 'all_views_reconstruction')
+            training.get('training_regime', 'all_views_reconstruction')
         ).strip().lower()
 
     # ------------------------------------------------------------------
@@ -743,8 +754,47 @@ class IBLTwoViewDataset(SABLEDataset):
     # overrides
     # ------------------------------------------------------------------
 
+    def _resolve_view_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Resolve context (input) and target view indices for the training regime.
+
+        For ``all_views_reconstruction`` all views are both context and target.
+        For ``fixed_1to1`` index 0 is context, index 1 is target.
+        For ``pseudo_center_finetune`` all three views (left, right, pseudo center)
+        are context but only left and right (indices 0, 1) are targets for loss;
+        the pseudo center view has no ground truth so it is excluded from the loss.
+
+        Returns:
+            tuple of (context_indices, target_indices) as long tensors.
+
+        Raises:
+            ValueError: if ``training_regime`` is not a recognised built-in value.
+                Subclass and override this method to add a custom regime.
+        """
+        if self._training_regime == 'all_views_reconstruction':
+            all_idx = torch.arange(2, dtype=torch.long)
+            return all_idx, all_idx.clone()
+        elif self._training_regime == 'fixed_1to1':
+            return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+        elif self._training_regime == 'pseudo_center_finetune':
+            return (
+                torch.arange(3, dtype=torch.long),
+                torch.tensor([0, 1], dtype=torch.long),
+            )
+        else:
+            raise ValueError(
+                f'Unsupported training_regime: {self._training_regime!r}. '
+                'Built-in values: all_views_reconstruction, fixed_1to1, pseudo_center_finetune. '
+                'To use a custom regime, subclass and override _resolve_view_indices.'
+            )
+
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Load one stereo pair.
+        """Load one stereo pair, or a three-view bundle for ``pseudo_center_finetune``.
+
+        In ``pseudo_center_finetune`` mode a zero-filled pseudo center image is
+        appended as the third view so the encoder sees the same 3-view structure
+        as during Cheese3D center-camera-holdout pretraining.  The pseudo center
+        view's tokens are masked via ``context_full_mask`` and it is excluded from
+        ``target_indices``, so it contributes neither image context nor loss.
 
         Args:
             idx: dataset index.
@@ -752,7 +802,7 @@ class IBLTwoViewDataset(SABLEDataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``.
+            ``scene_name``, and (for ``pseudo_center_finetune``) ``context_full_mask``.
         """
         rec = self._records[idx]
 
@@ -764,8 +814,14 @@ class IBLTwoViewDataset(SABLEDataset):
             self._load_vda_depth_sable(rec.session_id, 'right', rec.right_source_frame_index),
         ]
 
-        image_tensor = torch.stack([left_img, right_img], dim=0)   # [V, 3, H, W]
-        depth_tensor = torch.stack(vda_depths, dim=0)               # [V, 1, H, W]
+        if self._training_regime == 'pseudo_center_finetune':
+            pseudo_center = torch.zeros_like(left_img)   # [3, H, W], black image
+            image_tensor = torch.stack([left_img, right_img, pseudo_center], dim=0)   # [3, 3, H, W]
+            pseudo_depth = torch.zeros(1, self._image_size, self._image_size, dtype=torch.float32)
+            depth_tensor = torch.stack([*vda_depths, pseudo_depth], dim=0)             # [3, 1, H, W]
+        else:
+            image_tensor = torch.stack([left_img, right_img], dim=0)   # [2, 3, H, W]
+            depth_tensor = torch.stack(vda_depths, dim=0)               # [2, 1, H, W]
 
         context_indices, target_indices = self._resolve_view_indices()
         correspondences = self._load_correspondences_sable(
@@ -775,7 +831,7 @@ class IBLTwoViewDataset(SABLEDataset):
             right_orig_size=(right_orig_w, right_orig_h),
         )
 
-        return {
+        result = {
             'image': image_tensor,
             'context_indices': context_indices,
             'target_indices': target_indices,
@@ -785,6 +841,12 @@ class IBLTwoViewDataset(SABLEDataset):
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
         }
+
+        if self._training_regime == 'pseudo_center_finetune':
+            # center view (index 2) is pseudo — zero out all its image tokens in the encoder
+            result['context_full_mask'] = torch.tensor([False, False, True], dtype=torch.bool)
+
+        return result
 
     # ------------------------------------------------------------------
     # VDA depth loading
@@ -796,20 +858,15 @@ class IBLTwoViewDataset(SABLEDataset):
         camera_name: str,
         source_frame_index: int,
     ) -> torch.Tensor:
-        """Load VDA depth from the configured cache root or the dataset layout.
+        """Load VDA depth from the configured cache root.
 
-        Path resolution (first that applies):
-
-        1. ``model.vda.cache_root`` is set →
-           ``{vda_cache_root}/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
-        2. ``training.dataset_path`` is set →
-           ``{dataset_root}/depth_map/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
-        3. Neither set → returns zeros with a debug log.
+        Path: ``{model.vda.cache_root}/{session_id}/{camera_name}/depth{source_frame_index:08d}.npy``
 
         Args:
             session_id: session identifier (subdirectory name).
             camera_name: camera subdirectory name (e.g. ``'left'``, ``'right'``).
-            source_frame_index: frame index used in the filename.
+            source_frame_index: raw IBL video frame index (parsed from the image filename,
+                e.g. ``img00045089.png`` → 45089); used as the depth filename suffix.
 
         Returns:
             float32 tensor [1, H, W] where H = W = ``image_size``.
@@ -824,25 +881,18 @@ class IBLTwoViewDataset(SABLEDataset):
         elif self._dataset_root is not None:
             depth_path = (
                 self._dataset_root
-                / 'depth_map'
                 / session_id
                 / camera_name
                 / f'depth{source_frame_index:08d}.npy'
             )
         else:
-            log_step(
-                f'no VDA cache root configured, returning zeros for session {session_id} '
-                f'camera {camera_name} frame {source_frame_index}',
-                level='debug',
-            )
             return torch.zeros(1, self._image_size, self._image_size, dtype=torch.float32)
         if not depth_path.exists():
-            log_step(
-                f'VDA depth not found (using zeros): {depth_path}. '
-                'Run beast extract_sable with vda.enabled: true to precompute.',
-                level='debug',
+            raise FileNotFoundError(
+                f'VDA depth not found: {depth_path}. '
+                'Run beast extract_sable with vda.enabled: true to precompute depth, '
+                'then set model.vda.cache_root to the extraction output directory.'
             )
-            return torch.zeros(1, self._image_size, self._image_size, dtype=torch.float32)
 
         depth_np = np.load(str(depth_path)).astype(np.float32)
         depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0)   # [1, 1, H, W]
@@ -1039,7 +1089,7 @@ class Cheese3DDataset(SABLEDataset):
       ``.npy`` calibration files and return ``c2w`` ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``
       in the batch dict so the model can skip its learned pose predictor.
     * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
-      ``training.ibl_training_regime``.
+      ``training.training_regime``.
     """
 
     def __init__(
@@ -1106,7 +1156,7 @@ class Cheese3DDataset(SABLEDataset):
 
         self._image_size: int = int(model_cfg['image_tokenizer']['image_size'])
         self._training_regime: str = str(
-            training.get('ibl_training_regime', 'all_views_reconstruction')
+            training.get('training_regime', 'all_views_reconstruction')
         ).strip().lower()
 
     def _load_records(  # type: ignore[override]
@@ -1293,11 +1343,22 @@ class Cheese3DDataset(SABLEDataset):
 
         Returns:
             tuple of (context_indices, target_indices) as long tensors.
+
+        Raises:
+            ValueError: if ``training_regime`` is not a recognised built-in value.
+                Subclass and override this method to add a custom regime.
         """
-        all_idx = torch.arange(self._num_views, dtype=torch.long)
         if self._training_regime in ('all_views_reconstruction', 'center_camera_holdout'):
+            all_idx = torch.arange(self._num_views, dtype=torch.long)
             return all_idx, all_idx.clone()
-        return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+        elif self._training_regime == 'fixed_1to1':
+            return torch.tensor([0], dtype=torch.long), torch.tensor([1], dtype=torch.long)
+        else:
+            raise ValueError(
+                f'Unsupported training_regime: {self._training_regime!r}. '
+                'Built-in values: all_views_reconstruction, center_camera_holdout, fixed_1to1. '
+                'To use a custom regime, subclass and override _resolve_view_indices.'
+            )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """Load one frame tuple (two or three views).

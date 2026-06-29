@@ -286,8 +286,8 @@ Supports two `training.dataset_path` layouts:
 | Key | Shape | Source |
 |---|---|---|
 | `image` | `[V, 3, H, W]` float32 0–1 | images resized to `model.image_tokenizer.image_size` |
-| `context_indices` | `[n_ctx]` long | from `ibl_training_regime` |
-| `target_indices` | `[n_tgt]` long | from `ibl_training_regime` |
+| `context_indices` | `[n_ctx]` long | from `training_regime` |
+| `target_indices` | `[n_tgt]` long | from `training_regime` |
 | `depth_vda` | `[V, 1, H, W]` float32 | `{model.vda.cache_root}/{session_id}/{camera}/{frame:06d}.npy` |
 | `leftcamera_xy` | `[512, 2]` float32 | `{model.merge_pcd.correspondence_cache_root}/litpose_correspondences/processed_correspondences/{session_id}/correspondences{pair_idx:08d}.npz`; coordinates rescaled to `image_size` space |
 | `rightcamera_xy` | `[512, 2]` float32 | same bundle; coordinates rescaled to `image_size` space |
@@ -310,7 +310,7 @@ as expected by `pixel_xy_to_pointcloud_flat_indices`.
 
 Config keys read: `training.dataset_path`, `model.merge_pcd.correspondence_cache_root`,
 `model.vda.cache_root`, `model.image_tokenizer.image_size`,
-`training.ibl_training_regime`.
+`training.training_regime`.
 
 #### `beast/train_erayzer.py`
 
