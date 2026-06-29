@@ -81,11 +81,20 @@ class SplitData(nn.Module):
             indices = torch.arange(total_views, dtype=torch.long)
             return indices, indices.clone()
 
+        # full context, partial target: all views are input, a subset are target.
+        # used for pseudo_center_finetune where the center view is context-only (no loss).
+        if num_input_views == total_views and num_target_views < total_views:
+            return (
+                torch.arange(total_views, dtype=torch.long),
+                torch.arange(num_target_views, dtype=torch.long),
+            )
+
         if num_input_views + num_target_views != total_views:
             raise ValueError(
                 'Unsupported view allocation: expected either disjoint '
-                '`num_input_views + num_target_views == num_views` or full-overlap '
-                '`num_input_views == num_target_views == num_views`.'
+                '`num_input_views + num_target_views == num_views`, full-overlap '
+                '`num_input_views == num_target_views == num_views`, or full-context '
+                '`num_input_views == num_views` with `num_target_views < num_views`.'
             )
 
         group_count = math.gcd(num_input_views, num_target_views)
@@ -130,6 +139,15 @@ class SplitData(nn.Module):
                 num_views, dtype=torch.long, device=device,
             ).unsqueeze(0).repeat(batch_size, 1)
             return indices, indices.clone()
+
+        if num_input_views == num_views and num_target_views < num_views:
+            input_indices = torch.arange(
+                num_views, dtype=torch.long, device=device,
+            ).unsqueeze(0).repeat(batch_size, 1)
+            target_indices = torch.arange(
+                num_target_views, dtype=torch.long, device=device,
+            ).unsqueeze(0).repeat(batch_size, 1)
+            return input_indices, target_indices
 
         assert (
             num_input_views + num_target_views == self.config['training']['num_views']

@@ -21,7 +21,6 @@ from beast.models.model_utils.utils_pe import get_2d_sincos_pos_embed
 from beast.models.model_utils.utils_rot import rot6d2mat, quat2mat
 from beast.models.model_utils.utils_gaussian import get_point_range_func, Renderer
 from beast.models.model_utils.utils_vis import build_stepback_c2ws
-from beast.models.model_utils.data_utils import SplitData
 
 from beast.models.model_utils.utils_vda import (
     extract_vda_depth,
@@ -391,23 +390,12 @@ class Sable(BaseLightningModel):
         self.upsampler = GaussiansUpsampler(self.config)
         self.range_func = get_point_range_func(self.config['model']['gaussians'])
         self.renderer = Renderer(self.config)
-        self.split_data = SplitData(self.config)
-
         # config backup
         self.config_bk = copy.deepcopy(self.config)
         self.render_interpolate = config['training'].get('render_interpolate', False)
 
         if config['model']['transformer'].get('fix_decoder', False):
             self.freeze_weights()
-
-        # training settings
-        if config['inference'] or config.get('evaluation', False):
-            if config['training'].get('random_inputs', False):
-                self.random_index = True
-            else:
-                self.random_index = False
-        else:
-            self.random_index = config['training'].get('random_split', False)
 
         # true when all views are input but only a subset are target (e.g. pseudo_center_finetune)
         num_views = config['training']['num_views']
@@ -1313,20 +1301,6 @@ class Sable(BaseLightningModel):
             input_idx = data['context_indices'].to(device=device, dtype=torch.long)
             target_idx = data['target_indices'].to(device=device, dtype=torch.long)
             return input_idx, target_idx
-
-        can_split_training_views = (
-            (not self.config['inference'])
-            and (not self.config.get('evaluation', False))
-            and num_real_views == self.config['training']['num_views']
-        )
-        if can_split_training_views:
-            _, _, input_idx, target_idx = self.split_data(
-                data, random_index=self.random_index
-            )
-            return (
-                input_idx.to(device=device, dtype=torch.long),
-                target_idx.to(device=device, dtype=torch.long),
-            )
 
         if num_real_views < self.config['training'].get('num_input_views', 5):
             input_count = self.config['training'].get('num_input_views', 5)

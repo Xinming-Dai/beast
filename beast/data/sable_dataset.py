@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, default_collate
 
 from beast.logging import log_step
 
@@ -1504,3 +1504,101 @@ class Cheese3DDataset(SABLEDataset):
                 mode='nearest',
             )
         return mask.squeeze(0)  # [1, S, S]
+
+def pad_correspondence_fields_to_batch_max(batch: list[dict]) -> list[dict]:
+    """Pad correspondence tensors to max length in batch so default_collate can stack.
+
+    Args:
+        batch: list of dicts, each containing correspondence tensors.
+
+    Returns:
+        list of dicts, each containing padded correspondence tensors.
+    """
+    if not batch:
+        return batch
+    keys = ('leftcamera_xy', 'rightcamera_xy', 'confidence')
+    if not all(k in batch[0] for k in keys):
+        return batch
+    max_n = max(int(sample['leftcamera_xy'].shape[0]) for sample in batch)
+    out: list[dict] = []
+    for sample in batch:
+        sample = dict(sample)
+        n = int(sample['leftcamera_xy'].shape[0])
+        if n < max_n:
+            pad = max_n - n
+            lt = sample['leftcamera_xy']
+            rt = sample['rightcamera_xy']
+            cf = sample['confidence']
+            sample['leftcamera_xy'] = torch.cat(
+                [lt, torch.full((pad, 2), -1.0, dtype=lt.dtype, device=lt.device)], dim=0,
+            )
+            sample['rightcamera_xy'] = torch.cat(
+                [rt, torch.full((pad, 2), -1.0, dtype=rt.dtype, device=rt.device)], dim=0,
+            )
+            sample['confidence'] = torch.cat(
+                [cf, torch.zeros(pad, dtype=cf.dtype, device=cf.device)], dim=0,
+            )
+        out.append(sample)
+    return out
+
+
+def normalize_optional_pose_fields(batch: list[dict]) -> list[dict]:
+    """Ensure optional pose supervision keys are consistent across a batch.
+
+    Some samples may not have pose supervision available. When any sample has
+    ``pose``, inject a zero placeholder plus ``pose_valid=False`` for the rest.
+
+    Args:
+        batch: list of sample dicts.
+
+    Returns:
+        list of sample dicts with consistent pose keys.
+    """
+    if not batch:
+        return batch
+    if not all(isinstance(sample, dict) for sample in batch):
+        return batch
+
+    pose_template = None
+    for sample in batch:
+        pose = sample.get('pose')
+        if isinstance(pose, torch.Tensor):
+            pose_template = pose
+            break
+
+    if pose_template is None:
+        return batch
+
+    pose_shape = tuple(pose_template.shape)
+    pose_valid_shape = pose_shape[:-1]
+    out: list[dict] = []
+    for sample in batch:
+        sample = dict(sample)
+        pose = sample.get('pose')
+        if isinstance(pose, torch.Tensor):
+            if 'pose_valid' not in sample:
+                sample['pose_valid'] = torch.ones(
+                    pose.shape[:-1],
+                    dtype=torch.bool,
+                    device=pose.device,
+                )
+        else:
+            sample['pose'] = torch.zeros(
+                pose_shape,
+                dtype=pose_template.dtype,
+                device=pose_template.device,
+            )
+            sample['pose_valid'] = torch.zeros(
+                pose_valid_shape,
+                dtype=torch.bool,
+                device=pose_template.device,
+            )
+        out.append(sample)
+    return out
+
+
+def collate_with_correspondence_padding(batch: list[Any]):
+    """Collate a batch with correspondence padding and optional pose normalisation."""
+    batch = normalize_optional_pose_fields(batch)
+    batch = pad_correspondence_fields_to_batch_max(batch)
+    return default_collate(batch)
