@@ -723,6 +723,35 @@ def _write_ply_ascii(path: Path, xyz: np.ndarray, rgb01: np.ndarray) -> None:
             f.write(f'{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n')
 
 
+def _flatten_mask_for_points(
+    mask: torch.Tensor | None,
+    sample_idx: int,
+    num_points: int,
+) -> np.ndarray | None:
+    """Flatten a per-sample foreground mask to align with a flattened point array.
+
+    Args:
+        mask: mask tensor with a leading batch dimension; either spatial
+            ``[B, V, 1, H, W]`` (foreground/background aligned with pixel-aligned
+            xyz/rgb) or patch-major ``[B, V, N]`` (aligned with a flat gaussian xyz
+            ordering).  ``None`` if unavailable.
+        sample_idx: batch index to select.
+        num_points: expected number of points ``N`` after flattening; used to guard
+            against ordering mismatches.
+
+    Returns:
+        float array of shape ``[N, 1]`` with values in ``{0, 1}`` (1 = foreground),
+        or ``None`` if the mask is unavailable or its size doesn't match ``num_points``.
+    """
+    if mask is None or not torch.is_tensor(mask) or sample_idx >= mask.shape[0]:
+        return None
+    sample_mask = mask[sample_idx].detach().float().cpu()
+    if sample_mask.dim() == 4:  # [V, 1, H, W] -> match permute(0, 2, 3, 1).reshape(-1, 1)
+        sample_mask = sample_mask.permute(0, 2, 3, 1)
+    mask01 = sample_mask.reshape(-1, 1).numpy()
+    return mask01 if mask01.shape[0] == num_points else None
+
+
 def save_gaussian_pointclouds(
     result: dict,
     output_dir: str | Path,
@@ -733,7 +762,10 @@ def save_gaussian_pointclouds(
 
     Uses pixel-aligned RGB from input images when ``result['pixelalign_xyz']`` and
     ``result['image']`` are both present and have matching point counts; otherwise
-    falls back to opacity-as-grayscale coloring.
+    falls back to opacity-as-grayscale coloring.  When a segmentation mask is present
+    (``result['target_mask']`` or ``result['target_gaussian_mask']``), background
+    points are recolored white so unregularized background geometry doesn't clutter
+    the point cloud.
 
     Requires ``open3d`` for binary PLY output; falls back to ASCII PLY when not
     installed.
@@ -741,8 +773,9 @@ def save_gaussian_pointclouds(
     Args:
         result: dict returned by ``model.get_model_outputs(batch)``.  Must contain
             ``'gaussians'`` (list of GaussianModel, one per batch item) and optionally
-            ``'pixelalign_xyz'`` ([B, v_input, 3, H_r, W_r]) and ``'image'``
-            ([B, V, 3, H, W] in [0, 1]).
+            ``'pixelalign_xyz'`` ([B, v_input, 3, H_r, W_r]), ``'image'``
+            ([B, V, 3, H, W] in [0, 1]), ``'target_mask'`` ([B, V, 1, H, W]), and
+            ``'target_gaussian_mask'`` ([B, V, hh*ww*ph*pw]).
         output_dir: root output directory; PLY files are written under
             ``output_dir / 'ply'``.
         batch_idx: used in the output filename
@@ -774,6 +807,8 @@ def save_gaussian_pointclouds(
         and torch.is_tensor(pixelalign_xyz)
         and torch.is_tensor(images)
     )
+    target_mask = result.get('target_mask')
+    target_gaussian_mask = result.get('target_gaussian_mask')
 
     saved = []
     for sample_idx, gs in enumerate(gaussians_list):
@@ -800,11 +835,17 @@ def save_gaussian_pointclouds(
             )
             if xyz.shape[0] == rgb_candidate.shape[0]:
                 rgb01 = rgb_candidate
+                mask01 = _flatten_mask_for_points(target_mask, sample_idx, xyz.shape[0])
+                if mask01 is not None:
+                    rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
 
         if rgb01 is None:
             xyz = gs.get_xyz.detach().float().cpu().numpy()
             opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
             rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
+            mask01 = _flatten_mask_for_points(target_gaussian_mask, sample_idx, xyz.shape[0])
+            if mask01 is not None:
+                rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
 
         if xyz.size == 0:
             continue

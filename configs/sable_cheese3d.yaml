@@ -5,7 +5,7 @@ model:
   model_class: sable
   seed: 0
   gaussians:
-    init_gs: false
+    init_gs: true
     n_gaussians: 1
     range_setting:
       type: linear_depth
@@ -66,6 +66,8 @@ model:
       - [-0.06357379,  0.98761488,  0.14344067,  0.05882564]
       - [ 0.89501598, -0.0071603,   0.4459766,  -0.01130054]
       - [ 0.,          0.,          0.,          1.        ]
+  mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
+  mask_l2_loss: false    # do not whiten the L2-loss target image background; train against raw frame
 
 optimizer:
   type: AdamW
@@ -84,7 +86,7 @@ training:
 
   # Cheese3D-specific dataset settings
   session_names:
-    - 20231031_B20_chew_bl_000    
+    - 20231031_B20_chew_bl_000
     - 20231031_B20_chew_bl_000
     - 20231031_B21_chew_bl_000
     - 20231031_B26_chew_bl_000
@@ -96,10 +98,9 @@ training:
     - 20231031_B31_chew_temperature_000
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
-  cheese3d_center_camera: TC
   use_camera_params: false
   use_segmentation:
-    enabled: false
+    enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
 
   # Validation
@@ -124,7 +125,7 @@ training:
 
   checkpoint_dir: path/to/ckpt_folder
   checkpoint_every: 10000
-  checkpoint_steps: [10000]
+  checkpoint_steps: [20000]
 
   resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
@@ -151,9 +152,9 @@ training:
   random_shuffle: false
 
   training_regime: all_views_reconstruction
-  num_views: 3
-  num_input_views: 3
-  num_target_views: 3
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
 
   view_selector:
     type: all
