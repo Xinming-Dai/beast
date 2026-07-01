@@ -22,18 +22,13 @@ def _save_icp_twoview3d_bundle(
     tgt_ply_name: str = 'icp_target_view1.ply',
     corr_npz_name: str = 'icp_correspondences.npz',
 ) -> None:
-    """Export pre-alignment PLYs + NPZ for twoview3d icp_with_keypoints.py.
+    """Export pre-alignment PLYs (always) + NPZ (when correspondences exist).
 
     Expects ``source_indices`` / ``target_indices`` as flat point indices into
     ``src_xyz`` / ``tgt_xyz`` (same convention as Sable merge_pcd Kabsch).
 
     twoview3d loads: np.load(npz)['source_indices'], ['target_indices'].
     """
-    if len(source_indices) < 3 or len(target_indices) < 3:
-        return
-    if len(source_indices) != len(target_indices):
-        return
-
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +42,10 @@ def _save_icp_twoview3d_bundle(
 
     o3d.io.write_point_cloud(str(save_path / src_ply_name), src_pcd)
     o3d.io.write_point_cloud(str(save_path / tgt_ply_name), tgt_pcd)
+
+    # the npz is only meaningful when there are enough matched correspondences for Kabsch
+    if len(source_indices) < 3 or len(source_indices) != len(target_indices):
+        return
 
     np.savez(
         str(save_path / corr_npz_name),
@@ -238,14 +237,7 @@ def _save_merged_pcd_single(
         corr_right_xy=corr_right_xy,
     )
 
-    if (
-        icp_pre_kabsch_src_xyz is not None
-        and icp_pre_kabsch_tgt_xyz is not None
-        and src_corr_idx is not None
-        and tgt_corr_idx is not None
-        and len(src_corr_idx) >= 3
-        and len(src_corr_idx) == len(tgt_corr_idx)
-    ):
+    if icp_pre_kabsch_src_xyz is not None and icp_pre_kabsch_tgt_xyz is not None:
         n_per_view = pts_np.shape[0] // v_target
         src_c = colors_np[:n_per_view]
         tgt_c = colors_np[n_per_view : 2 * n_per_view]
@@ -255,8 +247,8 @@ def _save_merged_pcd_single(
             tgt_xyz=icp_pre_kabsch_tgt_xyz,
             src_colors=src_c,
             tgt_colors=tgt_c,
-            source_indices=src_corr_idx,
-            target_indices=tgt_corr_idx,
+            source_indices=src_corr_idx or [],
+            target_indices=tgt_corr_idx or [],
         )
 
 
