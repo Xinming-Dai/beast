@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:30:00
+#SBATCH -t 0-00:15:00
 #SBATCH -J sable_cheese3d_infer
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/infer_sable_cheese3d_%j.log
 #SBATCH --export=ALL
@@ -16,11 +16,10 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-JOB_ID="${JOB_ID:-19104368}"
+JOB_ID="${JOB_ID:-19823857}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/$JOB_ID}"
-
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d_mask_geom_loss/$JOB_ID}"
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
 

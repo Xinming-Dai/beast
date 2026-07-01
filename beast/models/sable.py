@@ -154,6 +154,54 @@ def build_token_masks(
     return pixel_mask, gaussian_mask
 
 
+def build_segmentation_gaussian_mask(
+    seg_mask: torch.Tensor,
+    hh: int,
+    ww: int,
+    ph: int,
+    pw: int,
+) -> torch.Tensor:
+    """Rearrange a per-pixel foreground mask into a pixel-aligned per-Gaussian mask.
+
+    Args:
+        seg_mask: foreground mask of shape [B, V, 1, hh*ph, ww*pw]; 1 = foreground.
+        hh: token rows.
+        ww: token columns.
+        ph: pixels per token row (patch height).
+        pw: pixels per token column (patch width).
+
+    Returns:
+        float tensor [B, V, hh*ww*ph*pw]; 1.0 at foreground Gaussians, 0.0 at background.
+    """
+    return rearrange(
+        seg_mask,
+        'b v 1 (hh ph) (ww pw) -> b v (hh ww ph pw)',
+        hh=hh, ww=ww, ph=ph, pw=pw,
+    )
+
+
+def apply_target_mask_for_l2_loss(
+    target_img: torch.Tensor,
+    target_mask: torch.Tensor,
+    mask_l2_loss: bool,
+) -> torch.Tensor:
+    """Whiten background pixels in the L2-loss target image, if enabled.
+
+    Args:
+        target_img: raw target frame, [B, V, 3, H, W].
+        target_mask: foreground mask, [B, V, 1, H, W]; 1 = foreground.
+        mask_l2_loss: when True, background pixels are set to white (1.0) to match
+            the renderer's default background for transparent Gaussians; when False,
+            ``target_img`` is returned unchanged.
+
+    Returns:
+        target_img, optionally whitened in background regions.
+    """
+    if not mask_l2_loss:
+        return target_img
+    return target_img * target_mask + (1.0 - target_mask)
+
+
 class GaussiansUpsampler(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -1067,12 +1115,23 @@ class Sable(BaseLightningModel):
             pixelalign_xyz.append(img_aligned_xyz)
         pixelalign_xyz = torch.stack(pixelalign_xyz, dim=0)
 
-        # apply segmentation mask to target image: background → white to match the
-        # renderer's default white bg for transparent Gaussians
         target_img = data['image'][batch_idx, target_idx, ...]  # [b, v_target, 3, H, W]
+        target_mask = None
+        target_gaussian_mask = None
         if 'mask' in data:
             target_mask = data['mask'][batch_idx, target_idx, ...]  # [b, v_target, 1, H, W]
-            target_img = target_img * target_mask + (1.0 - target_mask)
+            target_img = apply_target_mask_for_l2_loss(
+                target_img, target_mask, self.config['model'].get('mask_l2_loss', True),
+            )
+            target_gaussian_mask = build_segmentation_gaussian_mask(
+                target_mask, self.hh, self.ww, self.ph, self.pw,
+            )
+
+        # apply segmentation mask to gs_reg_loss: penalise only foreground (mouse) points
+        if self.config['model'].get('mask_geom_loss', False) and target_gaussian_mask is not None:
+            gaussian_mask = (
+                target_gaussian_mask if gaussian_mask is None else gaussian_mask * target_gaussian_mask
+            )
 
         # return results
         result = SimpleNamespace(**{
@@ -1096,6 +1155,8 @@ class Sable(BaseLightningModel):
             'gs_reg_loss': gs_reg_loss,
             'pixel_mask': pixel_mask,
             'gaussian_mask': gaussian_mask,
+            'target_mask': target_mask,
+            'target_gaussian_mask': target_gaussian_mask,
             'frame_z': cls_3d_out,
             'img_tokens': img_tokens_out,
             'depth_z': dino_cls_out,

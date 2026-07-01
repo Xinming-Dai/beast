@@ -83,6 +83,10 @@ training:
   use_segmentation:
     enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
+
+model:
+  mask_geom_loss: true   # restrict gs_reg_loss to foreground (mouse) points only
+  mask_l2_loss: true      # whiten target-image background before the L2 loss (default)
 ```
 
 Expected layout:
@@ -109,17 +113,25 @@ enabled:
 
 The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 
-1. **Gaussian opacity**: background Gaussians (mask = 0) have their logit-opacity
-   forced to −10 (sigmoid ≈ 0, fully transparent).  The renderer fills those pixels
-   with its default white background `(1, 1, 1)`.
-2. **Target image**: the ground-truth frame used in the loss is
+1. **Target image** (requires `model.mask_l2_loss: true`, the default when a mask
+   is present): the ground-truth frame used in the L2 photometric loss is
    `raw * mask + (1 − mask)`, giving a white background in masked-out regions to
-   match the rendered output.
-3. **Depth map** (requires `model.vda.mask_depth: true`): after VDA generates depth
+   match the rendered output. Set `model.mask_l2_loss: false` to train the L2 loss
+   against the raw, unmasked frame instead — `target_mask` and
+   `target_gaussian_mask` are still computed either way, so `mask_geom_loss`, VDA
+   depth masking, and PLY export are unaffected by this flag.
+2. **Depth map** (requires `model.vda.mask_depth: true`): after VDA generates depth
    and `pseudo_pointcloud_normalized` normalises it to [−0.5, 0.5], background pixels
-   have their Z coordinate forced to 0.5 (the far end).  This ensures background
+   have their Z coordinate forced to −0.5 (the far end).  This ensures background
    Gaussians initialise far from the camera rather than at an arbitrary depth.  Raw
    images are always passed to VDA unmasked; masking is applied only after normalisation.
+3. **Geometry loss / gs_reg_loss** (requires `model.mask_geom_loss: true`): the
+   SAM3 mask is reshaped into a per-Gaussian weight tensor (same patch-major
+   `(hh ww ph pw)` layout as the pixel-aligned point cloud) and combined into the
+   `gaussian_mask` argument of `masked_gs_reg_loss`.  This restricts the point-cloud
+   regularization loss to foreground (mouse) Gaussians only, ignoring background
+   points.  When a token-keep `gaussian_mask` is also active (MAE-style training
+   masking), the two masks are combined elementwise so both conditions must hold.
 
 ## Running training
 
