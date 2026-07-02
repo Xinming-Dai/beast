@@ -532,7 +532,8 @@ class Sable(BaseLightningModel):
 
         Args:
             xyz: Gaussian positions, shape [b, v_input*n_per_view, 3].
-            features: Gaussian features, shape [b, v_input*n_per_view, d].
+            features: Gaussian features, shape
+                [b, v_input*n_per_view, (sh_degree+1)**2, 3].
             scaling: Gaussian scales, shape [b, v_input*n_per_view, 3].
             rotation: Gaussian rotations, shape [b, v_input*n_per_view, 4].
                 Used as the reference tensor for computing n_per_view.
@@ -544,14 +545,15 @@ class Sable(BaseLightningModel):
 
         Returns:
             Tuple of (xyz, features, scaling, rotation, opacity), each filtered
-            to shape [b, v_target*n_per_view, d].
+            to [b, v_target*n_per_view, ...], keeping its own trailing dims
+            (e.g. features stays 4D).
         """
         b = rotation.shape[0]
         n_per_view = rotation.shape[1] // v_input
         bidx = torch.arange(b, device=rotation.device).unsqueeze(-1)  # [b, 1]
         xyz_out, features_out, scaling_out, rotation_out, opacity_out = (
             t.reshape(b, v_input, n_per_view, -1)[bidx, target_pos]
-            .reshape(b, v_target * n_per_view, -1)
+            .reshape(b, v_target * n_per_view, *t.shape[2:])
             for t in (xyz, features, scaling, rotation, opacity)
         )
         return xyz_out, features_out, scaling_out, rotation_out, opacity_out
