@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from beast.models.sable import (
-    apply_target_mask_for_l2_loss,
+    whiten_background_for_l2_loss,
     build_segmentation_gaussian_mask,
     build_token_masks,
 )
@@ -95,7 +95,7 @@ class TestApplyTargetMaskForL2Loss:
         target_mask = torch.tensor([[[[[1.0, 1.0], [0.0, 0.0]]]]])
 
         # Act
-        result = apply_target_mask_for_l2_loss(target_img, target_mask, mask_l2_loss=False)
+        result = whiten_background_for_l2_loss(target_img, target_mask, mask_l2_loss=False)
 
         # Assert: raw image is returned unchanged
         assert torch.equal(result, target_img)
@@ -106,7 +106,7 @@ class TestApplyTargetMaskForL2Loss:
         target_mask = torch.tensor([[[[[1.0, 1.0], [0.0, 0.0]]]]])
 
         # Act
-        result = apply_target_mask_for_l2_loss(target_img, target_mask, mask_l2_loss=True)
+        result = whiten_background_for_l2_loss(target_img, target_mask, mask_l2_loss=True)
 
         # Assert: foreground stays raw (0), background becomes white (1)
         expected = (1.0 - target_mask).expand_as(target_img)
