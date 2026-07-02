@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from beast.models.sable import (
+    Sable,
     whiten_background_for_l2_loss,
     build_segmentation_gaussian_mask,
     build_token_masks,
@@ -144,3 +145,76 @@ class TestMaskedGsRegLossWithSegMask:
         # Assert: masked loss is ~0 (displacement only on background), unmasked is not
         assert loss_masked.item() == pytest.approx(0.0, abs=1e-6)
         assert loss_unmasked.item() > 0.1
+
+
+class TestSelectTargetGaussians:
+    """Test the Sable._select_target_gaussians static method."""
+
+    def test_select_target_gaussians_preserves_feature_dims(self) -> None:
+        # Arrange: features is 4D [b, v_input*n_per_view, sh_coeffs, 3], unlike
+        # the other Gaussian tensors which have a single trailing dim
+        b, v_input, v_target, n_per_view, sh_coeffs = 2, 3, 2, 4, 16
+        n_input = v_input * n_per_view
+        xyz = torch.rand(b, n_input, 3)
+        features = torch.rand(b, n_input, sh_coeffs, 3)
+        scaling = torch.rand(b, n_input, 3)
+        rotation = torch.rand(b, n_input, 4)
+        opacity = torch.rand(b, n_input, 1)
+        target_pos = torch.tensor([[0, 2], [1, 2]])
+
+        # Act
+        xyz_out, features_out, scaling_out, rotation_out, opacity_out = (
+            Sable._select_target_gaussians(
+                xyz=xyz,
+                features=features,
+                scaling=scaling,
+                rotation=rotation,
+                opacity=opacity,
+                target_pos=target_pos,
+                v_input=v_input,
+                v_target=v_target,
+            )
+        )
+
+        # Assert: features stays 4D instead of collapsing sh_coeffs and 3 together
+        n_out = v_target * n_per_view
+        assert features_out.shape == (b, n_out, sh_coeffs, 3)
+        assert xyz_out.shape == (b, n_out, 3)
+        assert scaling_out.shape == (b, n_out, 3)
+        assert rotation_out.shape == (b, n_out, 4)
+        assert opacity_out.shape == (b, n_out, 1)
+
+    def test_select_target_gaussians_selects_correct_views(self) -> None:
+        # Arrange: tag each view's Gaussians with its view idx so selection is checkable
+        b, v_input, v_target, n_per_view, sh_coeffs = 2, 3, 2, 4, 16
+        xyz = torch.arange(v_input, dtype=torch.float32).repeat_interleave(n_per_view)
+        xyz = xyz.view(1, -1, 1).expand(b, -1, 3).contiguous()
+        features = torch.rand(b, v_input * n_per_view, sh_coeffs, 3)
+        scaling = torch.rand(b, v_input * n_per_view, 3)
+        rotation = torch.rand(b, v_input * n_per_view, 4)
+        opacity = torch.rand(b, v_input * n_per_view, 1)
+        target_pos = torch.tensor([[0, 2], [1, 2]])
+
+        # Act
+        xyz_out, features_out, _, _, _ = Sable._select_target_gaussians(
+            xyz=xyz,
+            features=features,
+            scaling=scaling,
+            rotation=rotation,
+            opacity=opacity,
+            target_pos=target_pos,
+            v_input=v_input,
+            v_target=v_target,
+        )
+
+        # Assert: xyz_out encodes the selected view idx per batch item
+        expected_views = target_pos.repeat_interleave(n_per_view, dim=1)
+        assert torch.equal(xyz_out[..., 0], expected_views.float())
+        features_expected = features.view(b, v_input, n_per_view, sh_coeffs, 3)
+        for b_idx in range(b):
+            for out_pos, view_idx in enumerate(target_pos[b_idx].tolist()):
+                start = out_pos * n_per_view
+                end = start + n_per_view
+                assert torch.equal(
+                    features_out[b_idx, start:end], features_expected[b_idx, view_idx],
+                )
