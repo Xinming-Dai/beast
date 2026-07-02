@@ -180,7 +180,7 @@ def build_segmentation_gaussian_mask(
     )
 
 
-def apply_target_mask_for_l2_loss(
+def whiten_background_for_l2_loss(
     target_img: torch.Tensor,
     target_mask: torch.Tensor,
     mask_l2_loss: bool,
@@ -407,7 +407,7 @@ class Sable(BaseLightningModel):
 
         # use Kabsch for view merging
         merge_pcd_cfg = self.config['model'].get('merge_pcd', {})
-        self.num_icp_points = int(merge_pcd_cfg.get('num_points', 6))
+        self.num_icp_points = int(merge_pcd_cfg.get('num_points', 3))
         self.debug_merged_pcd = bool(merge_pcd_cfg.get('debug_merged_pcd', False))
 
         self.vda_mode = str(vda_cfg.get('mode', 'online')).strip().lower()
@@ -1120,8 +1120,8 @@ class Sable(BaseLightningModel):
         target_gaussian_mask = None
         if 'mask' in data:
             target_mask = data['mask'][batch_idx, target_idx, ...]  # [b, v_target, 1, H, W]
-            target_img = apply_target_mask_for_l2_loss(
-                target_img, target_mask, self.config['model'].get('mask_l2_loss', True),
+            target_img = whiten_background_for_l2_loss(
+                target_img, target_mask, self.config['model'].get('mask_l2_loss', False),
             )
             target_gaussian_mask = build_segmentation_gaussian_mask(
                 target_mask, self.hh, self.ww, self.ph, self.pw,
