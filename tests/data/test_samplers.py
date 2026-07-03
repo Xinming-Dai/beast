@@ -5,6 +5,7 @@ import torch
 
 from beast.data.samplers import (
     ContrastBatchSampler,
+    ResumableRandomSampler,
     contrastive_collate_fn,
     extract_anchor_indices,
 )
@@ -842,3 +843,78 @@ class TestContrastBatchSamplerWithRealDataset:
         # and that we have the expected number of unique indices
         unique_indices = torch.unique(batch['idx'])
         assert len(unique_indices) <= 8  # Should have at most 8 unique indices
+
+
+class TestResumableRandomSampler:
+    """Test the ResumableRandomSampler class."""
+
+    def test_len(self):
+        """__len__ returns the dataset size."""
+        sampler = ResumableRandomSampler(range(50), seed=0)
+        assert len(sampler) == 50
+
+    def test_basic_iteration(self):
+        """Yields all indices exactly once with no repeats."""
+        n = 30
+        sampler = ResumableRandomSampler(range(n), seed=7)
+        indices = list(sampler)
+        assert sorted(indices) == list(range(n))
+
+    def test_deterministic_permutation(self):
+        """Same seed and epoch produce the same permutation."""
+        sampler_a = ResumableRandomSampler(range(20), seed=42)
+        sampler_b = ResumableRandomSampler(range(20), seed=42)
+        assert list(sampler_a) == list(sampler_b)
+
+    def test_different_epochs_different_permutations(self):
+        """Different epochs produce different permutations."""
+        sampler = ResumableRandomSampler(range(50), seed=1)
+        epoch0 = list(sampler)
+        epoch1 = list(sampler)
+        assert epoch0 != epoch1
+
+    def test_epoch_increments_after_full_iteration(self):
+        """Epoch counter advances and pos resets after a full pass."""
+        sampler = ResumableRandomSampler(range(10), seed=0)
+        assert sampler._epoch == 0
+        list(sampler)
+        assert sampler._epoch == 1
+        assert sampler._pos == 0
+
+    def test_state_dict_mid_epoch_resume(self):
+        """Resuming from a saved state produces no gap or overlap."""
+        n = 40
+        split = 15
+        sampler = ResumableRandomSampler(range(n), seed=3)
+
+        # consume the first `split` items and capture state
+        it = iter(sampler)
+        first_part = [next(it) for _ in range(split)]
+        saved = sampler.state_dict()
+
+        # reference: full epoch from a fresh sampler with the same seed/epoch
+        ref = ResumableRandomSampler(range(n), seed=3)
+        full_epoch = list(ref)
+
+        # resume from the saved state
+        resumed = ResumableRandomSampler(range(n), seed=3)
+        resumed.load_state_dict(saved)
+        second_part = list(resumed)
+
+        assert first_part + second_part == full_epoch
+
+    def test_load_state_dict_fresh_epoch(self):
+        """Loading state with pos=0, epoch=0 is identical to a fresh sampler."""
+        sampler_a = ResumableRandomSampler(range(25), seed=5)
+        sampler_b = ResumableRandomSampler(range(25), seed=5)
+        sampler_b.load_state_dict({'epoch': 0, 'pos': 0, 'seed': 5})
+        assert list(sampler_a) == list(sampler_b)
+
+    def test_state_dict_keys(self):
+        """state_dict contains the expected keys."""
+        sampler = ResumableRandomSampler(range(10), seed=9)
+        sd = sampler.state_dict()
+        assert set(sd.keys()) == {'epoch', 'pos', 'seed'}
+        assert sd['epoch'] == 0
+        assert sd['pos'] == 0
+        assert sd['seed'] == 9

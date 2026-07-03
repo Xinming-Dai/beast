@@ -2,6 +2,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -13,8 +14,10 @@ from PIL import Image
 from beast.inference import (
     ImagePredictionHandler,
     VideoPredictionHandler,
+    _flatten_mask_for_points,
     predict_images,
     predict_video,
+    save_gaussian_pointclouds,
 )
 
 
@@ -608,3 +611,100 @@ class TestPredictVideo:
         # Assert
         assert 'frames_processed' in result
         assert result['frames_processed'] == 2
+
+
+def _read_ply_colors(path: Path) -> np.ndarray:
+    """Read per-point RGB colors (in [0, 1]) back from a saved PLY file."""
+    import open3d as o3d
+
+    pcd = o3d.io.read_point_cloud(str(path))
+    return np.asarray(pcd.colors)
+
+
+class TestFlattenMaskForPoints:
+    """Test the _flatten_mask_for_points function."""
+
+    def test_flatten_mask_for_points_spatial(self) -> None:
+        # Arrange: [B, V, 1, H, W], first view foreground, second view background
+        mask = torch.zeros(1, 2, 1, 2, 2)
+        mask[:, 0] = 1.0
+
+        # Act
+        result = _flatten_mask_for_points(mask, sample_idx=0, num_points=8)
+
+        # Assert
+        assert result is not None
+        assert result.shape == (8, 1)
+        assert np.all(result[:4] == 1.0)
+        assert np.all(result[4:] == 0.0)
+
+    def test_flatten_mask_for_points_gaussian(self) -> None:
+        # Arrange: [B, V, N], first view foreground, second view background
+        mask = torch.zeros(1, 2, 4)
+        mask[:, 0] = 1.0
+
+        # Act
+        result = _flatten_mask_for_points(mask, sample_idx=0, num_points=8)
+
+        # Assert
+        assert result is not None
+        assert result.shape == (8, 1)
+        assert np.all(result[:4] == 1.0)
+        assert np.all(result[4:] == 0.0)
+
+    def test_flatten_mask_for_points_none_when_mask_missing(self) -> None:
+        assert _flatten_mask_for_points(None, sample_idx=0, num_points=8) is None
+
+    def test_flatten_mask_for_points_none_on_size_mismatch(self) -> None:
+        # Arrange
+        mask = torch.ones(1, 2, 1, 2, 2)
+
+        # Act / Assert
+        assert _flatten_mask_for_points(mask, sample_idx=0, num_points=999) is None
+
+
+class TestSaveGaussianPointclouds:
+    """Test the save_gaussian_pointclouds function."""
+
+    @pytest.fixture
+    def temp_output_dir(self):
+        temp_output = Path(tempfile.mkdtemp())
+        yield temp_output
+        shutil.rmtree(temp_output)
+
+    def test_save_gaussian_pointclouds_whitens_background(self, temp_output_dir) -> None:
+        # Arrange: 1 view, 2x2 pixel grid; left column foreground, right column background
+        gs = Mock()
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, 1, 3, 2, 2),
+            'image': torch.zeros(1, 1, 3, 2, 2),
+            'target_mask': torch.tensor([[[[[1.0, 0.0], [1.0, 0.0]]]]]),
+        }
+
+        # Act
+        saved = save_gaussian_pointclouds(result, temp_output_dir, batch_idx=0)
+
+        # Assert
+        assert len(saved) == 1
+        rgb = _read_ply_colors(saved[0])
+        # right column (flattened indices 1, 3) is background -> white
+        assert np.allclose(rgb[[1, 3]], 1.0)
+        assert np.allclose(rgb[[0, 2]], 0.0)
+
+    def test_save_gaussian_pointclouds_no_mask_keeps_colors(self, temp_output_dir) -> None:
+        # Arrange: no mask present -> colors pass through unchanged
+        gs = Mock()
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, 1, 3, 2, 2),
+            'image': torch.full((1, 1, 3, 2, 2), 0.5),
+        }
+
+        # Act
+        saved = save_gaussian_pointclouds(result, temp_output_dir, batch_idx=0)
+
+        # Assert
+        assert len(saved) == 1
+        rgb = _read_ply_colors(saved[0])
+        assert np.allclose(rgb, 0.5, atol=1.0 / 255)

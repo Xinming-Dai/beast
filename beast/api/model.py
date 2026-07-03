@@ -135,6 +135,9 @@ class Model:
     def train(self, output_dir: str | Path = 'runs/default') -> None:
         """Train the model using PyTorch Lightning.
 
+        Dispatches to an Sable-specific training loop for Sable models and
+        to the generic beast training loop for all other model types.
+
         Parameters
         ----------
         output_dir: Directory to save checkpoints
@@ -145,6 +148,69 @@ class Model:
         train_fn = TRAIN_REGISTRY[model_type]
         with chdir(self.model_dir):
             self.model = train_fn(self.config, self.model, output_dir=self.model_dir)
+
+    def infer_sable(
+        self,
+        dataset_path: str | Path | None = None,
+        output_dir: str | Path | None = None,
+        vda_cache_root: str | Path | None = None,
+        correspondence_cache_root: str | Path | None = None,
+        splits: list[str] | None = None,
+        save_visuals: bool = False,
+        max_batches: int | None = None,
+        session_names: list[str] | str | None = None,
+    ) -> dict[str, Any]:
+        """Run Sable inference over a scene dataset and save PLY point clouds.
+
+        Args:
+            dataset_path: path to the scene dataset. For IBL: raw frames root
+                (``leftCamera.video/`` / ``rightCamera.video/`` layout). For
+                Cheese3D: root Cheese3D directory.
+            output_dir: root directory for outputs; defaults to <model_dir>/inference.
+            vda_cache_root: root directory of precomputed VDA depth cache. When
+                ``None``, the value from the saved training config is used.
+            correspondence_cache_root: root directory of precomputed correspondence
+                cache. When ``None``, the value from the saved training config is used.
+            splits: dataset splits to run inference on (default: ['train', 'val']).
+            save_visuals: whether to also save render-vs-target PNG grids.
+            max_batches: stop after this many batches; None runs the full dataset.
+            session_names: session IDs to load. Accepts a list or a single string.
+                When ``None``, the value from the saved training config is used.
+
+        Returns:
+            dict with keys 'output_dir', 'num_batches', 'ply_files', 'vis_files'.
+        """
+        from beast.inference import infer_sable as _infer_sable
+
+        config = {**self.config}
+        config['inference'] = True
+        config['training'] = {**config.get('training', {})}
+        if dataset_path is not None:
+            config['training']['dataset_path'] = str(dataset_path)
+        if session_names is not None:
+            config['training']['session_names'] = session_names
+        if vda_cache_root is not None:
+            config['model'] = {**config.get('model', {})}
+            config['model']['vda'] = {**config['model'].get('vda', {})}
+            config['model']['vda']['cache_root'] = str(vda_cache_root)
+        if correspondence_cache_root is not None:
+            config['model'] = config.get('model', {})
+            config['model']['merge_pcd'] = {**config['model'].get('merge_pcd', {})}
+            config['model']['merge_pcd']['correspondence_cache_root'] = str(correspondence_cache_root)
+
+        output_dir = Path(output_dir) if output_dir else (self.model_dir or Path('inference'))
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model.to(device)
+
+        return _infer_sable(
+            config=config,
+            model=self.model,
+            output_dir=output_dir,
+            save_visuals=save_visuals,
+            max_batches=max_batches,
+            include_splits=splits,
+        )
 
     def predict_images(
         self,

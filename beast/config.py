@@ -33,7 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from beast.models.beast3d.beast3d_config import Beast3DModelConfig
 from beast.models.beast_resnet.beast_resnet_config import ResnetModelConfig
@@ -119,9 +119,40 @@ class Beast3DBeastConfig(BaseModel):
     inference: bool = False
 
 
+class SableModelConfig(BaseModel):
+    """Model config for the SABLE model."""
+    model_config = ConfigDict(extra='allow')
+    model_class: Literal['sable']
+
+
+class SableTrainingConfig(BaseModel):
+    """Training config for SABLE."""
+    model_config = ConfigDict(extra='allow')
+    dataset_name: str
+    dataset_path: str | None = None
+    batch_size_per_gpu: int = 1
+    num_workers: int = 8
+
+
+class SableOptimizerConfig(BaseModel):
+    """Optimizer config for SABLE."""
+    model_config = ConfigDict(extra='allow')
+    lr: float
+    type: str = 'AdamW'
+
+
+class SableConfig(BaseModel):
+    """Top-level config for SABLE model training."""
+    model_config = ConfigDict(extra='allow')
+    model: SableModelConfig
+    training: SableTrainingConfig
+    optimizer: SableOptimizerConfig
+
+
 _MODEL_CONFIG_CLASSES: dict[str, type[BaseModel]] = {
     'erayzer': ERayZerBeastConfig,
     'beast3d': Beast3DBeastConfig,
+    'sable': SableConfig,
 }
 
 

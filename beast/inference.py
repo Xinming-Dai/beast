@@ -4,13 +4,17 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import cv2
 import lightning.pytorch as pl
 import numpy as np
+import cv2
 import torch
+import torch.nn.functional as F
 import yaml
 from PIL import Image
+from torchvision import transforms
+from typeguard import typechecked
 
+from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
@@ -585,3 +589,385 @@ def predict_video(
         save_reconstructions=save_reconstructions,
         save_latents=save_latents,
     )
+
+
+def _load_image_tensor(path: Path, image_size: int) -> torch.Tensor:
+    """Load and resize an image to a square tensor in [0, 1].
+
+    Args:
+        path: path to the image file.
+        image_size: target height and width in pixels.
+
+    Returns:
+        float tensor of shape [3, image_size, image_size].
+    """
+    img = Image.open(path).convert('RGB')
+    tf = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+    ])
+    return tf(img)
+
+
+@typechecked
+def predict_sable(
+    model: BaseLightningModel,
+    view_images: list[list[str | Path]],
+    image_size: int = 320,
+    input_indices: list[int] | None = None,
+    target_indices: list[int] | None = None,
+    device: str = 'cuda',
+) -> list[dict[str, Any]]:
+    """Run Sable inference on one or more scenes, each with multiple views.
+
+    Each element of ``view_images`` is a list of image paths representing the V
+    views for one scene (batch item).  All scenes must have the same number of
+    views.
+
+    Args:
+        model: trained Sable model.
+        view_images: outer list length B (batch), inner list length V (views).
+            Each path points to an RGB image for that view.
+        image_size: images are resized to (image_size × image_size) before
+            being passed to the model.
+        input_view_indices: 0-based view indices to use as encoder inputs.  When
+            None, all views are used as input.
+        target_view_indices: 0-based view indices to render.  When None, all views
+            are rendered.
+        device: torch device string ('cuda' or 'cpu').
+
+    Returns:
+        list of dicts (one per batch item) with keys:
+            - 'render': rendered images tensor [V_target, 3, H, W] in [0, 1].
+            - 'render_video': interpolated video tensor [T, 3, H, W] or None.
+            - 'c2w': predicted camera-to-world matrices [V, 4, 4].
+            - 'depth_output': VDA depth maps [V_input, H, W].
+    """
+    if not view_images:
+        return []
+
+    num_views = len(view_images[0])
+    if any(len(views) != num_views for views in view_images):
+        raise ValueError('all scenes must have the same number of views')
+
+    # build image batch [B, V, 3, H, W]
+    batch_tensors = []
+    for views in view_images:
+        view_tensors = torch.stack(
+            [_load_image_tensor(Path(p), image_size) for p in views],
+            dim=0,
+        )  # [V, 3, H, W]
+        batch_tensors.append(view_tensors)
+    images = torch.stack(batch_tensors, dim=0).to(device)  # [B, V, 3, H, W]
+
+    batch_size = images.shape[0]
+
+    # build index tensors
+    if input_indices is None:
+        idx_input_view = torch.arange(num_views, device=device).unsqueeze(0).expand(batch_size, -1)
+    else:
+        idx_input_view = torch.tensor(input_indices, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    if target_indices is None:
+        idx_target_view = torch.arange(num_views, device=device).unsqueeze(0).expand(batch_size, -1)
+    else:
+        idx_target_view = torch.tensor(target_indices, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    batch_dict = {
+        'image': images,
+        'input_indices': idx_input_view,
+        'target_indices': idx_target_view,
+    }
+
+    model = model.to(device).eval()
+    with torch.no_grad():
+        out = model.get_model_outputs(batch_dict)
+
+    results = []
+    for b_i in range(batch_size):
+        render = out['render'][b_i].clamp(0.0, 1.0)         # [V_target, 3, H, W]
+        render_video = (
+            out['render_video'][b_i].clamp(0.0, 1.0)
+            if out.get('render_video') is not None
+            else None
+        )
+        results.append({
+            'render': render,
+            'render_video': render_video,
+            'c2w': out['c2w'][b_i],
+            'depth_output': out['depth_output'][b_i] if out['depth_output'] is not None else None,
+        })
+
+    return results
+
+
+def _write_ply_ascii(path: Path, xyz: np.ndarray, rgb01: np.ndarray) -> None:
+    """Write a point cloud as an ASCII PLY file without open3d.
+
+    Args:
+        path: output .ply file path.
+        xyz: float array of shape [N, 3] with x, y, z coordinates.
+        rgb01: float array of shape [N, 3] with RGB values in [0, 1].
+    """
+    rgb_u8 = (rgb01 * 255.0).round().clip(0, 255).astype(np.uint8)
+    with open(path, 'w') as f:
+        f.write(
+            'ply\nformat ascii 1.0\nelement vertex %d\n'
+            'property float x\nproperty float y\nproperty float z\n'
+            'property uchar red\nproperty uchar green\nproperty uchar blue\n'
+            'end_header\n' % len(xyz)
+        )
+        for i in range(len(xyz)):
+            x, y, z = xyz[i]
+            r, g, b = rgb_u8[i]
+            f.write(f'{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n')
+
+
+def _flatten_mask_for_points(
+    mask: torch.Tensor | None,
+    sample_idx: int,
+    num_points: int,
+) -> np.ndarray | None:
+    """Flatten a per-sample foreground mask to align with a flattened point array.
+
+    Args:
+        mask: mask tensor with a leading batch dimension; either spatial
+            ``[B, V, 1, H, W]`` (foreground/background aligned with pixel-aligned
+            xyz/rgb) or patch-major ``[B, V, N]`` (aligned with a flat gaussian xyz
+            ordering).  ``None`` if unavailable.
+        sample_idx: batch index to select.
+        num_points: expected number of points ``N`` after flattening; used to guard
+            against ordering mismatches.
+
+    Returns:
+        float array of shape ``[N, 1]`` with values in ``{0, 1}`` (1 = foreground),
+        or ``None`` if the mask is unavailable or its size doesn't match ``num_points``.
+    """
+    if mask is None or not torch.is_tensor(mask) or sample_idx >= mask.shape[0]:
+        return None
+    sample_mask = mask[sample_idx].detach().float().cpu()
+    if sample_mask.dim() == 4:  # [V, 1, H, W] -> match permute(0, 2, 3, 1).reshape(-1, 1)
+        sample_mask = sample_mask.permute(0, 2, 3, 1)
+    mask01 = sample_mask.reshape(-1, 1).numpy()
+    return mask01 if mask01.shape[0] == num_points else None
+
+
+def save_gaussian_pointclouds(
+    result: dict,
+    output_dir: str | Path,
+    batch_idx: int,
+    max_samples: int | None = None,
+) -> list[Path]:
+    """Save Gaussian centers from one Sable batch output as PLY point clouds.
+
+    Uses pixel-aligned RGB from input images when ``result['pixelalign_xyz']`` and
+    ``result['image']`` are both present and have matching point counts; otherwise
+    falls back to opacity-as-grayscale coloring.  When a segmentation mask is present
+    (``result['target_mask']`` or ``result['target_gaussian_mask']``), background
+    points are recolored white so unregularized background geometry doesn't clutter
+    the point cloud.
+
+    Requires ``open3d`` for binary PLY output; falls back to ASCII PLY when not
+    installed.
+
+    Args:
+        result: dict returned by ``model.get_model_outputs(batch)``.  Must contain
+            ``'gaussians'`` (list of GaussianModel, one per batch item) and optionally
+            ``'pixelalign_xyz'`` ([B, v_input, 3, H_r, W_r]), ``'image'``
+            ([B, V, 3, H, W] in [0, 1]), ``'target_mask'`` ([B, V, 1, H, W]), and
+            ``'target_gaussian_mask'`` ([B, V, hh*ww*ph*pw]).
+        output_dir: root output directory; PLY files are written under
+            ``output_dir / 'ply'``.
+        batch_idx: used in the output filename
+            ``pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply``.
+        max_samples: cap on the number of batch items to save.  ``None`` saves all.
+
+    Returns:
+        list of Path objects for the PLY files that were written.
+    """
+    gaussians_list = result.get('gaussians')
+    if not gaussians_list:
+        return []
+
+    output_dir = Path(output_dir)
+    ply_dir = output_dir / 'ply'
+    ply_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import open3d as o3d
+        has_o3d = True
+    except ImportError:
+        has_o3d = False
+
+    pixelalign_xyz = result.get('pixelalign_xyz')
+    images = result.get('image')
+    use_pixel_colors = (
+        pixelalign_xyz is not None
+        and images is not None
+        and torch.is_tensor(pixelalign_xyz)
+        and torch.is_tensor(images)
+    )
+    target_mask = result.get('target_mask')
+    target_gaussian_mask = result.get('target_gaussian_mask')
+
+    saved = []
+    for sample_idx, gs in enumerate(gaussians_list):
+        if max_samples is not None and sample_idx >= max_samples:
+            break
+
+        rgb01 = None
+        if use_pixel_colors and sample_idx < pixelalign_xyz.shape[0] and sample_idx < images.shape[0]:
+            xyz = (
+                pixelalign_xyz[sample_idx]
+                .detach().float().cpu()
+                .permute(0, 2, 3, 1)
+                .reshape(-1, 3)
+                .numpy()
+            )
+            xyz[:, [1, 2]] *= -1
+            rgb_candidate = (
+                images[sample_idx]
+                .detach().float().cpu()
+                .clamp(0, 1)
+                .permute(0, 2, 3, 1)
+                .reshape(-1, 3)
+                .numpy()
+            )
+            if xyz.shape[0] == rgb_candidate.shape[0]:
+                rgb01 = rgb_candidate
+                mask01 = _flatten_mask_for_points(target_mask, sample_idx, xyz.shape[0])
+                if mask01 is not None:
+                    rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
+
+        if rgb01 is None:
+            xyz = gs.get_xyz.detach().float().cpu().numpy()
+            opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
+            rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
+            mask01 = _flatten_mask_for_points(target_gaussian_mask, sample_idx, xyz.shape[0])
+            if mask01 is not None:
+                rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
+
+        if xyz.size == 0:
+            continue
+
+        out_ply = ply_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
+
+        if has_o3d:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(xyz)
+            pcd.colors = o3d.utility.Vector3dVector(rgb01)
+            o3d.io.write_point_cloud(str(out_ply), pcd)
+        else:
+            _write_ply_ascii(out_ply, xyz, rgb01)
+
+        color_src = 'RGB from input views' if rgb01 is not None and use_pixel_colors else 'opacity grayscale'
+        log_step(f'Saved point cloud: {out_ply} ({xyz.shape[0]} points, {color_src})', level='info')
+        saved.append(out_ply)
+
+    return saved
+
+
+def infer_sable(
+    config: dict,
+    model,
+    output_dir: str | Path,
+    save_pointclouds: bool = True,
+    save_visuals: bool = False,
+    max_batches: int | None = None,
+    include_splits: list[str] | None = None,
+) -> dict:
+    """Run Sable inference over an IBL dataset and optionally save PLY point clouds.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        model: trained Sable Lightning model instance.
+        output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``
+            and optional PNG visuals under ``output_dir/png/``.
+        save_pointclouds: whether to save ``.ply`` files for each batch.
+        save_visuals: whether to save render-vs-target PNG grids for each batch.
+        max_batches: stop after this many batches.  ``None`` runs the full dataset.
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+            both ``'train'`` and ``'val'``.
+
+    Returns:
+        dict with keys:
+            - ``'output_dir'``: str path of the output directory.
+            - ``'num_batches'``: number of batches processed.
+            - ``'ply_files'``: list of Path objects for all saved PLY files.
+            - ``'vis_files'``: list of Path objects for all saved PNG grids.
+    """
+    from beast.data.sable_dataset import collate_with_correspondence_padding
+    from beast.models.model_utils.train_vis import save_training_visuals
+    from beast.train_sable import _resolve_dataset_class
+
+    if include_splits is None:
+        include_splits = ['train', 'val']
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    training = config['training']
+    dataset_cls = _resolve_dataset_class(
+        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
+    )
+    dataset = dataset_cls(config, include_splits=include_splits)
+    log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
+
+    num_workers = int(training.get('num_workers', 4))
+    batch_size = int(training.get('batch_size_per_gpu', 1))
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_with_correspondence_padding,
+        drop_last=False,
+    )
+
+    device = next(model.parameters()).device
+    model.eval()
+
+    all_ply: list[Path] = []
+    all_vis: list[Path] = []
+    num_batches = 0
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            batch = {
+                k: v.to(device) if torch.is_tensor(v) else v
+                for k, v in batch.items()
+            }
+
+            result = model.get_model_outputs(batch)
+
+            if save_pointclouds:
+                ply_paths = save_gaussian_pointclouds(result, output_dir, batch_idx)
+                all_ply.extend(ply_paths)
+
+            if save_visuals:
+                vis_paths = save_training_visuals(
+                    output_dir / 'png',
+                    result=result,
+                    batch=batch,
+                    step=batch_idx,
+                )
+                all_vis.extend(vis_paths or [])
+
+            num_batches += 1
+
+    log_step(
+        f'infer_sable: processed {num_batches} batches, '
+        f'{len(all_ply)} PLY files, {len(all_vis)} PNG grids',
+        level='info',
+    )
+
+    return {
+        'output_dir': str(output_dir),
+        'num_batches': num_batches,
+        'ply_files': all_ply,
+        'vis_files': all_vis,
+    }

@@ -1,5 +1,8 @@
 """Configuration loading, config overrides, and camera calibration for BEAST."""
+"""Configuration loading, config overrides, and camera calibration for BEAST."""
 
+import csv
+import logging
 import csv
 import logging
 from pathlib import Path
@@ -62,7 +65,10 @@ def apply_config_overrides(config: dict, overrides: dict | list) -> dict:
     """
 
     if isinstance(overrides, list):
-        overrides = {item.split('=')[0]: item.split('=')[1] for item in overrides}
+        overrides = {
+            item.split('=', 1)[0]: yaml.safe_load(item.split('=', 1)[1])
+            for item in overrides
+        }
 
     for field, value in overrides.items():
         keys = field.split('.')

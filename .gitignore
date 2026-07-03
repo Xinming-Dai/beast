@@ -198,3 +198,6 @@ configs/multiview/erayzer_cheese3d_ft.yaml
 configs/multiview/beast3d_cheese3d_ft.yaml
 # local model checkpoints (machine-specific, large)
 checkpoints/
+
+# 3D model
+metric_checkpoint/
