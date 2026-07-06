@@ -325,7 +325,7 @@ def pseudo_pointcloud_normalized(
     if fg_mask is not None:
         Z = torch.where(fg_mask > 0.5, Z, Z.new_full((), -0.5))
 
-    points_hw = torch.stack([-X, Y, Z], dim=-1)
+    points_hw = torch.stack([X, Y, Z], dim=-1) * -1
     points = rearrange(
         points_hw,
         '(hh ph) (ww pw) c -> (hh ww ph pw) c',
