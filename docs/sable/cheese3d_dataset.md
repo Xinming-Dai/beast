@@ -86,7 +86,7 @@ training:
 
 model:
   mask_geom_loss: true   # restrict gs_reg_loss to foreground (mouse) points only
-  mask_l2_loss: true      # whiten target-image background before the L2 loss (default)
+  mask_l2_loss: true      # restrict the L2 photometric loss to foreground (mouse) pixels only
 ```
 
 Expected layout:
@@ -113,13 +113,14 @@ enabled:
 
 The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 
-1. **Target image** (requires `model.mask_l2_loss: true`, the default when a mask
-   is present): the ground-truth frame used in the L2 photometric loss is
-   `raw * mask + (1 − mask)`, giving a white background in masked-out regions to
-   match the rendered output. Set `model.mask_l2_loss: false` to train the L2 loss
-   against the raw, unmasked frame instead — `target_mask` and
-   `target_gaussian_mask` are still computed either way, so `mask_geom_loss`, VDA
-   depth masking, and PLY export are unaffected by this flag.
+1. **L2 photometric loss** (requires `model.mask_l2_loss: true`): the segmentation
+   mask is combined into `pixel_mask` (the same per-pixel weight tensor used for
+   MAE-style token masking) so that `masked_mse_loss` only accumulates error on
+   foreground (mouse) pixels; background pixels contribute zero loss regardless of
+   how well they're reconstructed. Set `model.mask_l2_loss: false` to train the L2
+   loss over the full frame instead — `target_mask` and `target_gaussian_mask` are
+   still computed either way, so `mask_geom_loss`, VDA depth masking, and PLY
+   export are unaffected by this flag.
 2. **Depth map** (requires `model.vda.mask_depth: true`): after VDA generates depth
    and `pseudo_pointcloud_normalized` normalises it to [−0.5, 0.5], background pixels
    have their Z coordinate forced to −0.5 (the far end).  This ensures background

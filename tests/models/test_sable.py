@@ -5,7 +5,6 @@ import torch
 
 from beast.models.sable import (
     Sable,
-    whiten_background_for_l2_loss,
     build_segmentation_gaussian_mask,
     build_token_masks,
 )
@@ -87,31 +86,33 @@ class TestBuildSegmentationGaussianMask:
         assert result.sum().item() == pytest.approx(total / 2, rel=1e-5)
 
 
-class TestApplyTargetMaskForL2Loss:
-    """Test the apply_target_mask_for_l2_loss function."""
+class TestMaskedL2LossWithSegMask:
+    """Test that l2_loss is zeroed on background pixels when segmentation mask is applied."""
 
-    def test_apply_target_mask_for_l2_loss_disabled_returns_raw_image(self) -> None:
-        # Arrange: mask marks half the image as background
-        target_img = torch.rand(1, 1, 3, 2, 2)
-        target_mask = torch.tensor([[[[[1.0, 1.0], [0.0, 0.0]]]]])
+    def test_background_pixels_do_not_contribute_to_loss(self) -> None:
+        import torch.nn.functional as F
+
+        from beast.models.model_utils.losses import masked_mse_loss
+
+        # Arrange: rendering != target only on background pixels (mask=0)
+        b, v, c, h, w = 1, 1, 3, 2, 2
+        rendering = torch.zeros(b * v, c, h, w)
+        target = torch.zeros(b * v, c, h, w)
+        # introduce a large discrepancy only on the bottom row (background)
+        target[:, :, h // 2 :, :] = 1.0
+
+        # seg_mask: top row foreground (1), bottom row background (0)
+        target_mask = torch.zeros(b, v, 1, h, w)
+        target_mask[:, :, :, : h // 2, :] = 1.0
+        pixel_mask = target_mask.squeeze(2)  # [b, v, h, w]
 
         # Act
-        result = whiten_background_for_l2_loss(target_img, target_mask, mask_l2_loss=False)
+        loss_masked = masked_mse_loss(rendering, target, pixel_mask)
+        loss_unmasked = F.mse_loss(rendering, target)
 
-        # Assert: raw image is returned unchanged
-        assert torch.equal(result, target_img)
-
-    def test_apply_target_mask_for_l2_loss_enabled_whitens_background(self) -> None:
-        # Arrange
-        target_img = torch.zeros(1, 1, 3, 2, 2)
-        target_mask = torch.tensor([[[[[1.0, 1.0], [0.0, 0.0]]]]])
-
-        # Act
-        result = whiten_background_for_l2_loss(target_img, target_mask, mask_l2_loss=True)
-
-        # Assert: foreground stays raw (0), background becomes white (1)
-        expected = (1.0 - target_mask).expand_as(target_img)
-        assert torch.equal(result, expected)
+        # Assert: masked loss is ~0 (discrepancy only on background), unmasked is not
+        assert loss_masked.item() == pytest.approx(0.0, abs=1e-6)
+        assert loss_unmasked.item() > 0.1
 
 
 class TestMaskedGsRegLossWithSegMask:
