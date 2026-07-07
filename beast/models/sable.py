@@ -180,28 +180,6 @@ def build_segmentation_gaussian_mask(
     )
 
 
-def whiten_background_for_l2_loss(
-    target_img: torch.Tensor,
-    target_mask: torch.Tensor,
-    mask_l2_loss: bool,
-) -> torch.Tensor:
-    """Whiten background pixels in the L2-loss target image, if enabled.
-
-    Args:
-        target_img: raw target frame, [B, V, 3, H, W].
-        target_mask: foreground mask, [B, V, 1, H, W]; 1 = foreground.
-        mask_l2_loss: when True, background pixels are set to white (1.0) to match
-            the renderer's default background for transparent Gaussians; when False,
-            ``target_img`` is returned unchanged.
-
-    Returns:
-        target_img, optionally whitened in background regions.
-    """
-    if not mask_l2_loss:
-        return target_img
-    return target_img * target_mask + (1.0 - target_mask)
-
-
 class GaussiansUpsampler(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -1122,11 +1100,15 @@ class Sable(BaseLightningModel):
         target_gaussian_mask = None
         if 'mask' in data:
             target_mask = data['mask'][batch_idx, target_idx, ...]  # [b, v_target, 1, H, W]
-            target_img = whiten_background_for_l2_loss(
-                target_img, target_mask, self.config['model'].get('mask_l2_loss', False),
-            )
             target_gaussian_mask = build_segmentation_gaussian_mask(
                 target_mask, self.hh, self.ww, self.ph, self.pw,
+            )
+
+        # apply segmentation mask to l2 loss: penalise only foreground (mouse) pixels
+        if self.config['model'].get('mask_l2_loss', False) and target_mask is not None:
+            target_pixel_mask = target_mask.squeeze(2)  # [b, v_target, H, W]
+            pixel_mask = (
+                target_pixel_mask if pixel_mask is None else pixel_mask * target_pixel_mask
             )
 
         # apply segmentation mask to gs_reg_loss: penalise only foreground (mouse) points
