@@ -83,8 +83,6 @@ training:
   use_segmentation:
     enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
-
-model:
   mask_geom_loss: true   # restrict gs_reg_loss to foreground (mouse) points only
   mask_l2_loss: true      # restrict the L2 photometric loss to foreground (mouse) pixels only
 ```
@@ -113,11 +111,11 @@ enabled:
 
 The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 
-1. **L2 photometric loss** (requires `model.mask_l2_loss: true`): the segmentation
+1. **L2 photometric loss** (requires `training.mask_l2_loss: true`): the segmentation
    mask is combined into `pixel_mask` (the same per-pixel weight tensor used for
    MAE-style token masking) so that `masked_mse_loss` only accumulates error on
    foreground (mouse) pixels; background pixels contribute zero loss regardless of
-   how well they're reconstructed. Set `model.mask_l2_loss: false` to train the L2
+   how well they're reconstructed. Set `training.mask_l2_loss: false` to train the L2
    loss over the full frame instead — `target_mask` and `target_gaussian_mask` are
    still computed either way, so `mask_geom_loss`, VDA depth masking, and PLY
    export are unaffected by this flag.
@@ -126,7 +124,7 @@ The SABLE model (`beast/models/sable.py`) applies the masks in three places:
    have their Z coordinate forced to −0.5 (the far end).  This ensures background
    Gaussians initialise far from the camera rather than at an arbitrary depth.  Raw
    images are always passed to VDA unmasked; masking is applied only after normalisation.
-3. **Geometry loss / gs_reg_loss** (requires `model.mask_geom_loss: true`): the
+3. **Geometry loss / gs_reg_loss** (requires `training.mask_geom_loss: true`): the
    SAM3 mask is reshaped into a per-Gaussian weight tensor (same patch-major
    `(hh ww ph pw)` layout as the pixel-aligned point cloud) and combined into the
    `gaussian_mask` argument of `masked_gs_reg_loss`.  This restricts the point-cloud
