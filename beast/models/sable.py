@@ -1105,14 +1105,14 @@ class Sable(BaseLightningModel):
             )
 
         # apply segmentation mask to l2 loss: penalise only foreground (mouse) pixels
-        if self.config['model'].get('mask_l2_loss', False) and target_mask is not None:
+        if self.config['training'].get('mask_l2_loss', False) and target_mask is not None:
             target_pixel_mask = target_mask.squeeze(2)  # [b, v_target, H, W]
             pixel_mask = (
                 target_pixel_mask if pixel_mask is None else pixel_mask * target_pixel_mask
             )
 
         # apply segmentation mask to gs_reg_loss: penalise only foreground (mouse) points
-        if self.config['model'].get('mask_geom_loss', False) and target_gaussian_mask is not None:
+        if self.config['training'].get('mask_geom_loss', False) and target_gaussian_mask is not None:
             gaussian_mask = (
                 target_gaussian_mask if gaussian_mask is None else gaussian_mask * target_gaussian_mask
             )

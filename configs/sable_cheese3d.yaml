@@ -66,8 +66,6 @@ model:
       - [-0.06357379,  0.98761488,  0.14344067,  0.05882564]
       - [ 0.89501598, -0.0071603,   0.4459766,  -0.01130054]
       - [ 0.,          0.,          0.,          1.        ]
-  mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
-  mask_l2_loss: true    # restrict L2 photometric loss to foreground (mouse) pixels only
 
 optimizer:
   type: AdamW
@@ -102,6 +100,8 @@ training:
   use_segmentation:
     enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
+  mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
+  mask_l2_loss: true    # restrict L2 photometric loss to foreground (mouse) pixels only
 
   # Validation
   val_split_ratio: 0.1
