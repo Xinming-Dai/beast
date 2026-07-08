@@ -56,7 +56,7 @@ model:
   mask_ratio: 0.75
   merge_pcd:
     num_points: 3
-    debug_merged_pcd: true
+    debug_merged_pcd: false
     debug_merged_pcd_num_batches: 16
     correspondence_cache_root: path/to/litpose_correspondences/processed_correspondences
 
@@ -86,7 +86,7 @@ training:
   val_score_depth_weight: 1.0
   save_val_best_checkpoint: true
 
-  batch_size_per_gpu: 16
+  batch_size_per_gpu: 24
   grad_accum_steps: 1
   num_workers: 8
   prefetch_factor: 4
@@ -97,14 +97,15 @@ training:
   use_tf32: true
 
   checkpoint_dir: path/to/ckpt_folder
-  checkpoint_every: 4000
-  checkpoint_steps: [4000]
+  checkpoint_every: 10000
+  checkpoint_steps: [10000]
 
   resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
   max_fwdbwd_passes: 10000
   print_every: 10
   save_visuals: true
+  save_pointclouds: true
   vis_num_samples: 1
   vis_max_views: 2
   render_video: false
