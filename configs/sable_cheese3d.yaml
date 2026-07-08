@@ -62,9 +62,9 @@ model:
     debug_merged_pcd_num_batches: 16
     correspondence_cache_root: null
     affine_transformation:
-      - [ 4.95966465e-01,  3.38194092e-01,  7.99776231e-01, -6.13589011e-02]
-      - [-5.04045842e-01,  8.62111379e-01, -5.19784615e-02,  1.22413896e-02]
-      - [ -7.07074993e-01, -3.77344309e-01,  5.98043658e-01, -7.36348545e-04]
+      - [ 0.4414802,   0.15673411, -0.88347589, -0.05953322]
+      - [-0.06357379,  0.98761488,  0.14344067,  0.05882564]
+      - [ 0.89501598, -0.0071603,   0.4459766,  -0.01130054]
       - [ 0.,          0.,          0.,          1.        ]
   mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
   mask_l2_loss: true    # restrict L2 photometric loss to foreground (mouse) pixels only
