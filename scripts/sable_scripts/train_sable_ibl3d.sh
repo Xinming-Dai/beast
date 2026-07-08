@@ -26,7 +26,7 @@ DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extract
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/depth_map}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
-RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/19427118/tb_logs/version_0/checkpoints/epoch=52-step=7588-best.ckpt}"
+RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/${EID}}"
 
