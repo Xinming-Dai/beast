@@ -55,7 +55,10 @@ model:
     mask_depth: true   # after depth normalisation, push background pixels to Z=-0.5 (far end)
   use_deferred_rendering: false
   use_gsplat: true
-  mask_ratio: 0.75
+  patch_masking:
+    ratio: 0.75
+    pixel_mask: true
+    gaussian_mask: true
   merge_pcd:
     num_points: 3
     debug_merged_pcd: false

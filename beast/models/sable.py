@@ -381,7 +381,10 @@ class Sable(BaseLightningModel):
 
         gs_cfg = self.config['model']['gaussians']
         self.init_gs = gs_cfg.get('init_gs', True)
-        self.mask_ratio = float(self.config['model'].get('mask_ratio', 0.0))
+        patch_masking_cfg = self.config['model'].get('patch_masking', {})
+        self.mask_ratio = float(patch_masking_cfg.get('ratio', 0.0))
+        self.pixel_mask_enabled = bool(patch_masking_cfg.get('pixel_mask', True))
+        self.gaussian_mask_enabled = bool(patch_masking_cfg.get('gaussian_mask', True))
 
         # use Kabsch for view merging
         merge_pcd_cfg = self.config['model'].get('merge_pcd', {})
@@ -736,10 +739,13 @@ class Sable(BaseLightningModel):
                 full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
                 keep = keep & ~full_mask.unsqueeze(-1)  # broadcast over n → [b, v_input, n]
             masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
-            pixel_mask, gaussian_mask = build_token_masks(keep, b, v_input, self.hh, self.ww, self.ph, self.pw)
-            if self.full_context_partial_target:
-                pixel_mask = pixel_mask[batch_idx, target_pos, ...]        # [b, v_target, H, W]
-                gaussian_mask = gaussian_mask[batch_idx, target_pos, ...]  # [b, v_target, N]
+            if self.pixel_mask_enabled or self.gaussian_mask_enabled:
+                pixel_mask, gaussian_mask = build_token_masks(keep, b, v_input, self.hh, self.ww, self.ph, self.pw)
+                if self.full_context_partial_target:
+                    pixel_mask = pixel_mask[batch_idx, target_pos, ...]        # [b, v_target, H, W]
+                    gaussian_mask = gaussian_mask[batch_idx, target_pos, ...]  # [b, v_target, N]
+                pixel_mask = pixel_mask if self.pixel_mask_enabled else None
+                gaussian_mask = gaussian_mask if self.gaussian_mask_enabled else None
         else:
             masked_img_tokens_input = img_tokens_input
         
