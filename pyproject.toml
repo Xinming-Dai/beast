@@ -46,6 +46,7 @@ dependencies = [
     "tensorboard",
     "toml",
     "torchvision",
+    "trimesh",
     "tqdm",
     # upper bound: newer releases restructure ViTMAE (see docs/roadmap.md)
     "transformers<5.9",

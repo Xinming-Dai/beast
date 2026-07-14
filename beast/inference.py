@@ -4,11 +4,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import lightning.pytorch as pl
-import numpy as np
 import cv2
+import lightning.pytorch as pl
+import matplotlib
+import numpy as np
 import torch
 import torch.nn.functional as F
+import trimesh
 import yaml
 from PIL import Image
 from torchvision import transforms
@@ -18,6 +20,7 @@ from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
+from beast.models.model_utils.utils_vis import add_scene_cam
 
 _logger = logging.getLogger(__name__)
 
@@ -752,13 +755,12 @@ def _flatten_mask_for_points(
     return mask01 if mask01.shape[0] == num_points else None
 
 
-def save_gaussian_pointclouds(
+def _extract_pointcloud_xyz_rgb(
     result: dict,
-    output_dir: str | Path,
-    batch_idx: int,
-    max_samples: int | None = None,
-) -> list[Path]:
-    """Save Gaussian centers from one Sable batch output as PLY point clouds.
+    sample_idx: int,
+    gs,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Extract point-cloud xyz/rgb for one batch sample from a Sable result dict.
 
     Uses pixel-aligned RGB from input images when ``result['pixelalign_xyz']`` and
     ``result['image']`` are both present and have matching point counts; otherwise
@@ -766,6 +768,75 @@ def save_gaussian_pointclouds(
     (``result['target_mask']`` or ``result['target_gaussian_mask']``), background
     points are recolored white so unregularized background geometry doesn't clutter
     the point cloud.
+
+    Args:
+        result: dict returned by ``model.get_model_outputs(batch)``.
+        sample_idx: batch index to extract.
+        gs: GaussianModel for this batch item, used as the opacity-grayscale fallback.
+
+    Returns:
+        tuple of ``(xyz, rgb01, used_pixel_colors)``: xyz is a float array of shape
+        [N, 3]; rgb01 is a float array of shape [N, 3] with values in [0, 1];
+        used_pixel_colors indicates whether per-pixel RGB (vs. opacity grayscale) was
+        used.
+    """
+    pixelalign_xyz = result.get('pixelalign_xyz')
+    images = result.get('image')
+    use_pixel_colors = (
+        pixelalign_xyz is not None
+        and images is not None
+        and torch.is_tensor(pixelalign_xyz)
+        and torch.is_tensor(images)
+        and sample_idx < pixelalign_xyz.shape[0]
+        and sample_idx < images.shape[0]
+    )
+    target_mask = result.get('target_mask')
+    target_gaussian_mask = result.get('target_gaussian_mask')
+
+    rgb01 = None
+    if use_pixel_colors:
+        xyz = (
+            pixelalign_xyz[sample_idx]
+            .detach().float().cpu()
+            .permute(0, 2, 3, 1)
+            .reshape(-1, 3)
+            .numpy()
+        )
+        xyz[:, [1, 2]] *= -1
+        rgb_candidate = (
+            images[sample_idx]
+            .detach().float().cpu()
+            .clamp(0, 1)
+            .permute(0, 2, 3, 1)
+            .reshape(-1, 3)
+            .numpy()
+        )
+        if xyz.shape[0] == rgb_candidate.shape[0]:
+            rgb01 = rgb_candidate
+            mask01 = _flatten_mask_for_points(target_mask, sample_idx, xyz.shape[0])
+            if mask01 is not None:
+                rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
+
+    used_pixel_colors = rgb01 is not None
+
+    if rgb01 is None:
+        xyz = gs.get_xyz.detach().float().cpu().numpy()
+        opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
+        rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
+        mask01 = _flatten_mask_for_points(target_gaussian_mask, sample_idx, xyz.shape[0])
+        if mask01 is not None:
+            rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
+
+    return xyz, rgb01, used_pixel_colors
+
+
+def save_gaussian_pointclouds(
+    result: dict,
+    output_dir: str | Path,
+    batch_idx: int,
+    max_samples: int | None = None,
+) -> list[Path]:
+    """Save Gaussian centers from one Sable batch output as PLY point clouds.
 
     Requires ``open3d`` for binary PLY output; falls back to ASCII PLY when not
     installed.
@@ -799,54 +870,12 @@ def save_gaussian_pointclouds(
     except ImportError:
         has_o3d = False
 
-    pixelalign_xyz = result.get('pixelalign_xyz')
-    images = result.get('image')
-    use_pixel_colors = (
-        pixelalign_xyz is not None
-        and images is not None
-        and torch.is_tensor(pixelalign_xyz)
-        and torch.is_tensor(images)
-    )
-    target_mask = result.get('target_mask')
-    target_gaussian_mask = result.get('target_gaussian_mask')
-
     saved = []
     for sample_idx, gs in enumerate(gaussians_list):
         if max_samples is not None and sample_idx >= max_samples:
             break
 
-        rgb01 = None
-        if use_pixel_colors and sample_idx < pixelalign_xyz.shape[0] and sample_idx < images.shape[0]:
-            xyz = (
-                pixelalign_xyz[sample_idx]
-                .detach().float().cpu()
-                .permute(0, 2, 3, 1)
-                .reshape(-1, 3)
-                .numpy()
-            )
-            xyz[:, [1, 2]] *= -1
-            rgb_candidate = (
-                images[sample_idx]
-                .detach().float().cpu()
-                .clamp(0, 1)
-                .permute(0, 2, 3, 1)
-                .reshape(-1, 3)
-                .numpy()
-            )
-            if xyz.shape[0] == rgb_candidate.shape[0]:
-                rgb01 = rgb_candidate
-                mask01 = _flatten_mask_for_points(target_mask, sample_idx, xyz.shape[0])
-                if mask01 is not None:
-                    rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
-
-        if rgb01 is None:
-            xyz = gs.get_xyz.detach().float().cpu().numpy()
-            opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
-            rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
-            mask01 = _flatten_mask_for_points(target_gaussian_mask, sample_idx, xyz.shape[0])
-            if mask01 is not None:
-                rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
-
+        xyz, rgb01, used_pixel_colors = _extract_pointcloud_xyz_rgb(result, sample_idx, gs)
         if xyz.size == 0:
             continue
 
@@ -860,11 +889,136 @@ def save_gaussian_pointclouds(
         else:
             _write_ply_ascii(out_ply, xyz, rgb01)
 
-        color_src = 'RGB from input views' if rgb01 is not None and use_pixel_colors else 'opacity grayscale'
+        color_src = 'RGB from input views' if used_pixel_colors else 'opacity grayscale'
         log_step(f'Saved point cloud: {out_ply} ({xyz.shape[0]} points, {color_src})', level='info')
         saved.append(out_ply)
 
     return saved
+
+
+def _dedupe_cameras_by_view_index(
+    input_idx: torch.Tensor,
+    c2w_input: np.ndarray,
+    target_idx: torch.Tensor,
+    c2w_target: np.ndarray,
+) -> np.ndarray:
+    """Combine input/target camera poses into one array, one entry per unique view index.
+
+    Input and target view index sets commonly overlap (e.g. full-context inference, where
+    every view is used as both input and target), in which case ``c2w_input`` and
+    ``c2w_target`` hold identical poses for the shared views. Keying by view index instead
+    of blindly concatenating avoids drawing duplicate, overlapping frustums for those views.
+
+    Args:
+        input_idx: input view indices, shape [v_input].
+        c2w_input: input camera-to-world matrices, shape [v_input, 4, 4].
+        target_idx: target view indices, shape [v_target].
+        c2w_target: target camera-to-world matrices, shape [v_target, 4, 4].
+
+    Returns:
+        camera-to-world matrices, one per unique view index, sorted by view index,
+        shape [num_unique_views, 4, 4].
+    """
+    c2w_by_view_idx = dict(zip(input_idx.tolist(), c2w_input))
+    c2w_by_view_idx.update(zip(target_idx.tolist(), c2w_target))
+    return np.stack([c2w_by_view_idx[idx] for idx in sorted(c2w_by_view_idx)], axis=0)
+
+
+def save_camera_pointcloud_scene(
+    result: dict,
+    output_dir: str | Path,
+    batch_idx: int,
+    max_samples: int | None = None,
+    screen_width: float = 0.1,
+) -> list[Path]:
+    """Save the predicted point cloud together with camera frustums as a .glb scene.
+
+    Builds one ``trimesh.Scene`` per batch item containing the same point cloud as
+    ``save_gaussian_pointclouds`` plus one cone-shaped camera-frustum mesh per unique
+    predicted view (colored by view index via the ``hsv`` colormap; input and target
+    views that share a view index are deduplicated, see
+    ``_dedupe_cameras_by_view_index``), then exports the scene as a single glTF binary
+    (``.glb``) file. The result can be opened directly in any local glTF viewer.
+
+    Args:
+        result: dict returned by ``model.get_model_outputs(batch)``.  Must contain
+            ``'gaussians'``, ``'c2w_input'`` ([B, v_input, 4, 4]), ``'c2w_target'``
+            ([B, v_target, 4, 4]), ``'input_indices'`` ([B, v_input]), and
+            ``'target_indices'`` ([B, v_target]); see ``_extract_pointcloud_xyz_rgb``
+            for the point cloud fields it reads.
+        output_dir: root output directory; ``.glb`` files are written under
+            ``output_dir / 'glb'``.
+        batch_idx: used in the output filename
+            ``scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb``.
+        max_samples: cap on the number of batch items to save.  ``None`` saves all.
+        screen_width: physical size of the drawn camera frustums.
+
+    Returns:
+        list of Path objects for the .glb files that were written.
+    """
+    gaussians_list = result.get('gaussians')
+    c2w_input = result.get('c2w_input')
+    c2w_target = result.get('c2w_target')
+    input_indices = result.get('input_indices')
+    target_indices = result.get('target_indices')
+    if (
+        not gaussians_list
+        or not torch.is_tensor(c2w_input)
+        or not torch.is_tensor(c2w_target)
+        or not torch.is_tensor(input_indices)
+        or not torch.is_tensor(target_indices)
+    ):
+        return []
+
+    output_dir = Path(output_dir)
+    glb_dir = output_dir / 'glb'
+    glb_dir.mkdir(parents=True, exist_ok=True)
+
+    cmap = matplotlib.colormaps['hsv']
+
+    saved = []
+    for sample_idx, gs in enumerate(gaussians_list):
+        if max_samples is not None and sample_idx >= max_samples:
+            break
+        if sample_idx >= c2w_input.shape[0] or sample_idx >= c2w_target.shape[0]:
+            continue
+
+        xyz, rgb01, _ = _extract_pointcloud_xyz_rgb(result, sample_idx, gs)
+        if xyz.size == 0:
+            continue
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.points.PointCloud(vertices=xyz, colors=rgb01))
+
+        c2ws = _dedupe_cameras_by_view_index(
+            input_indices[sample_idx].detach().cpu(),
+            c2w_input[sample_idx].detach().float().cpu().numpy(),
+            target_indices[sample_idx].detach().cpu(),
+            c2w_target[sample_idx].detach().float().cpu().numpy(),
+        )
+        num_cameras = c2ws.shape[0]
+        for view_idx, c2w in enumerate(c2ws):
+            edge_color = (np.array(cmap(view_idx / num_cameras))[:3] * 255).astype(np.uint8)
+            add_scene_cam(
+                scene=scene,
+                c2w=c2w,
+                edge_color=edge_color,
+                imsize=(256, 256),
+                screen_width=screen_width,
+            )
+
+        out_glb = glb_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
+        scene.export(out_glb)
+
+        log_step(f'Saved camera scene: {out_glb} ({num_cameras} cameras)', level='info')
+        saved.append(out_glb)
+
+    return saved
+
+
+# aliased so `infer_sable`'s `save_camera_pointcloud_scene` bool parameter can shadow
+# the function name locally while still calling it
+_save_camera_pointcloud_scene_fn = save_camera_pointcloud_scene
 
 
 def infer_sable(
@@ -872,6 +1026,7 @@ def infer_sable(
     model,
     output_dir: str | Path,
     save_pointclouds: bool = True,
+    save_camera_pointcloud_scene: bool = False,
     save_visuals: bool = False,
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
@@ -881,9 +1036,12 @@ def infer_sable(
     Args:
         config: full beast config dict (same as used for training).
         model: trained Sable Lightning model instance.
-        output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``
-            and optional PNG visuals under ``output_dir/png/``.
+        output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``,
+            optional camera-scene ``.glb`` files under ``output_dir/glb/``, and optional
+            PNG visuals under ``output_dir/png/``.
         save_pointclouds: whether to save ``.ply`` files for each batch.
+        save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
+            camera frustums) for each batch.
         save_visuals: whether to save render-vs-target PNG grids for each batch.
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
@@ -894,6 +1052,8 @@ def infer_sable(
             - ``'output_dir'``: str path of the output directory.
             - ``'num_batches'``: number of batches processed.
             - ``'ply_files'``: list of Path objects for all saved PLY files.
+            - ``'camera_pointcloud_scene_glb_files'``: list of Path objects for all
+              saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
     from beast.data.sable_dataset import collate_with_correspondence_padding
@@ -929,6 +1089,7 @@ def infer_sable(
     model.eval()
 
     all_ply: list[Path] = []
+    all_glb: list[Path] = []
     all_vis: list[Path] = []
     num_batches = 0
 
@@ -948,6 +1109,10 @@ def infer_sable(
                 ply_paths = save_gaussian_pointclouds(result, output_dir, batch_idx)
                 all_ply.extend(ply_paths)
 
+            if save_camera_pointcloud_scene:
+                glb_paths = _save_camera_pointcloud_scene_fn(result, output_dir, batch_idx)
+                all_glb.extend(glb_paths)
+
             if save_visuals:
                 vis_paths = save_training_visuals(
                     output_dir / 'png',
@@ -961,7 +1126,7 @@ def infer_sable(
 
     log_step(
         f'infer_sable: processed {num_batches} batches, '
-        f'{len(all_ply)} PLY files, {len(all_vis)} PNG grids',
+        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids',
         level='info',
     )
 
@@ -969,5 +1134,6 @@ def infer_sable(
         'output_dir': str(output_dir),
         'num_batches': num_batches,
         'ply_files': all_ply,
+        'camera_pointcloud_scene_glb_files': all_glb,
         'vis_files': all_vis,
     }

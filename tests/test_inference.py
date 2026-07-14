@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import pytest
 import torch
+import trimesh
 import yaml
 from PIL import Image
 
@@ -17,6 +18,7 @@ from beast.inference import (
     _flatten_mask_for_points,
     predict_images,
     predict_video,
+    save_camera_pointcloud_scene,
     save_gaussian_pointclouds,
 )
 
@@ -708,3 +710,82 @@ class TestSaveGaussianPointclouds:
         assert len(saved) == 1
         rgb = _read_ply_colors(saved[0])
         assert np.allclose(rgb, 0.5, atol=1.0 / 255)
+
+
+class TestSaveCameraPointcloudScene:
+    """Test the save_camera_pointcloud_scene function."""
+
+    @pytest.fixture
+    def temp_output_dir(self):
+        temp_output = Path(tempfile.mkdtemp())
+        yield temp_output
+        shutil.rmtree(temp_output)
+
+    def test_save_camera_pointcloud_scene_writes_expected_geometries(
+        self,
+        temp_output_dir,
+    ) -> None:
+        # Arrange: 1 sample, 2 input views (idx 0, 1) + 1 disjoint target view (idx 2)
+        gs = Mock()
+        num_input_views = 2
+        num_target_views = 1
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, num_input_views, 3, 2, 2),
+            'image': torch.full((1, num_input_views, 3, 2, 2), 0.5),
+            'c2w_input': torch.eye(4).unsqueeze(0).repeat(1, num_input_views, 1, 1),
+            'c2w_target': torch.eye(4).unsqueeze(0).repeat(1, num_target_views, 1, 1),
+            'input_indices': torch.tensor([[0, 1]]),
+            'target_indices': torch.tensor([[2]]),
+        }
+
+        # Act
+        saved = save_camera_pointcloud_scene(result, temp_output_dir, batch_idx=0)
+
+        # Assert
+        assert len(saved) == 1
+        assert saved[0].name == 'scene_batch0000_sample00.glb'
+        scene = trimesh.load(saved[0])
+        # 1 point cloud + (num_input_views + num_target_views) disjoint camera frustums
+        assert len(scene.geometry) == 1 + num_input_views + num_target_views
+
+    def test_save_camera_pointcloud_scene_dedupes_overlapping_views(
+        self,
+        temp_output_dir,
+    ) -> None:
+        # Arrange: input and target index sets are identical (e.g. full-context
+        # inference), so c2w_input and c2w_target hold the same 2 camera poses
+        gs = Mock()
+        num_views = 2
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, num_views, 3, 2, 2),
+            'image': torch.full((1, num_views, 3, 2, 2), 0.5),
+            'c2w_input': torch.eye(4).unsqueeze(0).repeat(1, num_views, 1, 1),
+            'c2w_target': torch.eye(4).unsqueeze(0).repeat(1, num_views, 1, 1),
+            'input_indices': torch.tensor([[0, 1]]),
+            'target_indices': torch.tensor([[0, 1]]),
+        }
+
+        # Act
+        saved = save_camera_pointcloud_scene(result, temp_output_dir, batch_idx=0)
+
+        # Assert: only 2 unique cameras drawn, not 4
+        assert len(saved) == 1
+        scene = trimesh.load(saved[0])
+        assert len(scene.geometry) == 1 + num_views
+
+    def test_save_camera_pointcloud_scene_missing_c2w_returns_empty(self, temp_output_dir) -> None:
+        # Arrange: no camera poses present
+        gs = Mock()
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, 1, 3, 2, 2),
+            'image': torch.zeros(1, 1, 3, 2, 2),
+        }
+
+        # Act
+        saved = save_camera_pointcloud_scene(result, temp_output_dir, batch_idx=0)
+
+        # Assert
+        assert saved == []
