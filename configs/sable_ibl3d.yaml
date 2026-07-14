@@ -56,7 +56,7 @@ model:
   patch_masking:
     ratio: 0.75
     pixel_mask: true
-    gaussian_mask: true
+    gaussian_mask: false
   merge_pcd:
     num_points: 3
     debug_merged_pcd: false
