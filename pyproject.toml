@@ -45,6 +45,7 @@ dependencies = [
     "tensorboard",
     "toml",
     "torchvision",
+    "trimesh",
     "tqdm",
     "transformers",
     "typeguard (==2.13.3)",

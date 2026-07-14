@@ -10,7 +10,7 @@ import torch
 import yaml
 
 from beast.data.samplers import ResumableRandomSampler
-from beast.inference import save_gaussian_pointclouds
+from beast.inference import save_camera_pointcloud_scene, save_gaussian_pointclouds
 from beast.logging import log_step
 from beast.data.sable_dataset import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
@@ -100,6 +100,9 @@ class ValVisualizationCallback(pl.Callback):
         max_views: number of target views to include per sample.
         save_pointclouds: whether to also save a Gaussian-center point cloud
             (as a PLY file under ``vis_dir / 'ply'``) alongside each visual.
+        save_camera_pointcloud_scene: whether to also save a point cloud + camera
+            frustum scene (as a ``.glb`` file under ``vis_dir / 'glb'``) alongside
+            each visual.
     """
 
     def __init__(
@@ -108,6 +111,7 @@ class ValVisualizationCallback(pl.Callback):
         max_samples: int = 1,
         max_views: int = 2,
         save_pointclouds: bool = True,
+        save_camera_pointcloud_scene: bool = False,
     ) -> None:
         """Initialize with output directory and visualization limits."""
         super().__init__()
@@ -115,6 +119,7 @@ class ValVisualizationCallback(pl.Callback):
         self._max_samples = max_samples
         self._max_views = max_views
         self._save_pointclouds = save_pointclouds
+        self._save_camera_pointcloud_scene = save_camera_pointcloud_scene
         self._saved_this_epoch = False
 
     def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
@@ -150,6 +155,15 @@ class ValVisualizationCallback(pl.Callback):
                 )
                 if ply_paths:
                     log_step(f'Saved initial point cloud: {ply_paths[0]}', level='info')
+            if self._save_camera_pointcloud_scene:
+                glb_paths = save_camera_pointcloud_scene(
+                    vars(result),
+                    self._vis_dir,
+                    batch_idx=0,
+                    max_samples=self._max_samples,
+                )
+                if glb_paths:
+                    log_step(f'Saved initial camera scene: {glb_paths[0]}', level='info')
         except Exception as exc:
             log_step(f'ValVisualizationCallback: failed to save initial visuals: {exc}', level='warning')
 
@@ -191,6 +205,15 @@ class ValVisualizationCallback(pl.Callback):
                 )
                 if ply_paths:
                     log_step(f'Saved val point cloud: {ply_paths[0]}', level='info')
+            if self._save_camera_pointcloud_scene:
+                glb_paths = save_camera_pointcloud_scene(
+                    vars(result),
+                    self._vis_dir,
+                    batch_idx=trainer.global_step,
+                    max_samples=self._max_samples,
+                )
+                if glb_paths:
+                    log_step(f'Saved val camera scene: {glb_paths[0]}', level='info')
         except Exception as exc:
             log_step(f'ValVisualizationCallback: failed to save visuals: {exc}', level='warning')
 
@@ -356,6 +379,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
                 max_samples=int(training.get('vis_num_samples', 1)),
                 max_views=int(training.get('vis_max_views', 2)),
                 save_pointclouds=training.get('save_pointclouds', True),
+                save_camera_pointcloud_scene=training.get('save_camera_pointcloud_scene', False),
             )
         )
     callbacks.append(StepAccumulatorCallback(callback_step_offset))
