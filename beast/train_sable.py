@@ -242,6 +242,49 @@ class StepAccumulatorCallback(pl.Callback):
         checkpoint['total_steps_trained'] = trainer.global_step + self._steps_before
 
 
+class SamplerStateCallback(pl.Callback):
+    """Persists and restores the train sampler's position across checkpoint resumes.
+
+    Without this, a resumed run rebuilds a fresh ``ResumableRandomSampler`` and
+    restarts consuming data from the beginning of its permutation, even though
+    the optimizer/scheduler/step-count already resumed correctly.
+
+    Args:
+        sampler: the ``ResumableRandomSampler`` instance used by the train dataloader.
+    """
+
+    def __init__(self, sampler: ResumableRandomSampler) -> None:
+        """Initialize with the live sampler instance to save/restore."""
+        super().__init__()
+        self._sampler = sampler
+
+    @rank_zero_only
+    def on_save_checkpoint(
+        self,
+        _trainer: pl.Trainer,
+        _pl_module: pl.LightningModule,
+        checkpoint: dict,
+    ) -> None:
+        """Save the sampler's epoch/position into the checkpoint."""
+        checkpoint['sampler_state'] = self._sampler.state_dict()
+
+    def on_load_checkpoint(
+        self,
+        _trainer: pl.Trainer,
+        _pl_module: pl.LightningModule,
+        checkpoint: dict,
+    ) -> None:
+        """Restore the sampler's epoch/position, if present in the checkpoint.
+
+        # not rank-zero-only: every process holds its own sampler instance that
+        # needs restoring. note _pos advances as batches are prefetched, not as
+        # they're trained on, so a resume may skip a few already-fetched batches
+        # near the save point — expected and harmless.
+        """
+        if 'sampler_state' in checkpoint:
+            self._sampler.load_state_dict(checkpoint['sampler_state'])
+
+
 def train_sable(config: dict, model, output_dir: str | Path):
     """Train a Sable model on IBL data using PyTorch Lightning.
 
@@ -287,10 +330,11 @@ def train_sable(config: dict, model, output_dir: str | Path):
     num_workers = int(training.get('num_workers', 8))
     batch_size = int(training.get('batch_size_per_gpu', 1))
 
+    train_sampler = ResumableRandomSampler(train_dataset, seed=seed)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        sampler=ResumableRandomSampler(train_dataset, seed=seed),
+        sampler=train_sampler,
         num_workers=num_workers,
         collate_fn=collate_with_correspondence_padding,
         persistent_workers=num_workers > 0,
@@ -383,6 +427,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
             )
         )
     callbacks.append(StepAccumulatorCallback(callback_step_offset))
+    callbacks.append(SamplerStateCallback(train_sampler))
 
     precision: str | int = 32
     if training.get('use_amp', False):
