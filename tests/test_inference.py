@@ -789,3 +789,74 @@ class TestSaveCameraPointcloudScene:
 
         # Assert
         assert saved == []
+
+    def test_save_camera_pointcloud_scene_overlays_gt_cameras_when_aligned(
+        self,
+        temp_output_dir,
+    ) -> None:
+        # Arrange: 2 predicted cameras with distinct poses; gt_c2w is a known
+        # scale+rotation+translation of the predicted poses, so the alignment
+        # should recover it and draw both predicted and GT frustums.
+        from scipy.spatial.transform import Rotation
+
+        from beast.models.model_utils.utils_icp import apply_similarity_transform_to_poses
+
+        gs = Mock()
+        num_views = 2
+        pred_c2w = torch.eye(4).unsqueeze(0).repeat(num_views, 1, 1)
+        pred_c2w[0, :3, :3] = torch.from_numpy(Rotation.from_euler('y', 20, degrees=True).as_matrix()).float()
+        pred_c2w[0, :3, 3] = torch.tensor([0.0, 0.0, 0.0])
+        pred_c2w[1, :3, :3] = torch.from_numpy(Rotation.from_euler('y', -20, degrees=True).as_matrix()).float()
+        pred_c2w[1, :3, 3] = torch.tensor([1.0, 0.0, 0.0])
+
+        known_transform = np.eye(4)
+        known_transform[:3, :3] = 2.0 * Rotation.from_euler('z', 30, degrees=True).as_matrix()
+        known_transform[:3, 3] = [5.0, -1.0, 2.0]
+        gt_c2w_np = apply_similarity_transform_to_poses(known_transform, pred_c2w.numpy())
+
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, num_views, 3, 2, 2),
+            'image': torch.full((1, num_views, 3, 2, 2), 0.5),
+            'c2w_input': pred_c2w.unsqueeze(0),
+            'c2w_target': pred_c2w.unsqueeze(0),
+            'input_indices': torch.tensor([[0, 1]]),
+            'target_indices': torch.tensor([[0, 1]]),
+            'gt_c2w': torch.from_numpy(gt_c2w_np).float().unsqueeze(0),
+        }
+
+        # Act
+        saved = save_camera_pointcloud_scene(result, temp_output_dir, batch_idx=0)
+
+        # Assert: 1 point cloud + num_views predicted frustums + num_views GT frustums
+        assert len(saved) == 1
+        scene = trimesh.load(saved[0])
+        assert len(scene.geometry) == 1 + num_views + num_views
+
+    def test_save_camera_pointcloud_scene_skips_gt_overlay_without_view_index_overlap(
+        self,
+        temp_output_dir,
+    ) -> None:
+        # Arrange: predicted view indices (5, 6) have no overlap with gt_c2w's row
+        # indices (0, 1), so alignment should be skipped and only predicted
+        # geometry drawn, exactly as when gt_c2w is absent.
+        gs = Mock()
+        num_views = 2
+        result = {
+            'gaussians': [gs],
+            'pixelalign_xyz': torch.zeros(1, num_views, 3, 2, 2),
+            'image': torch.full((1, num_views, 3, 2, 2), 0.5),
+            'c2w_input': torch.eye(4).unsqueeze(0).repeat(1, num_views, 1, 1),
+            'c2w_target': torch.eye(4).unsqueeze(0).repeat(1, num_views, 1, 1),
+            'input_indices': torch.tensor([[5, 6]]),
+            'target_indices': torch.tensor([[5, 6]]),
+            'gt_c2w': torch.eye(4).unsqueeze(0).repeat(1, num_views, 1, 1),
+        }
+
+        # Act
+        saved = save_camera_pointcloud_scene(result, temp_output_dir, batch_idx=0)
+
+        # Assert: only the predicted frustums are drawn, no GT frustums
+        assert len(saved) == 1
+        scene = trimesh.load(saved[0])
+        assert len(scene.geometry) == 1 + num_views

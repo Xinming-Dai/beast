@@ -191,6 +191,99 @@ def kabsch_transform(src_pts: np.ndarray, tgt_pts: np.ndarray) -> np.ndarray:
     return T
 
 
+def apply_similarity_transform_to_poses(transform: np.ndarray, c2w: np.ndarray) -> np.ndarray:
+    """Apply a similarity transform to camera-to-world poses, keeping rotation orthonormal.
+
+    The transform's rotation block ``s*R`` is decomposed back into scale and a proper
+    rotation so that only camera *centers* are scaled; camera *orientations* remain
+    orthonormal (a raw ``transform @ c2w`` would instead scale the orientation basis
+    vectors too, which would shear the frustum mesh drawn by ``add_scene_cam``).
+
+    Args:
+        transform: 4x4 similarity transform, e.g. from
+            ``estimate_camera_similarity_transform``, with rotation block ``s*R``.
+        c2w: camera-to-world matrices, shape (..., 4, 4).
+
+    Returns:
+        transformed camera-to-world matrices, same shape as ``c2w``.
+    """
+    sr = transform[:3, :3]
+    scale = float(np.linalg.det(sr)) ** (1.0 / 3.0)
+    R = sr / scale
+    t = transform[:3, 3]
+
+    c2w = np.asarray(c2w, dtype=float)
+    out = c2w.copy()
+    out[..., :3, :3] = R @ c2w[..., :3, :3]
+    out[..., :3, 3] = scale * np.einsum('ij,...j->...i', R, c2w[..., :3, 3]) + t
+    return out
+
+
+def estimate_camera_similarity_transform(
+    pred_c2w: np.ndarray,
+    gt_c2w: np.ndarray,
+) -> np.ndarray:
+    """Estimate a similarity transform aligning predicted camera poses to GT camera poses.
+
+    Solves rotation and scale/translation in two decoupled steps, rather than fitting
+    a single Umeyama-style similarity transform to synthetic orientation-derived
+    points: rotation columns are unit vectors, so mixing them with camera centers
+    (which carry the real, unknown inter-frame scale) into one fit would require
+    offsetting each camera center by a length that is *already* scaled consistently
+    between the two frames — which is circular, since that scale is exactly what's
+    being solved for. Using a fixed absolute offset length instead
+    injects scale-inconsistent correspondences that bias both the recovered
+    rotation and scale. This two-step approach is standard for camera-trajectory
+    Sim(3) alignment (e.g. TUM/KITTI-style evaluation):
+
+    1. Rotation: orthogonal Procrustes over all stacked rotation-matrix columns
+       (unit vectors, so this step carries no scale information and works even
+       from a single camera pose).
+    2. Scale + translation: 1-D least squares fit of GT camera centers to
+       rotated predicted camera centers, with the rotation from step 1 held
+       fixed. Requires >= 2 camera poses for scale to be observable (with only 1,
+       scale defaults to 1.0, since a lone camera center carries no baseline to
+       measure scale against).
+
+    Args:
+        pred_c2w: predicted camera-to-world matrices, shape (V, 4, 4), V >= 1.
+        gt_c2w: corresponding ground-truth camera-to-world matrices, shape (V, 4, 4).
+
+    Returns:
+        4x4 similarity transform ``T`` such that
+        ``gt_c2w ≈ apply_similarity_transform_to_poses(T, pred_c2w)``.
+    """
+    pred_c2w = np.asarray(pred_c2w, dtype=float)
+    gt_c2w = np.asarray(gt_c2w, dtype=float)
+    num_views = pred_c2w.shape[0]
+
+    # rotation: orthogonal Procrustes over stacked rotation-matrix columns
+    pred_axes = pred_c2w[:, :3, :3].transpose(0, 2, 1).reshape(-1, 3)
+    gt_axes = gt_c2w[:, :3, :3].transpose(0, 2, 1).reshape(-1, 3)
+    H = pred_axes.T @ gt_axes
+    U, _, Vt = np.linalg.svd(H)
+    D = np.eye(3)
+    D[2, 2] = np.linalg.det(Vt.T @ U.T)
+    R = Vt.T @ D @ U.T
+
+    # scale + translation: 1-D least squares on camera centers, rotation held fixed
+    pred_centers = pred_c2w[:, :3, 3]
+    gt_centers = gt_c2w[:, :3, 3]
+    rotated_pred_centers = pred_centers @ R.T
+    pred_c = rotated_pred_centers.mean(axis=0)
+    gt_c = gt_centers.mean(axis=0)
+    pred_demean = rotated_pred_centers - pred_c
+    gt_demean = gt_centers - gt_c
+    denom = float((pred_demean ** 2).sum())
+    scale = float((pred_demean * gt_demean).sum() / denom) if num_views >= 2 and denom > 1e-12 else 1.0
+    t = gt_c - scale * pred_c
+
+    transform = np.eye(4)
+    transform[:3, :3] = scale * R
+    transform[:3, 3] = t
+    return transform
+
+
 def kabsch_rotation_batched(
     cross_cov: torch.Tensor,
     eps: float,

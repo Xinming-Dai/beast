@@ -166,6 +166,9 @@ class Model:
         correspondence_cache_root: str | Path | None = None,
         splits: list[str] | None = None,
         save_visuals: bool = False,
+        save_pointclouds: bool = True,
+        save_camera_pointcloud_scene: bool = False,
+        load_gt_camera_params_for_vis: bool = False,
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
     ) -> dict[str, Any]:
@@ -182,12 +185,21 @@ class Model:
                 cache. When ``None``, the value from the saved training config is used.
             splits: dataset splits to run inference on (default: ['train', 'val']).
             save_visuals: whether to also save render-vs-target PNG grids.
+            save_pointclouds: whether to save ``.ply`` Gaussian-center point clouds.
+            save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
+                camera frustums, with a ground-truth overlay when
+                ``load_gt_camera_params_for_vis`` is also set).
+            load_gt_camera_params_for_vis: for Cheese3D datasets, load ground-truth
+                camera calibration into ``gt_c2w``/``gt_fxfycxcy`` for visualization,
+                overriding the saved training config's
+                ``training.load_gt_camera_params_for_vis``.
             max_batches: stop after this many batches; None runs the full dataset.
             session_names: session IDs to load. Accepts a list or a single string.
                 When ``None``, the value from the saved training config is used.
 
         Returns:
-            dict with keys 'output_dir', 'num_batches', 'ply_files', 'vis_files'.
+            dict with keys 'output_dir', 'num_batches', 'ply_files',
+            'camera_pointcloud_scene_glb_files', 'vis_files'.
         """
         from beast.inference import infer_sable as _infer_sable
 
@@ -198,6 +210,8 @@ class Model:
             config['training']['dataset_path'] = str(dataset_path)
         if session_names is not None:
             config['training']['session_names'] = session_names
+        if load_gt_camera_params_for_vis:
+            config['training']['load_gt_camera_params_for_vis'] = True
         if vda_cache_root is not None:
             config['model'] = {**config.get('model', {})}
             config['model']['vda'] = {**config['model'].get('vda', {})}
@@ -217,6 +231,8 @@ class Model:
             model=self.model,
             output_dir=output_dir,
             save_visuals=save_visuals,
+            save_pointclouds=save_pointclouds,
+            save_camera_pointcloud_scene=save_camera_pointcloud_scene,
             max_batches=max_batches,
             include_splits=splits,
         )

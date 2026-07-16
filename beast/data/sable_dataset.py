@@ -1088,6 +1088,13 @@ class Cheese3DDataset(SABLEDataset):
     * ``training.use_camera_params`` (default ``False``) — when ``true``, load per-frame
       ``.npy`` calibration files and return ``c2w`` ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``
       in the batch dict so the model can skip its learned pose predictor.
+    * ``training.load_gt_camera_params_for_vis`` (default ``False``) — when ``true``, always
+      load the same per-frame ``.npy`` calibration files into ``gt_c2w`` ``[V, 4, 4]`` and
+      ``gt_fxfycxcy`` ``[V, 4]``, independent of ``use_camera_params``. These keys are for
+      visualization only (e.g. overlaying ground-truth camera poses on predicted poses in
+      ``beast.inference.save_camera_pointcloud_scene``) and are never read by the model as
+      input, so they can be enabled even when the model is learning its own poses
+      (``use_camera_params: false``).
     * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
       ``training.training_regime``.
     """
@@ -1136,6 +1143,9 @@ class Cheese3DDataset(SABLEDataset):
             segmentation_root = Path(segmentation_root_raw)
         self._use_segmentation = use_segmentation
         self._use_camera_params: bool = bool(training.get('use_camera_params', False))
+        self._load_gt_camera_params_for_vis: bool = bool(
+            training.get('load_gt_camera_params_for_vis', False),
+        )
 
         val_split_ratio = float(training.get('val_split_ratio', 0.0))
         split_seed = int(model_cfg.get('seed', 0))
@@ -1376,8 +1386,9 @@ class Cheese3DDataset(SABLEDataset):
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
             ``scene_name``, optionally ``centercamera_xy``, optionally ``mask``,
-            and (when ``training.use_camera_params`` is ``true``) ``c2w`` ``[V, 4, 4]``
-            and ``fxfycxcy`` ``[V, 4]``.
+            (when ``training.use_camera_params`` is ``true``) ``c2w`` ``[V, 4, 4]`` and
+            ``fxfycxcy`` ``[V, 4]``, and (when ``training.load_gt_camera_params_for_vis``
+            is ``true``) ``gt_c2w`` ``[V, 4, 4]`` and ``gt_fxfycxcy`` ``[V, 4]``.
         """
         rec = self._records[idx]
 
@@ -1436,21 +1447,40 @@ class Cheese3DDataset(SABLEDataset):
                 masks.append(self._load_mask(rec.center_mask_path))  # [1, H, W]
             result['mask'] = torch.stack(masks, dim=0)  # [V, 1, H, W]
 
+        if self._use_camera_params or self._load_gt_camera_params_for_vis:
+            c2w_arr, fxfycxcy_arr = self._load_camera_params(rec)
+
         if self._use_camera_params:
-            left_c2w, left_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.left_path.with_suffix('.npy'))
-            right_c2w, right_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.right_path.with_suffix('.npy'))
-            c2w_arrays = [left_c2w, right_c2w]
-            fxfycxcy_arrays = [left_fxfycxcy, right_fxfycxcy]
-            if rec.center_path is not None:
-                center_c2w, center_fxfycxcy = _npy_to_c2w_fxfycxcy(
-                    rec.center_path.with_suffix('.npy'),
-                )
-                c2w_arrays.append(center_c2w)
-                fxfycxcy_arrays.append(center_fxfycxcy)
-            result['c2w'] = torch.from_numpy(np.stack(c2w_arrays))            # [V, 4, 4]
-            result['fxfycxcy'] = torch.from_numpy(np.stack(fxfycxcy_arrays))  # [V, 4]
+            result['c2w'] = torch.from_numpy(c2w_arr)            # [V, 4, 4]
+            result['fxfycxcy'] = torch.from_numpy(fxfycxcy_arr)  # [V, 4]
+
+        if self._load_gt_camera_params_for_vis:
+            result['gt_c2w'] = torch.from_numpy(c2w_arr).clone()            # [V, 4, 4]
+            result['gt_fxfycxcy'] = torch.from_numpy(fxfycxcy_arr).clone()  # [V, 4]
 
         return result
+
+    def _load_camera_params(self, rec: _PrecacheRecord) -> tuple[np.ndarray, np.ndarray]:
+        """Load stacked GT c2w/fxfycxcy for one record's views, in view-index order.
+
+        Args:
+            rec: precache record for one sample.
+
+        Returns:
+            tuple of (c2w ``[V, 4, 4]``, fxfycxcy ``[V, 4]``) float32 arrays,
+            ``V == self._num_views``.
+        """
+        left_c2w, left_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.left_path.with_suffix('.npy'))
+        right_c2w, right_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.right_path.with_suffix('.npy'))
+        c2w_arrays = [left_c2w, right_c2w]
+        fxfycxcy_arrays = [left_fxfycxcy, right_fxfycxcy]
+        if rec.center_path is not None:
+            center_c2w, center_fxfycxcy = _npy_to_c2w_fxfycxcy(
+                rec.center_path.with_suffix('.npy'),
+            )
+            c2w_arrays.append(center_c2w)
+            fxfycxcy_arrays.append(center_fxfycxcy)
+        return np.stack(c2w_arrays), np.stack(fxfycxcy_arrays)
 
     def _fixed_correspondences(
         self,

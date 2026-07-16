@@ -1138,6 +1138,8 @@ class Sable(BaseLightningModel):
             'fxfycxcy_target': fxfycxcy_target,
             'input_indices': input_idx,
             'target_indices': target_idx,
+            'gt_c2w': data.get('gt_c2w'),
+            'gt_fxfycxcy': data.get('gt_fxfycxcy'),
             'depth_output': depth_output,
             'depth_num_real_views': depth_num_real_views,
             'xyz_norm': xyz_norm,

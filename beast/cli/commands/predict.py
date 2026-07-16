@@ -87,6 +87,24 @@ def register_parser(subparsers: Any) -> None:
         help='Save render-vs-target PNG grids alongside PLY point clouds',
     )
     sable_group.add_argument(
+        '--save-camera-pointcloud-scene',
+        action='store_true',
+        help=(
+            'Save .glb scenes (point cloud + camera frustums) alongside PLY point clouds; '
+            'overlays ground-truth camera frustums (black) when '
+            '--load-gt-camera-params-for-vis is also set'
+        ),
+    )
+    sable_group.add_argument(
+        '--load-gt-camera-params-for-vis',
+        action='store_true',
+        help=(
+            'For Cheese3D datasets, load ground-truth camera calibration for the '
+            '--save-camera-pointcloud-scene overlay, regardless of the saved training '
+            "config's training.use_camera_params"
+        ),
+    )
+    sable_group.add_argument(
         '--max-batches',
         type=int,
         default=None,
@@ -133,6 +151,8 @@ def _handle_sable(args, model):
         correspondence_cache_root=args.correspondence_cache_root,
         splits=args.splits,
         save_visuals=args.save_visuals,
+        save_camera_pointcloud_scene=args.save_camera_pointcloud_scene,
+        load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
         max_batches=args.max_batches,
         session_names=args.session_names,
     )

@@ -74,6 +74,36 @@ When `cheese3d_center_camera` is set, also update `num_views`, `num_input_views`
   split via `SABLEDataset._split_records`, shared with `SABLEDataset` and
   `IBLTwoViewDataset`.
 
+## GT camera overlay in `.glb` scenes
+
+When `training.use_camera_params: false` (the model learns poses via its own predictor),
+the predicted camera poses live in an arbitrary canonical frame with no shared scale or
+origin with the physical Cheese3D rig. Set `training.load_gt_camera_params_for_vis: true`
+to always load the same per-frame `.npy` calibration files as GT `gt_c2w` `[V, 4, 4]` /
+`gt_fxfycxcy` `[V, 4]` tensors — independent of `use_camera_params`, and used for
+visualization only (never fed to the model or any loss).
+
+When both this flag and `training.save_camera_pointcloud_scene: true` are set,
+`beast.inference.save_camera_pointcloud_scene` overlays GT camera frustums (fixed black
+color) alongside the predicted frustums (still colored by view index via the `hsv`
+colormap). Since the predicted and GT frames are unrelated, a best-fit similarity
+transform (rotation + isotropic scale + translation) is solved from predicted to GT
+camera poses — via `estimate_camera_similarity_transform`
+([beast/models/model_utils/utils_icp.py](../../beast/models/model_utils/utils_icp.py)) —
+and applied to both the predicted point cloud and predicted frustums before drawing, so
+predicted and GT geometry appear in the same frame. Rotation and scale/translation are
+solved in two decoupled steps — rotation from the camera orientations alone (orthogonal
+Procrustes over rotation-matrix columns, which carries no scale information and works
+from a single camera), then scale + translation from the camera centers alone with that
+rotation held fixed (requires >= 2 cameras for scale to be observable). This works for
+the default 2-view (TL/TR) config, unlike a plain camera-center-only point fit, which
+would need >= 3 non-collinear centers to pin down a unique rotation.
+
+For inference (`beast predict`), pass `--save-camera-pointcloud-scene
+--load-gt-camera-params-for-vis` to enable the same overlay regardless of what the
+checkpoint's saved training config had (see
+[scripts/sable_scripts/infer_sable_cheese3d.sh](../../scripts/sable_scripts/infer_sable_cheese3d.sh)).
+
 ## Segmentation masking
 
 SAM3 segmentation masks can optionally be loaded alongside the raw frames:

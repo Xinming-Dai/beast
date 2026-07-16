@@ -16,15 +16,16 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-JOB_ID="${JOB_ID:-19823857}"
+JOB_ID="${JOB_ID:-20156493}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d_mask_geom_loss/$JOB_ID}"
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/$JOB_ID}"
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
 
 SPLITS="${SPLITS:-train val}"
 SAVE_VISUALS="${SAVE_VISUALS:-1}"
+SAVE_CAMERA_SCENE="${SAVE_CAMERA_SCENE:-1}"
 MAX_BATCHES="${MAX_BATCHES:-}"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
@@ -52,6 +53,7 @@ Dataset path:          $DATASET_PATH
 Output dir:            $OUTPUT_DIR
 Splits:                $SPLITS
 Save visuals:          $SAVE_VISUALS
+Save camera scene:     $SAVE_CAMERA_SCENE
 Max batches:           ${MAX_BATCHES:-(all)}
 TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
@@ -82,6 +84,7 @@ PREDICT_ARGS=(
     --splits $SPLITS
 )
 [ "$SAVE_VISUALS" = "1" ] && PREDICT_ARGS+=(--save-visuals)
+[ "$SAVE_CAMERA_SCENE" = "1" ] && PREDICT_ARGS+=(--save-camera-pointcloud-scene --load-gt-camera-params-for-vis)
 [ -n "$MAX_BATCHES" ]     && PREDICT_ARGS+=(--max-batches "$MAX_BATCHES")
 
 beast predict "${PREDICT_ARGS[@]}"
