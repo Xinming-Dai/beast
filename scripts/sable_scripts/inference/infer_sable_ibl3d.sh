@@ -8,7 +8,7 @@
 #SBATCH --mem=48G
 #SBATCH -t 0-00:10:00
 #SBATCH -J erz_infer
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/infer_sable_ibl3d_%j.log
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1

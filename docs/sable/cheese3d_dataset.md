@@ -32,7 +32,7 @@ them via its pose predictor.
 
 ## Config
 
-See [configs/sable_cheese3d.yaml](../../configs/sable_cheese3d.yaml) for a full
+See [configs/sable/sable_cheese3d.yaml](../../configs/sable/sable_cheese3d.yaml) for a full
 example. Key fields:
 
 ```yaml
@@ -102,7 +102,7 @@ would need >= 3 non-collinear centers to pin down a unique rotation.
 For inference (`beast predict`), pass `--save-camera-pointcloud-scene
 --load-gt-camera-params-for-vis` to enable the same overlay regardless of what the
 checkpoint's saved training config had (see
-[scripts/sable_scripts/infer_sable_cheese3d.sh](../../scripts/sable_scripts/infer_sable_cheese3d.sh)).
+[scripts/sable_scripts/inference/infer_sable_cheese3d.sh](../../scripts/sable_scripts/inference/infer_sable_cheese3d.sh)).
 
 ## Segmentation masking
 
@@ -165,7 +165,7 @@ The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 ## Running training
 
 ```bash
-sbatch scripts/sable_scripts/train_sable_cheese3d.sh
+sbatch scripts/sable_scripts/training/train_sable_cheese3d.sh
 ```
 
 `train_sable.py` resolves `training.dataset_name` dynamically (via

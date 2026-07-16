@@ -8,7 +8,7 @@
 #SBATCH --mem=48G
 #SBATCH -t 0-24:00:00
 #SBATCH -J sable_ibl
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/train_sable_ibl3d_%j.log
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/training/train_sable_ibl3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -16,7 +16,7 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-CONFIG="${CONFIG:-$REPO_ROOT/configs/sable_ibl3d.yaml}"
+CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_ibl3d.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
 #   sbatch --export=ALL,EID=<session-id>,DATASET_PATH=/path/to/frames scripts/train_sable_ibl3d.sh)

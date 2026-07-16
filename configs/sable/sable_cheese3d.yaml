@@ -84,8 +84,6 @@ optimizer:
 training:
   dataset_name: beast.data.sable_dataset.Cheese3DDataset
   dataset_path: /work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam
-
-  # Cheese3D-specific dataset settings
   session_names:
     - 20231031_B20_chew_bl_000
     - 20231031_B20_chew_bl_000
