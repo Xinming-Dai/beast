@@ -130,7 +130,7 @@ training:
   checkpoint_every: 10000
   checkpoint_steps: [10000]
 
-  resume_ckpt: path/to/sable_dl3dv.pt
+  resume_ckpt: path/to/eryzer_dl3dv.pt
   reset_training_state: true
   max_fwdbwd_passes: 20000
   print_every: 10
