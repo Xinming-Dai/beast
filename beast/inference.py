@@ -20,6 +20,10 @@ from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
+from beast.models.model_utils.utils_icp import (
+    apply_similarity_transform_to_poses,
+    estimate_camera_similarity_transform,
+)
 from beast.models.model_utils.utils_vis import add_scene_cam
 
 _logger = logging.getLogger(__name__)
@@ -901,7 +905,7 @@ def _dedupe_cameras_by_view_index(
     c2w_input: np.ndarray,
     target_idx: torch.Tensor,
     c2w_target: np.ndarray,
-) -> np.ndarray:
+) -> tuple[list[int], np.ndarray]:
     """Combine input/target camera poses into one array, one entry per unique view index.
 
     Input and target view index sets commonly overlap (e.g. full-context inference, where
@@ -916,12 +920,14 @@ def _dedupe_cameras_by_view_index(
         c2w_target: target camera-to-world matrices, shape [v_target, 4, 4].
 
     Returns:
-        camera-to-world matrices, one per unique view index, sorted by view index,
-        shape [num_unique_views, 4, 4].
+        tuple of (view_indices, c2ws): ``view_indices`` is the sorted list of unique view
+        indices (length ``num_unique_views``); ``c2ws`` is the corresponding camera-to-world
+        matrices, shape [num_unique_views, 4, 4].
     """
     c2w_by_view_idx = dict(zip(input_idx.tolist(), c2w_input))
     c2w_by_view_idx.update(zip(target_idx.tolist(), c2w_target))
-    return np.stack([c2w_by_view_idx[idx] for idx in sorted(c2w_by_view_idx)], axis=0)
+    view_indices = sorted(c2w_by_view_idx)
+    return view_indices, np.stack([c2w_by_view_idx[idx] for idx in view_indices], axis=0)
 
 
 def save_camera_pointcloud_scene(
@@ -929,7 +935,7 @@ def save_camera_pointcloud_scene(
     output_dir: str | Path,
     batch_idx: int,
     max_samples: int | None = None,
-    screen_width: float = 0.1,
+    screen_width: float | None = None,
 ) -> list[Path]:
     """Save the predicted point cloud together with camera frustums as a .glb scene.
 
@@ -940,18 +946,36 @@ def save_camera_pointcloud_scene(
     ``_dedupe_cameras_by_view_index``), then exports the scene as a single glTF binary
     (``.glb``) file. The result can be opened directly in any local glTF viewer.
 
+    When ``result['gt_c2w']`` ([B, V, 4, 4]) is present, this also overlays
+    ground-truth camera frustums (fixed black color) alongside the predicted ones.
+    Since predicted poses live in an arbitrary canonical frame (no shared scale/origin
+    with GT), a best-fit similarity transform (rotation + isotropic scale + translation,
+    via ``estimate_camera_similarity_transform``) is solved from predicted to GT camera
+    poses at matching view indices, then applied to both the predicted point cloud and
+    predicted frustums before drawing, so predicted and GT geometry end up in the same
+    frame. Requires at least one corresponding camera (i.e. some overlap between
+    predicted view indices and ``gt_c2w`` row indices); with none, the GT overlay is
+    skipped, a warning is logged, and predicted-only geometry is drawn unaligned,
+    exactly as when ``gt_c2w`` is absent (fully backward compatible).
+
     Args:
         result: dict returned by ``model.get_model_outputs(batch)``.  Must contain
             ``'gaussians'``, ``'c2w_input'`` ([B, v_input, 4, 4]), ``'c2w_target'``
             ([B, v_target, 4, 4]), ``'input_indices'`` ([B, v_input]), and
             ``'target_indices'`` ([B, v_target]); see ``_extract_pointcloud_xyz_rgb``
-            for the point cloud fields it reads.
+            for the point cloud fields it reads. Optionally ``'gt_c2w'`` ([B, V, 4, 4])
+            for the ground-truth camera overlay described above.
         output_dir: root output directory; ``.glb`` files are written under
             ``output_dir / 'glb'``.
         batch_idx: used in the output filename
             ``scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb``.
         max_samples: cap on the number of batch items to save.  ``None`` saves all.
-        screen_width: physical size of the drawn camera frustums.
+        screen_width: physical size of the drawn camera frustums, in the same units as
+            the point cloud. ``None`` (default) auto-scales to 5% of the point cloud's
+            bounding-box diagonal per sample, so frustums stay visibly proportioned
+            regardless of the scene's absolute coordinate scale (Cheese3D point clouds
+            span ~100s of units, unlike the ~1-2 unit scale a fixed absolute default
+            was originally tuned for).
 
     Returns:
         list of Path objects for the .glb files that were written.
@@ -970,11 +994,15 @@ def save_camera_pointcloud_scene(
     ):
         return []
 
+    gt_c2w = result.get('gt_c2w')
+    has_gt_c2w = torch.is_tensor(gt_c2w)
+
     output_dir = Path(output_dir)
     glb_dir = output_dir / 'glb'
     glb_dir.mkdir(parents=True, exist_ok=True)
 
     cmap = matplotlib.colormaps['hsv']
+    gt_color = np.array([0, 0, 0], dtype=np.uint8)
 
     saved = []
     for sample_idx, gs in enumerate(gaussians_list):
@@ -987,16 +1015,47 @@ def save_camera_pointcloud_scene(
         if xyz.size == 0:
             continue
 
-        scene = trimesh.Scene()
-        scene.add_geometry(trimesh.points.PointCloud(vertices=xyz, colors=rgb01))
-
-        c2ws = _dedupe_cameras_by_view_index(
+        view_indices, c2ws = _dedupe_cameras_by_view_index(
             input_indices[sample_idx].detach().cpu(),
             c2w_input[sample_idx].detach().float().cpu().numpy(),
             target_indices[sample_idx].detach().cpu(),
             c2w_target[sample_idx].detach().float().cpu().numpy(),
         )
-        num_cameras = c2ws.shape[0]
+        num_cameras = len(view_indices)
+
+        gt_c2w_np = None
+        if has_gt_c2w and sample_idx < gt_c2w.shape[0]:
+            gt_c2w_np = gt_c2w[sample_idx].detach().float().cpu().numpy()  # [V_gt, 4, 4]
+            correspond = [
+                (pos, vidx) for pos, vidx in enumerate(view_indices) if vidx < gt_c2w_np.shape[0]
+            ]
+            if correspond:
+                pred_positions, gt_indices = zip(*correspond)
+                transform = estimate_camera_similarity_transform(
+                    c2ws[list(pred_positions)],
+                    gt_c2w_np[list(gt_indices)],
+                )
+                yz_flip = np.array([1.0, -1.0, -1.0])
+                xyz = (xyz * yz_flip) @ transform[:3, :3].T + transform[:3, 3] # undo flip, apply transform
+                xyz = xyz * yz_flip # reapply flip
+                c2ws = apply_similarity_transform_to_poses(transform, c2ws)
+            else:
+                log_step(
+                    f'Skipping GT camera overlay for sample {sample_idx}: no view-index '
+                    f'overlap between predicted views {view_indices} and gt_c2w rows '
+                    f'(0..{gt_c2w_np.shape[0] - 1})',
+                    level='warning',
+                )
+                gt_c2w_np = None
+
+        sample_screen_width = screen_width
+        if sample_screen_width is None:
+            scene_diag = float(np.linalg.norm(xyz.max(axis=0) - xyz.min(axis=0)))
+            sample_screen_width = 0.05 * scene_diag if scene_diag > 0 else 0.1
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.points.PointCloud(vertices=xyz, colors=rgb01))
+
         for view_idx, c2w in enumerate(c2ws):
             edge_color = (np.array(cmap(view_idx / num_cameras))[:3] * 255).astype(np.uint8)
             add_scene_cam(
@@ -1004,13 +1063,29 @@ def save_camera_pointcloud_scene(
                 c2w=c2w,
                 edge_color=edge_color,
                 imsize=(256, 256),
-                screen_width=screen_width,
+                screen_width=sample_screen_width,
             )
+
+        num_gt_cameras = 0
+        if gt_c2w_np is not None:
+            num_gt_cameras = gt_c2w_np.shape[0]
+            for gt_view_idx in range(num_gt_cameras):
+                add_scene_cam(
+                    scene=scene,
+                    c2w=gt_c2w_np[gt_view_idx],
+                    edge_color=gt_color,
+                    imsize=(256, 256),
+                    screen_width=sample_screen_width,
+                )
 
         out_glb = glb_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
         scene.export(out_glb)
 
-        log_step(f'Saved camera scene: {out_glb} ({num_cameras} cameras)', level='info')
+        log_step(
+            f'Saved camera scene: {out_glb} ({num_cameras} predicted cameras, '
+            f'{num_gt_cameras} GT cameras)',
+            level='info',
+        )
         saved.append(out_glb)
 
     return saved
