@@ -315,6 +315,13 @@ class Sable(BaseLightningModel):
         nn.init.normal_(self.camera_token, std=1e-6)
         nn.init.normal_(self.register_token, std=1e-6)
 
+        # session identity token
+        session_token_cfg = self.config['model'].get('session_token', {})
+        self.num_sessions = int(session_token_cfg.get('num_sessions', 0))
+        if self.num_sessions > 0:
+            self.session_token_embed = nn.Embedding(self.num_sessions, self.d)
+            nn.init.normal_(self.session_token_embed.weight, std=1e-6)
+
         # qk norm settings
         use_qk_norm = self.config['model']['transformer'].get('use_qk_norm', False)
 
@@ -672,13 +679,21 @@ class Sable(BaseLightningModel):
         # concanate all tokens together
         cam_tokens = repeat(self.camera_token, '1 one d -> bv one d', bv=b * v_all)
         register_tokens = repeat(self.register_token, '1 num_register_tokens d -> bv num_register_tokens d', bv=b * v_all)
-        all_tokens = torch.cat([cam_tokens, register_tokens, img_tokens], dim=1)
+        if self.num_sessions > 0:
+            session_tokens = self.session_token_embed(data['session_idx'])     # [b, d]
+            session_tokens = repeat(session_tokens, 'b d -> (b v) one d', v=v_all, one=1)
+            all_tokens = torch.cat([cam_tokens, register_tokens, session_tokens, img_tokens], dim=1)
+        else:
+            all_tokens = torch.cat([cam_tokens, register_tokens, img_tokens], dim=1)
         all_tokens = rearrange(all_tokens, '(b v) n d -> b (v n) d', b=b)         # [b, v_all*n, d]
 
         # pose estimation for all views
         all_tokens = self.run_vggt_encoder(all_tokens, b, v_all)
         all_tokens = rearrange(all_tokens, 'b (v n) d -> (b v) n d', v=v_all)
-        cam_tokens, _, _ = all_tokens.split([1, self.num_register_tokens, n], dim=1)
+        if self.num_sessions > 0:
+            cam_tokens, _, _, _ = all_tokens.split([1, self.num_register_tokens, 1, n], dim=1)
+        else:
+            cam_tokens, _, _ = all_tokens.split([1, self.num_register_tokens, n], dim=1)
 
         # get se3 poses and intrinsics
         if 'c2w' in data and 'fxfycxcy' in data:

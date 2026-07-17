@@ -2,6 +2,7 @@
 
 import importlib
 import sys
+from collections import Counter
 from pathlib import Path
 
 import lightning.pytorch as pl
@@ -326,6 +327,13 @@ def train_sable(config: dict, model, output_dir: str | Path):
 
     if rank_zero_only.rank == 0:
         print(f'Dataset — train: {len(train_dataset)}, val: {len(val_dataset)}')
+        train_session_counts = Counter(rec.session_id for rec in train_dataset._records)
+        val_session_counts = Counter(rec.session_id for rec in val_dataset._records)
+        for session_id in sorted(train_session_counts.keys() | val_session_counts.keys()):
+            print(
+                f'  session {session_id} — '
+                f'train: {train_session_counts[session_id]}, val: {val_session_counts[session_id]}',
+            )
 
     num_workers = int(training.get('num_workers', 8))
     batch_size = int(training.get('batch_size_per_gpu', 1))

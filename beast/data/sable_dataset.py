@@ -687,6 +687,9 @@ class IBLTwoViewDataset(SABLEDataset):
         else:
             session_ids = list(session_names)
 
+        self.session_ids = session_ids
+        self.session_id_to_idx = {session_id: idx for idx, session_id in enumerate(session_ids)}
+
         records: list[_PrecacheRecord] = []
         for session_id in session_ids:
             left_dir = left_video_dir / f'_iblrig_leftCamera.downsampled.{session_id}'
@@ -802,7 +805,8 @@ class IBLTwoViewDataset(SABLEDataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``, and (for ``pseudo_center_finetune``) ``context_full_mask``.
+            ``scene_name``, ``session_idx``, and (for ``pseudo_center_finetune``)
+            ``context_full_mask``.
         """
         rec = self._records[idx]
 
@@ -840,6 +844,7 @@ class IBLTwoViewDataset(SABLEDataset):
             'rightcamera_xy': correspondences['rightcamera_xy'],
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
+            'session_idx': self.session_id_to_idx[rec.session_id],
         }
 
         if self._training_regime == 'pseudo_center_finetune':
