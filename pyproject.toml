@@ -72,6 +72,14 @@ beast = "beast.cli.main:main"
 vda = [
     "easydict",
 ]
+sable_encoding_decoding = [
+    "accelerate",
+    "facemap",
+    "imageio[ffmpeg]",
+    "ray[tune]",
+    "torcheval",
+    "torchmetrics[image]",
+]
 dev = [
     "pre-commit",
     "pyright",
