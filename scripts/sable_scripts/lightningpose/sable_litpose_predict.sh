@@ -8,17 +8,26 @@
 #SBATCH --mem=20G
 #SBATCH -t 0-00:30:00
 #SBATCH -J litpose
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/lightningpose/litpose_predict_sable_%j.log
+#SBATCH -o scripts/sable_scripts/lightningpose/litpose_predict_sable_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
 source ~/.bashrc
-conda activate lp
+# LitPose prediction uses a separate Lightning Pose env (default `lp`); override with LP_CONDA_ENV.
+conda activate "${LP_CONDA_ENV:-lp}"
 
-BEAST_REPO=/u/xdai3/project3d/SBALE_repo/beast
-ROOT=/work/hdd/bfsr/xdai3/IBL-2view
-LIGHTNING_POSE_MODEL_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/lightning_pose/multiview_transformer_3235_0
-SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/run_litpose_predict_sable.py
+# Resolve repo root without hardcoding a user account: explicit BEAST_REPO override wins,
+# then the sbatch submit dir (run `sbatch` from the repo root), then this script's location.
+if [ -z "${BEAST_REPO:-}" ]; then
+    if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+        BEAST_REPO="$SLURM_SUBMIT_DIR"
+    else
+        BEAST_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    fi
+fi
+ROOT="${ROOT:-/work/hdd/bfsr/xdai3/IBL-2view}"
+LIGHTNING_POSE_MODEL_DIR="${LIGHTNING_POSE_MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/lightning_pose/multiview_transformer_3235_0}"
+SCRIPT="${BEAST_REPO}/beast/preprocess/sable/run_litpose_predict_sable.py"
 
 SESSION_IDS=(
   # b03fbc44-3d8e-4a6c-8a50-5ea3498568e0

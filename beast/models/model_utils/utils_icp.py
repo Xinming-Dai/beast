@@ -219,6 +219,32 @@ def apply_similarity_transform_to_poses(transform: np.ndarray, c2w: np.ndarray) 
     return out
 
 
+def invert_similarity_transform(transform: np.ndarray) -> np.ndarray:
+    """Invert a 4x4 similarity transform whose rotation block is ``s*R``.
+
+    For ``T`` with rotation block ``s*R`` and translation ``t``, the inverse maps a
+    point ``y`` back to ``x`` via ``x = (1/s) R^T (y - t)``, i.e. rotation block
+    ``(1/s) R^T`` and translation ``-(1/s) R^T t``. Used to map GT-frame camera poses
+    into the predicted frame given a predicted->GT transform from
+    ``estimate_camera_similarity_transform``.
+
+    Args:
+        transform: 4x4 similarity transform with rotation block ``s*R``.
+
+    Returns:
+        4x4 similarity transform ``T^{-1}`` with rotation block ``(1/s) R^T``.
+    """
+    sr = transform[:3, :3]
+    scale = float(np.linalg.det(sr)) ** (1.0 / 3.0)
+    R = sr / scale
+    t = transform[:3, 3]
+
+    inv = np.eye(4)
+    inv[:3, :3] = (1.0 / scale) * R.T
+    inv[:3, 3] = -(1.0 / scale) * R.T @ t
+    return inv
+
+
 def estimate_camera_similarity_transform(
     pred_c2w: np.ndarray,
     gt_c2w: np.ndarray,

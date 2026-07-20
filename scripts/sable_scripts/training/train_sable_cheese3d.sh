@@ -8,14 +8,22 @@
 #SBATCH --mem=48G
 #SBATCH -t 0-24:00:00
 #SBATCH -J sable_cheese3d_train
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/training/train_sable_cheese3d_%j.log
+#SBATCH -o scripts/sable_scripts/training/train_sable_cheese3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
 source ~/.bashrc
-conda activate beast
+conda activate "${CONDA_ENV:-sable}"
 
-REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
+# Resolve repo root without hardcoding a user account: explicit REPO_ROOT override wins,
+# then the sbatch submit dir (run `sbatch` from the repo root), then this script's location.
+if [ -z "${REPO_ROOT:-}" ]; then
+    if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+        REPO_ROOT="$SLURM_SUBMIT_DIR"
+    else
+        REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    fi
+fi
 CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_cheese3d.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
@@ -23,7 +31,7 @@ CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_cheese3d.yaml}"
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d}"
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/${USER}/project3d/twoview3d_ckpts/cheese3d}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"

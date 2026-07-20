@@ -6,10 +6,15 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-24:00:00
-#SBATCH -J sable_ibl
-#SBATCH -o scripts/sable_scripts/training/train_sable_ibl3d_%j.log
+#SBATCH -t 0-00:30:00
+#SBATCH -J sable_cheese3d_smoke
+#SBATCH -o scripts/sable_scripts/training/train_sable_cheese3d_smoke_%j.log
 #SBATCH --export=ALL
+
+# 30-minute smoke test of Cheese3D training with the default 2-view settings
+# (configs/sable/sable_cheese3d.yaml). Only deviation from the default config: VDA
+# online mode is pointed at a locally-cloned Video-Depth-Anything repo + checkpoint,
+# because the internal xdai3 VDA paths are permission-blocked for other accounts.
 
 exec 2>&1
 source ~/.bashrc
@@ -24,19 +29,17 @@ if [ -z "${REPO_ROOT:-}" ]; then
         REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
     fi
 fi
-CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_ibl3d.yaml}"
+CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_cheese3d.yaml}"
 
-# Data paths (override by exporting before sbatch, e.g.:
-#   sbatch --export=ALL,EID=<session-id>,DATASET_PATH=/path/to/frames scripts/train_sable_ibl3d.sh)
-STAGE=finetune
-DATASET_ROOT="${DATASET_ROOT:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
-DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/depth_map}"
-CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
+# Data paths (override by exporting before sbatch).
+DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/${USER}/project3d/twoview3d_ckpts/beast_sable/${EID}}"
+# Locally-cloned public Video-Depth-Anything (default config points at blocked xdai3 paths).
+VDA_REPO_ROOT="${VDA_REPO_ROOT:-/work/nvme/bfsr/${USER}/vda/Video-Depth-Anything}"
+VDA_CKPT="${VDA_CKPT:-$VDA_REPO_ROOT/checkpoints/video_depth_anything_vitb.pth}"
+
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/${USER}/project3d/twoview3d_ckpts/cheese3d_smoke}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
@@ -67,10 +70,9 @@ Job ID: ${SLURM_JOB_ID:-local}
 Running on node(s): ${SLURM_NODELIST:-$(hostname)}
 Config: $CONFIG
 Dataset path: $DATASET_PATH
-Session ID: $EID
-VDA cache root: $VDA_CACHE_ROOT
-Correspondence cache root: $CORRESPONDENCE_CACHE_ROOT
 Resume ckpt: ${RESUME_CKPT:-(none)}
+VDA repo root: $VDA_REPO_ROOT
+VDA checkpoint: $VDA_CKPT
 Checkpoint dir (output): $CHECKPOINT_DIR
 TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
@@ -87,26 +89,39 @@ if torch.cuda.is_available():
         print(f"  cuda:{i} {torch.cuda.get_device_name(i)}  capability={cap[0]}.{cap[1]}")
 PY
 
-echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting smoke test..."
 
 [ -f "$CONFIG" ] || { echo "ERROR: Config not found: $CONFIG"; exit 1; }
 [ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
+[ -f "$VDA_REPO_ROOT/video_depth_anything/video_depth.py" ] || { echo "ERROR: VDA repo not found: $VDA_REPO_ROOT"; exit 1; }
+[ -f "$VDA_CKPT" ] || { echo "ERROR: VDA checkpoint not found: $VDA_CKPT"; exit 1; }
 
 cd "$REPO_ROOT"
 
+# Restrict to sessions whose TL+TR segmentation masks are readable under this account
+# (some of the default config's sessions have group-denied mask subdirs owned by xdai3).
+# Override to skip via SESSION_NAMES="[...]" if access changes.
+SESSION_NAMES="${SESSION_NAMES:-[20231031_B21_chew_bl_000,20231031_B6_chew_temperature_000,20231031_B21_chew_temperature_000,20231031_B26_chew_temperature_000,20231031_B31_chew_temperature_000]}"
+
+# Build overrides list; only include resume_ckpt when it is set.
 OVERRIDES=(
     "training.dataset_path=$DATASET_PATH"
-    "training.session_names=$EID"
-    "model.vda.cache_root=$VDA_CACHE_ROOT"
-    "model.merge_pcd.correspondence_cache_root=$CORRESPONDENCE_CACHE_ROOT"
     "training.checkpoint_dir=$CHECKPOINT_DIR"
     "training.reset_training_state=True"
+    "training.session_names=$SESSION_NAMES"
+    "model.vda.repo_root=$VDA_REPO_ROOT"
+    "model.vda.checkpoint_path=$VDA_CKPT"
+    # the 30-min SLURM wall clock bounds this smoke test; keep total steps above
+    # optimizer.warmup (3000) so OneCycleLR pct_start = warmup/max_fwdbwd_passes stays < 1.
+    # checkpoint often so we capture a saved checkpoint before the wall clock cuts it off.
+    "training.max_fwdbwd_passes=${MAX_FWDBWD_PASSES:-20000}"
+    "training.checkpoint_every=${CHECKPOINT_EVERY:-200}"
 )
-[ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
 
-# Optional extra config overrides (space-separated key=val), useful for smoke tests, e.g.:
-#   sbatch -t 00:30:00 --export=ALL,EXTRA_OVERRIDES="training.max_fwdbwd_passes=120" <script>
-[ -n "${EXTRA_OVERRIDES:-}" ] && OVERRIDES+=($EXTRA_OVERRIDES)
+# opt-in: render the held-out front (TC) camera as novel-view synthesis at val time,
+# saved under <checkpoint_dir>/visuals/front_nvs/. Enable with RENDER_FRONT_NVS=1.
+[ "${RENDER_FRONT_NVS:-0}" = "1" ] && OVERRIDES+=("training.render_front_nvs.enabled=true")
+[ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
 
 beast train \
     --config "$CONFIG" \

@@ -10,7 +10,11 @@ import torch
 import yaml
 
 from beast.data.samplers import ResumableRandomSampler
-from beast.inference import save_camera_pointcloud_scene, save_gaussian_pointclouds
+from beast.inference import (
+    save_camera_pointcloud_scene,
+    save_front_view_nvs,
+    save_gaussian_pointclouds,
+)
 from beast.logging import log_step
 from beast.data.sable_dataset import collate_with_correspondence_padding
 from beast.models.model_utils.train_vis import save_training_visuals
@@ -164,6 +168,14 @@ class ValVisualizationCallback(pl.Callback):
                 )
                 if glb_paths:
                     log_step(f'Saved initial camera scene: {glb_paths[0]}', level='info')
+            front_nvs_paths = save_front_view_nvs(
+                vars(result),
+                self._vis_dir,
+                batch_idx=0,
+                max_samples=self._max_samples,
+            )
+            if front_nvs_paths:
+                log_step(f'Saved initial front-view NVS: {front_nvs_paths[0]}', level='info')
         except Exception as exc:
             log_step(f'ValVisualizationCallback: failed to save initial visuals: {exc}', level='warning')
 
@@ -214,6 +226,14 @@ class ValVisualizationCallback(pl.Callback):
                 )
                 if glb_paths:
                     log_step(f'Saved val camera scene: {glb_paths[0]}', level='info')
+            front_nvs_paths = save_front_view_nvs(
+                vars(result),
+                self._vis_dir,
+                batch_idx=trainer.global_step,
+                max_samples=self._max_samples,
+            )
+            if front_nvs_paths:
+                log_step(f'Saved val front-view NVS: {front_nvs_paths[0]}', level='info')
         except Exception as exc:
             log_step(f'ValVisualizationCallback: failed to save visuals: {exc}', level='warning')
 

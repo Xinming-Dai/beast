@@ -99,6 +99,14 @@ training:
   cheese3d_right_camera: TR
   use_camera_params: false
   load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
+
+  # true novel-view synthesis of a held-out front camera: its image is never fed to the
+  # model; only its GT pose is loaded, aligned into the predicted frame (similarity
+  # transform from the input views), and rendered from the predicted gaussians at val time
+  # (saved under visuals/front_nvs/). Requires load_gt_camera_params_for_vis: true.
+  render_front_nvs:
+    enabled: false
+    camera: TC
   use_segmentation:
     enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks

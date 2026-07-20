@@ -1091,6 +1091,72 @@ def save_camera_pointcloud_scene(
     return saved
 
 
+def save_front_view_nvs(
+    result: dict,
+    output_dir: str | Path,
+    batch_idx: int,
+    max_samples: int | None = None,
+) -> list[Path]:
+    """Save held-out front-camera novel-view-synthesis renders as side-by-side PNGs.
+
+    For each batch item, writes a two-panel image with the ground-truth front-camera
+    frame on the left and the model's rendered front view on the right. The render is
+    produced by ``Sable.render_front_view_nvs`` (predicted gaussians viewed from the GT
+    front pose aligned into the predicted frame); the front image is never fed to the
+    model, so this is a true novel-view-synthesis comparison. No-ops (returns ``[]``)
+    when ``result`` lacks ``front_render`` (front NVS disabled).
+
+    Args:
+        result: dict form of the Sable forward output. Reads ``front_render``
+            ([B, 1, 3, H, W]) and, when present, ``front_gt_image`` ([B, 3, H, W]).
+        output_dir: root output directory; PNGs are written under
+            ``output_dir / 'front_nvs'``.
+        batch_idx: used in the output filename
+            ``front_nvs_batch{batch_idx:04d}_sample{sample_idx:02d}.png``.
+        max_samples: cap on the number of batch items to save. ``None`` saves all.
+
+    Returns:
+        list of Path objects for the PNG files that were written.
+    """
+    front_render = result.get('front_render')
+    if not torch.is_tensor(front_render):
+        return []
+    front_gt_image = result.get('front_gt_image')
+
+    out_dir = Path(output_dir) / 'front_nvs'
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _to_uint8(image: torch.Tensor) -> np.ndarray:
+        """Convert a ``[3, H, W]`` float tensor in ``[0, 1]`` to ``[H, W, 3]`` uint8."""
+        arr = image.detach().float().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        return (arr * 255.0 + 0.5).astype(np.uint8)
+
+    num_samples = int(front_render.shape[0])
+    if max_samples is not None:
+        num_samples = min(num_samples, int(max_samples))
+
+    saved = []
+    for sample_idx in range(num_samples):
+        render_img = _to_uint8(front_render[sample_idx, 0])  # [H, W, 3]
+        panels = [render_img]
+        labels = ['front NVS render']
+        if torch.is_tensor(front_gt_image) and sample_idx < front_gt_image.shape[0]:
+            gt_img = _to_uint8(front_gt_image[sample_idx])   # [H, W, 3]
+            panels = [gt_img, render_img]
+            labels = ['front GT', 'front NVS render']
+
+        combined = np.concatenate(panels, axis=1)  # [H, W*len(panels), 3]
+        out_png = out_dir / f'front_nvs_batch{batch_idx:04d}_sample{sample_idx:02d}.png'
+        Image.fromarray(combined).save(out_png)
+        log_step(
+            f'Saved front-view NVS ({" | ".join(labels)}): {out_png}',
+            level='info',
+        )
+        saved.append(out_png)
+
+    return saved
+
+
 # aliased so `infer_sable`'s `save_camera_pointcloud_scene` bool parameter can shadow
 # the function name locally while still calling it
 _save_camera_pointcloud_scene_fn = save_camera_pointcloud_scene

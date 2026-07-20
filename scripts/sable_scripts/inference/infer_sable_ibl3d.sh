@@ -8,14 +8,22 @@
 #SBATCH --mem=48G
 #SBATCH -t 0-00:10:00
 #SBATCH -J erz_infer
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_%j.log
+#SBATCH -o scripts/sable_scripts/inference/infer_sable_ibl3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
 source ~/.bashrc
-conda activate beast
+conda activate "${CONDA_ENV:-sable}"
 
-REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
+# Resolve repo root without hardcoding a user account: explicit REPO_ROOT override wins,
+# then the sbatch submit dir (run `sbatch` from the repo root), then this script's location.
+if [ -z "${REPO_ROOT:-}" ]; then
+    if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+        REPO_ROOT="$SLURM_SUBMIT_DIR"
+    else
+        REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    fi
+fi
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 JOB_ID="${JOB_ID:-19575256}"
 
@@ -23,7 +31,7 @@ STAGE=finetune
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/$EID/$JOB_ID}"
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/${USER}/project3d/twoview3d_ckpts/beast_sable/$EID/$JOB_ID}"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
 

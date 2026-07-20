@@ -37,6 +37,7 @@ class _PrecacheRecord:
     right_mask_path: Path | None = None
     center_path: Path | None = None
     center_mask_path: Path | None = None
+    front_path: Path | None = None
 
 
 class SABLEDataset(Dataset):
@@ -1147,6 +1148,13 @@ class Cheese3DDataset(SABLEDataset):
             training.get('load_gt_camera_params_for_vis', False),
         )
 
+        # true novel-view synthesis of a held-out front camera (e.g. 'TC'): its image is
+        # never fed to the model; only its GT pose is loaded, to be aligned into the
+        # predicted frame and rendered from the predicted gaussians (see Sable forward).
+        front_nvs_cfg: dict = training.get('render_front_nvs') or {}
+        self._front_nvs_enabled: bool = bool(front_nvs_cfg.get('enabled', False))
+        self._front_camera: str = str(front_nvs_cfg.get('camera', 'TC'))
+
         val_split_ratio = float(training.get('val_split_ratio', 0.0))
         split_seed = int(model_cfg.get('seed', 0))
         self._records: list[_PrecacheRecord] = self._load_records(
@@ -1229,12 +1237,26 @@ class Cheese3DDataset(SABLEDataset):
                     )
                     continue
 
+            front_dir: Path | None = None
+            if self._front_nvs_enabled:
+                front_dir = session_dir / self._front_camera
+                if not front_dir.is_dir():
+                    log_step(
+                        f'skipping session {session_name!r}: missing front camera '
+                        f'{self._front_camera!r} directory (render_front_nvs enabled)',
+                        level='warning',
+                    )
+                    continue
+
             left_indices = self._frame_indices(left_dir, prefix='img', suffix='.png')
             right_indices = self._frame_indices(right_dir, prefix='img', suffix='.png')
             common_indices = left_indices & right_indices
             if center_dir is not None:
                 center_indices = self._frame_indices(center_dir, prefix='img', suffix='.png')
                 common_indices &= center_indices
+            if front_dir is not None:
+                front_indices = self._frame_indices(front_dir, prefix='img', suffix='.png')
+                common_indices &= front_indices
 
             left_mask_dir = right_mask_dir = center_mask_dir = None
             if segmentation_root is not None:
@@ -1274,6 +1296,9 @@ class Cheese3DDataset(SABLEDataset):
                         center_mask_dir / f'mask{frame_idx:08d}.png'
                         if center_mask_dir
                         else None
+                    ),
+                    front_path=(
+                        front_dir / f'img{frame_idx:08d}.png' if front_dir else None
                     ),
                 ))
 
@@ -1447,16 +1472,27 @@ class Cheese3DDataset(SABLEDataset):
                 masks.append(self._load_mask(rec.center_mask_path))  # [1, H, W]
             result['mask'] = torch.stack(masks, dim=0)  # [V, 1, H, W]
 
-        if self._use_camera_params or self._load_gt_camera_params_for_vis:
+        if self._use_camera_params or self._load_gt_camera_params_for_vis or self._front_nvs_enabled:
             c2w_arr, fxfycxcy_arr = self._load_camera_params(rec)
 
-        if self._use_camera_params:
+        # front NVS renders the held-out camera in the GT world frame, so the model must
+        # consume GT input poses (posed inputs) rather than predicting its own canonical
+        # frame; otherwise the front GT pose and the predicted gaussians live in different,
+        # non-similar frames and cannot be reconciled.
+        if self._use_camera_params or self._front_nvs_enabled:
             result['c2w'] = torch.from_numpy(c2w_arr)            # [V, 4, 4]
             result['fxfycxcy'] = torch.from_numpy(fxfycxcy_arr)  # [V, 4]
 
         if self._load_gt_camera_params_for_vis:
             result['gt_c2w'] = torch.from_numpy(c2w_arr).clone()            # [V, 4, 4]
             result['gt_fxfycxcy'] = torch.from_numpy(fxfycxcy_arr).clone()  # [V, 4]
+
+        if self._front_nvs_enabled and rec.front_path is not None:
+            front_img, _, _ = self._load_image(rec.front_path)  # [3, H, W]
+            front_c2w, front_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.front_path.with_suffix('.npy'))
+            result['front_image'] = front_img                                       # [3, H, W]
+            result['front_gt_c2w'] = torch.from_numpy(front_c2w).unsqueeze(0)       # [1, 4, 4]
+            result['front_gt_fxfycxcy'] = torch.from_numpy(front_fxfycxcy).unsqueeze(0)  # [1, 4]
 
         return result
 

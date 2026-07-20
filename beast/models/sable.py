@@ -1033,6 +1033,26 @@ class Sable(BaseLightningModel):
             rendered_images=render.render,
         )
 
+        # true novel-view synthesis of a held-out front camera: the model consumed GT input
+        # poses (see Cheese3DDataset.render_front_nvs), so the gaussians live in the GT world
+        # frame and the held-out camera is rendered directly from its GT pose/intrinsics. The
+        # front image is never fed to the model. Only at eval/inference time.
+        front_render = None
+        front_gt_c2w = data.get('front_gt_c2w')
+        if (
+            not self.training
+            and 'c2w' in data
+            and torch.is_tensor(front_gt_c2w)
+            and torch.is_tensor(data.get('front_gt_fxfycxcy'))
+        ):
+            front_render = self.render_front_view_nvs(
+                gaussian_attrs=gaussian_attrs,
+                front_gt_c2w=front_gt_c2w,
+                front_gt_fxfycxcy=data['front_gt_fxfycxcy'],
+                height=height,
+                width=width,
+            )
+
         vis_only_results = None
         should_render_video = (
             render_video
@@ -1140,6 +1160,8 @@ class Sable(BaseLightningModel):
             'target_indices': target_idx,
             'gt_c2w': data.get('gt_c2w'),
             'gt_fxfycxcy': data.get('gt_fxfycxcy'),
+            'front_render': front_render,
+            'front_gt_image': data.get('front_image'),
             'depth_output': depth_output,
             'depth_num_real_views': depth_num_real_views,
             'xyz_norm': xyz_norm,
@@ -1473,6 +1495,51 @@ class Sable(BaseLightningModel):
                 concat_nerf_img_tokens = self.transformer_encoder_geom[i](concat_nerf_img_tokens)
             return concat_nerf_img_tokens
         return custom_forward
+
+    def render_front_view_nvs(
+        self,
+        gaussian_attrs: SimpleNamespace,
+        front_gt_c2w: torch.Tensor,
+        front_gt_fxfycxcy: torch.Tensor,
+        height: int,
+        width: int,
+    ) -> torch.Tensor:
+        """Render a held-out front camera as novel-view synthesis from its GT pose.
+
+        Front NVS runs the model on GT input poses (see ``Cheese3DDataset`` with
+        ``training.render_front_nvs``), so the predicted gaussians are built directly in the
+        GT world frame. The held-out front camera -- whose image is never fed to the model --
+        is therefore rendered straight from its GT camera-to-world pose and GT intrinsics, in
+        the same frame as the gaussians, with no pose alignment required.
+
+        Args:
+            gaussian_attrs: namespace with batched ``xyz``/``features``/``scaling``/
+                ``rotation``/``opacity`` (GT-frame gaussians).
+            front_gt_c2w: GT front-camera poses ``[b, 1, 4, 4]``.
+            front_gt_fxfycxcy: GT front-camera normalised intrinsics ``[b, 1, 4]``
+                (``[fx/W, fy/H, cx/W, cy/H]``).
+            height: render height in pixels.
+            width: render width in pixels.
+
+        Returns:
+            rendered front views ``[b, 1, 3, H, W]`` in ``[0, 1]``.
+        """
+        # normalised intrinsics -> pixel units, matching the main render path
+        intrinsics_scale = front_gt_fxfycxcy.new_tensor([width, height, width, height])
+        fxfycxcy_front = front_gt_fxfycxcy * intrinsics_scale  # [b, 1, 4]
+
+        render = self.renderer(
+            gaussian_attrs.xyz,
+            gaussian_attrs.features,
+            gaussian_attrs.scaling,
+            gaussian_attrs.rotation,
+            gaussian_attrs.opacity,
+            height,
+            width,
+            C2W=front_gt_c2w,
+            fxfycxcy=fxfycxcy_front,
+        )
+        return render.render  # [b, 1, 3, H, W]
 
     def render_images_video(self, gaussian_attrs, c2w_all, fxfycxcy_all, normalized=False, step_back=0):
         '''
