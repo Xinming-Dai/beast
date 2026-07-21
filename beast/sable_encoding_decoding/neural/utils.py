@@ -16,7 +16,7 @@ import torch
 from scipy.special import gammaln
 from torcheval.metrics import R2Score
 
-_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'mu_s', 'psae', 'depth', 'cat', 'mu_u'))
+_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'mu_s', 'psae', 'dino', 'cat', 'mu_u'))
 
 
 def _parse_latent_kind(value: str) -> str:
@@ -78,7 +78,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         'mu_s → pose_mu_s_z/<eid>/pose_mu_s_z_trials.npz (--return-combined-mu-s-z); '
         'psae → psae_z/<eid>/psae_z_trials.npz full concat z '
         '(--return-combined-psae-z; requires --model_config); '
-        'depth → depth_z/<eid>/depth_z_trials.npz; '
+        'dino → dino_z/<eid>/dino_z_trials.npz; '
         'cat → cat_z/<eid>/cat_z_trials.npz; '
         'mu_u → same npz as psae, sliced to unsupervised tail (requires --model_config); '
         'any img_tokens_compressed* (e.g. img_tokens_compressed, img_tokens_compressed_3_comp) → '
@@ -104,7 +104,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         help='Basename for the saved .npy under the latent session dir (extension optional; '
         '.npy is added by numpy.save). Default: encoding_results or decoding_results from '
         '--eval_task, with _<latent_kind> appended when --latent_kind is set, or inferred '
-        'from the layout (e.g. .../depth_z/<eid>/ → encoding_results_depth).',
+        'from the layout (e.g. .../dino_z/<eid>/ → encoding_results_dino).',
     )
     parser.add_argument(
         '--tune_storage_path',
@@ -112,7 +112,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         default=None,
         help='Ray Tune experiment root; trial logs go under this directory. '
         'If --latent_kind is set and this is omitted, defaults to '
-        '<latent_input_dir>/<layout subdir>: frame_z, pose_mu_s_z, psae_z, depth_z, cat_z, '
+        '<latent_input_dir>/<layout subdir>: frame_z, pose_mu_s_z, psae_z, dino_z, cat_z, '
         'or for img_tokens_compressed* the same name as --latent_kind. If --latent_kind is '
         'omitted, Ray uses its usual default (e.g. ~/ray_results) when this is unset.',
     )

@@ -18,7 +18,7 @@ conda activate beast
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
-# Extracts per-pair Sable latent tensors (frame_z / depth_z / combined_z / img_tokens) from a
+# Extracts per-pair Sable latent tensors (frame_z / dino_z / combined_z / img_tokens) from a
 # trained checkpoint, for downstream neural encoding/decoding. Analogous to E-RayZer's
 # scripts/mia/erz_dino/encoding/step1_erz_latent.sh + src/inference.py latent-export flags
 # (--return-cat-z, --return-combined-all-z, --return-img-tokens); this repo only supports the

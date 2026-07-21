@@ -730,7 +730,7 @@ class Sable(BaseLightningModel):
         #         embedder=self.pe_embedder,
         #     )
         dino_cls_tokens = dino_cls_tokens[batch_idx, input_idx, ...]
-        # depth_z_out is for neural encoding
+        # dino_z_out is for neural encoding
         dino_cls_out = latent_tensor_export_if_requested(
             dino_cls_tokens,
             data,
@@ -1166,7 +1166,7 @@ class Sable(BaseLightningModel):
             'target_gaussian_mask': target_gaussian_mask,
             'frame_z': cls_3d_out,
             'img_tokens': img_tokens_out,
-            'depth_z': dino_cls_out,
+            'dino_z': dino_cls_out,
             'combined_z': combined_z_out,
         })
 

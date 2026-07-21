@@ -1242,7 +1242,7 @@ def infer_sable(
 # `beast.models.model_utils.utils_latent.latent_tensor_export_if_requested`
 _LATENT_GATE_KEYS: dict[str, str] = {
     'frame_z': 'return_frame_cls_tokens',
-    'depth_z': 'return_dino_cls',
+    'dino_z': 'return_dino_cls',
     'combined_z': 'return_combined_z',
     'img_tokens': 'return_img_tokens',
 }
@@ -1321,7 +1321,7 @@ def extract_sable_latents(
         config: full beast config dict (same as used for training).
         model: trained Sable Lightning model instance.
         output_dir: root directory for per-latent-type subdirectories.
-        latent_types: subset of ``['frame_z', 'depth_z', 'combined_z', 'img_tokens']``; ``None``
+        latent_types: subset of ``['frame_z', 'dino_z', 'combined_z', 'img_tokens']``; ``None``
             exports all four (the ``--return-all-z`` analog).
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to both
