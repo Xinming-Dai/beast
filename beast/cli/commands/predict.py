@@ -77,9 +77,9 @@ def register_parser(subparsers: Any) -> None:
     sable_group.add_argument(
         '--splits',
         nargs='+',
-        default=['train', 'val'],
+        default=['train', 'val', 'test'],
         metavar='SPLIT',
-        help='Dataset splits to run inference on (default: train val)',
+        help='Dataset splits to run inference on (default: train val test)',
     )
     sable_group.add_argument(
         '--save-visuals',

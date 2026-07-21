@@ -1107,7 +1107,7 @@ def _build_sable_inference_loader(
     Args:
         config: full beast config dict (same as used for training).
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
-            both ``'train'`` and ``'val'``.
+            ``'train'``, ``'val'``, and ``'test'``.
 
     Returns:
         tuple ``(dataset, loader)``.
@@ -1116,7 +1116,7 @@ def _build_sable_inference_loader(
     from beast.train_sable import _resolve_dataset_class
 
     if include_splits is None:
-        include_splits = ['train', 'val']
+        include_splits = ['train', 'val', 'test']
 
     training = config['training']
     dataset_cls = _resolve_dataset_class(
@@ -1166,7 +1166,7 @@ def infer_sable(
         save_visuals: whether to save render-vs-target PNG grids for each batch.
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
-            both ``'train'`` and ``'val'``.
+            ``'train'``, ``'val'``, and ``'test'``.
 
     Returns:
         dict with keys:
@@ -1324,8 +1324,8 @@ def extract_sable_latents(
         latent_types: subset of ``['frame_z', 'dino_z', 'combined_z', 'img_tokens']``; ``None``
             exports all four (the ``--return-all-z`` analog).
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
-        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to both
-            ``'train'`` and ``'val'``.
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+            ``'train'``, ``'val'``, and ``'test'``.
         resume: when ``True`` (default), skip a batch's forward pass entirely if every
             requested output file for every row in that batch already exists and loads
             successfully.
