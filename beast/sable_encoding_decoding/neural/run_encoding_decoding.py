@@ -39,7 +39,7 @@ _LATENT_KIND_LAYOUT = {
     'frame': ('frame_z', 'frame_z_trials.npz'),
     'mu_s': ('pose_mu_s_z', 'pose_mu_s_z_trials.npz'),
     'psae': ('psae_z', 'psae_z_trials.npz'),
-    'depth': ('depth_z', 'depth_z_trials.npz'),
+    'dino': ('dino_z', 'dino_z_trials.npz'),
     'cat': ('cat_z', 'cat_z_trials.npz'),
     'mu_u': ('psae_z', 'psae_z_trials.npz'),
 }
@@ -53,7 +53,7 @@ def _default_result_basename(eval_task: str, latent_kind: str | None) -> str:
         latent_kind: parsed `--latent_kind`, or `None`.
 
     Returns:
-        Basename such as `encoding_results` or `encoding_results_depth`.
+        Basename such as `encoding_results` or `encoding_results_dino`.
     """
     base = 'encoding_results' if eval_task == 'encoding' else 'decoding_results'
     if latent_kind is not None:
@@ -66,7 +66,7 @@ def _default_result_basename(eval_task: str, latent_kind: str | None) -> str:
 _SUBDIR_TO_RESULT_SUFFIX = {
     'frame_z': 'frame',
     'pose_mu_s_z': 'mu_s',
-    'depth_z': 'depth',
+    'dino_z': 'dino',
     'psae_z': 'psae',
     'cat_z': 'cat',
 }
@@ -147,7 +147,7 @@ def _latent_session_dir_and_trials_npz(
 def _resolve_tune_storage_path(
     latent_root: str, latent_kind: str | None, explicit: str | None,
 ) -> str | None:
-    """Ray Tune root: under frame_z / pose_mu_s_z / psae_z / depth_z / cat_z when
+    """Ray Tune root: under frame_z / pose_mu_s_z / psae_z / dino_z / cat_z when
     `latent_kind` is set.
 
     Args:

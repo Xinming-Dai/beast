@@ -60,7 +60,7 @@ _INFER_LATENTS_PARENTS = (
     'pose_mu_s_z',
     'frame_z',
     'cat_z',
-    'depth_z',
+    'dino_z',
     'psae_z',
     'img_tokens',
 )

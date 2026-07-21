@@ -261,7 +261,7 @@ class Model:
             correspondence_cache_root: root directory of precomputed correspondence
                 cache. When ``None``, the value from the saved training config is used.
             splits: dataset splits to run inference on (default: ['train', 'val']).
-            latent_types: subset of ``['frame_z', 'depth_z', 'combined_z', 'img_tokens']``;
+            latent_types: subset of ``['frame_z', 'dino_z', 'combined_z', 'img_tokens']``;
                 ``None`` exports all four.
             max_batches: stop after this many batches; None runs the full dataset.
             session_names: session IDs to load. Accepts a list or a single string.

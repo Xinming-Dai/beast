@@ -130,14 +130,14 @@ def register_parser(subparsers: Any) -> None:
         help='Save frame_z (3D-aware frame CLS tokens)',
     )
     latent_group.add_argument(
-        '--return-depth-z',
+        '--return-dino-z',
         action='store_true',
-        help='Save depth_z (DINO depth-encoder CLS tokens)',
+        help='Save dino_z (DINO featurizer CLS tokens)',
     )
     latent_group.add_argument(
         '--return-cat-z',
         action='store_true',
-        help='Save combined_z = cat([frame_z, depth_z], dim=-1)',
+        help='Save combined_z = cat([frame_z, dino_z], dim=-1)',
     )
     latent_group.add_argument(
         '--return-img-tokens',
@@ -148,8 +148,8 @@ def register_parser(subparsers: Any) -> None:
     latent_group.add_argument(
         '--return-all-z',
         action='store_true',
-        help='Shorthand for --return-frame-z --return-depth-z --return-cat-z; '
-             'mutually exclusive with the individual --return-frame-z/--return-depth-z/'
+        help='Shorthand for --return-frame-z --return-dino-z --return-cat-z; '
+             'mutually exclusive with the individual --return-frame-z/--return-dino-z/'
              '--return-cat-z flags',
     )
     latent_group.add_argument(
@@ -209,12 +209,12 @@ def _handle_sable_extract_latents(args, model, output_dir):
 
     individual_flags = {
         'frame_z': args.return_frame_z,
-        'depth_z': args.return_depth_z,
+        'dino_z': args.return_dino_z,
         'combined_z': args.return_cat_z,
     }
     if args.return_all_z and any(individual_flags.values()):
         _logger.error(
-            '--return-all-z cannot be combined with --return-frame-z/--return-depth-z/'
+            '--return-all-z cannot be combined with --return-frame-z/--return-dino-z/'
             '--return-cat-z',
         )
         return
@@ -229,7 +229,7 @@ def _handle_sable_extract_latents(args, model, output_dir):
     if not latent_types:
         _logger.error(
             '--extract-latents requires at least one of --return-all-z/--return-frame-z/'
-            '--return-depth-z/--return-cat-z/--return-img-tokens',
+            '--return-dino-z/--return-cat-z/--return-img-tokens',
         )
         return
 
