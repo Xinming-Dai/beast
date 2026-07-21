@@ -117,6 +117,47 @@ def register_parser(subparsers: Any) -> None:
         help='session IDs to load (default: use value from saved training config)',
     )
 
+    # Sable latent extraction options
+    latent_group = parser.add_argument_group('Sable latent extraction options')
+    latent_group.add_argument(
+        '--extract-latents',
+        action='store_true',
+        help='Extract per-pair latent tensors instead of PLY/GLB/PNG outputs',
+    )
+    latent_group.add_argument(
+        '--return-frame-z',
+        action='store_true',
+        help='Save frame_z (3D-aware frame CLS tokens)',
+    )
+    latent_group.add_argument(
+        '--return-depth-z',
+        action='store_true',
+        help='Save depth_z (DINO depth-encoder CLS tokens)',
+    )
+    latent_group.add_argument(
+        '--return-cat-z',
+        action='store_true',
+        help='Save combined_z = cat([frame_z, depth_z], dim=-1)',
+    )
+    latent_group.add_argument(
+        '--return-img-tokens',
+        action='store_true',
+        help='Save img_tokens (geometry-encoder image patch tokens); independent of the other '
+             'latent types and may be combined with any of them',
+    )
+    latent_group.add_argument(
+        '--return-all-z',
+        action='store_true',
+        help='Shorthand for --return-frame-z --return-depth-z --return-cat-z; '
+             'mutually exclusive with the individual --return-frame-z/--return-depth-z/'
+             '--return-cat-z flags',
+    )
+    latent_group.add_argument(
+        '--no-resume',
+        action='store_true',
+        help='Disable resume-skip; always recompute and overwrite existing latent files',
+    )
+
 
 def handle(args: argparse.Namespace) -> None:
     """Handle the predict command execution."""
@@ -141,6 +182,11 @@ def _handle_sable(args, model):
         return
 
     output_dir = args.output or args.model / 'inference'
+
+    if args.extract_latents:
+        _handle_sable_extract_latents(args, model, output_dir)
+        return
+
     _logger.info(f'Running Sable inference on: {args.input}')
     _logger.info(f'Output directory: {output_dir}')
 
@@ -155,6 +201,51 @@ def _handle_sable(args, model):
         load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
         max_batches=args.max_batches,
         session_names=args.session_names,
+    )
+
+
+def _handle_sable_extract_latents(args, model, output_dir):
+    """Extract per-pair Sable latent tensors instead of PLY/GLB/PNG outputs."""
+
+    individual_flags = {
+        'frame_z': args.return_frame_z,
+        'depth_z': args.return_depth_z,
+        'combined_z': args.return_cat_z,
+    }
+    if args.return_all_z and any(individual_flags.values()):
+        _logger.error(
+            '--return-all-z cannot be combined with --return-frame-z/--return-depth-z/'
+            '--return-cat-z',
+        )
+        return
+
+    if args.return_all_z:
+        latent_types = list(individual_flags)
+    else:
+        latent_types = [name for name, requested in individual_flags.items() if requested]
+    if args.return_img_tokens:
+        latent_types.append('img_tokens')
+
+    if not latent_types:
+        _logger.error(
+            '--extract-latents requires at least one of --return-all-z/--return-frame-z/'
+            '--return-depth-z/--return-cat-z/--return-img-tokens',
+        )
+        return
+
+    _logger.info(f'Extracting Sable latents {latent_types} from: {args.input}')
+    _logger.info(f'Output directory: {output_dir}')
+
+    model.extract_sable_latents(
+        dataset_path=args.input,
+        output_dir=output_dir,
+        vda_cache_root=args.vda_cache_root,
+        correspondence_cache_root=args.correspondence_cache_root,
+        splits=args.splits,
+        latent_types=latent_types,
+        max_batches=args.max_batches,
+        session_names=args.session_names,
+        resume=not args.no_resume,
     )
 
 

@@ -237,6 +237,74 @@ class Model:
             include_splits=splits,
         )
 
+    def extract_sable_latents(
+        self,
+        dataset_path: str | Path | None = None,
+        output_dir: str | Path | None = None,
+        vda_cache_root: str | Path | None = None,
+        correspondence_cache_root: str | Path | None = None,
+        splits: list[str] | None = None,
+        latent_types: list[str] | None = None,
+        max_batches: int | None = None,
+        session_names: list[str] | str | None = None,
+        resume: bool = True,
+    ) -> dict[str, Any]:
+        """Extract and save per-pair Sable latent tensors for downstream encoding/decoding.
+
+        Args:
+            dataset_path: path to the scene dataset. For IBL: raw frames root
+                (``leftCamera.video/`` / ``rightCamera.video/`` layout). For
+                Cheese3D: root Cheese3D directory.
+            output_dir: root directory for outputs; defaults to <model_dir>/inference.
+            vda_cache_root: root directory of precomputed VDA depth cache. When
+                ``None``, the value from the saved training config is used.
+            correspondence_cache_root: root directory of precomputed correspondence
+                cache. When ``None``, the value from the saved training config is used.
+            splits: dataset splits to run inference on (default: ['train', 'val']).
+            latent_types: subset of ``['frame_z', 'depth_z', 'combined_z', 'img_tokens']``;
+                ``None`` exports all four.
+            max_batches: stop after this many batches; None runs the full dataset.
+            session_names: session IDs to load. Accepts a list or a single string.
+                When ``None``, the value from the saved training config is used.
+            resume: when ``True`` (default), skip a batch's forward pass entirely if every
+                requested output file for every row in that batch already exists.
+
+        Returns:
+            dict with keys 'output_dir', 'num_batches', 'num_batches_skipped', 'saved_files'.
+        """
+        from beast.inference import extract_sable_latents as _extract_sable_latents
+
+        config = {**self.config}
+        config['inference'] = True
+        config['training'] = {**config.get('training', {})}
+        if dataset_path is not None:
+            config['training']['dataset_path'] = str(dataset_path)
+        if session_names is not None:
+            config['training']['session_names'] = session_names
+        if vda_cache_root is not None:
+            config['model'] = {**config.get('model', {})}
+            config['model']['vda'] = {**config['model'].get('vda', {})}
+            config['model']['vda']['cache_root'] = str(vda_cache_root)
+        if correspondence_cache_root is not None:
+            config['model'] = config.get('model', {})
+            config['model']['merge_pcd'] = {**config['model'].get('merge_pcd', {})}
+            config['model']['merge_pcd']['correspondence_cache_root'] = str(correspondence_cache_root)
+
+        output_dir = Path(output_dir) if output_dir else (self.model_dir or Path('inference'))
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model.to(device)
+
+        return _extract_sable_latents(
+            config=config,
+            model=self.model,
+            output_dir=output_dir,
+            latent_types=latent_types,
+            max_batches=max_batches,
+            include_splits=splits,
+            resume=resume,
+        )
+
     def predict_images(
         self,
         image_dir: str | Path,
