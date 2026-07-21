@@ -7,7 +7,7 @@
 #SBATCH --mem=16G
 #SBATCH -t 0-01:59:00
 #SBATCH -J sable_generate_video
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/generate_video_%j.log
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step5_generate_video_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -18,7 +18,8 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
 # Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,INPUT_DIR=...,OUTPUT=... scripts/sable_scripts/encoding_decoding/generate_video.sh
+#   sbatch --export=ALL,INPUT_DIR=...,OUTPUT=... \
+#     scripts/sable_scripts/encoding_decoding/img_token/step5_generate_video.sh
 INPUT_DIR="${INPUT_DIR:-<PATH_TO_RENDERED_FRAMES_DIR>}"
 OUTPUT="${OUTPUT:-$INPUT_DIR/video.mp4}"
 FPS="${FPS:-24}"

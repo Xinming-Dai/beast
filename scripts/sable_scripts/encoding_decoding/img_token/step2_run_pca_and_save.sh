@@ -8,7 +8,7 @@
 #SBATCH --mem=48G
 #SBATCH -t 0-11:59:00
 #SBATCH -J sable_pca_and_save
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/run_pca_and_save_%j.log
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step2_run_pca_and_save_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -19,7 +19,8 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
 # Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... scripts/sable_scripts/encoding_decoding/run_pca_and_save.sh
+#   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... \
+#     scripts/sable_scripts/encoding_decoding/img_token/step2_run_pca_and_save.sh
 INPUT_DIR="${INPUT_DIR:-<MODEL_ROOT>/img_tokens}"           # inference dir of img_tokens_batch*.npz shards
 MODEL_ROOT="${MODEL_ROOT:-<MODEL_ROOT>}"                    # anchor dir for default output paths
 STAGE="${STAGE:-all}"                                       # 1 | 2 | all

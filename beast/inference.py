@@ -1,6 +1,8 @@
 """Inference handlers for saving model predictions on images and videos."""
 
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -1096,6 +1098,50 @@ def save_camera_pointcloud_scene(
 _save_camera_pointcloud_scene_fn = save_camera_pointcloud_scene
 
 
+def _build_sable_inference_loader(
+    config: dict,
+    include_splits: list[str] | None = None,
+) -> tuple[Any, torch.utils.data.DataLoader]:
+    """Build the ``(dataset, DataLoader)`` pair shared by Sable inference entrypoints.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+            both ``'train'`` and ``'val'``.
+
+    Returns:
+        tuple ``(dataset, loader)``.
+    """
+    from beast.data.sable_dataset import collate_with_correspondence_padding
+    from beast.train_sable import _resolve_dataset_class
+
+    if include_splits is None:
+        include_splits = ['train', 'val']
+
+    training = config['training']
+    dataset_cls = _resolve_dataset_class(
+        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
+    )
+    dataset = dataset_cls(config, include_splits=include_splits)
+    log_step(
+        f'_build_sable_inference_loader: {len(dataset)} samples across splits {include_splits}',
+        level='info',
+    )
+
+    num_workers = int(training.get('num_workers', 4))
+    batch_size = int(training.get('batch_size_per_gpu', 1))
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_with_correspondence_padding,
+        drop_last=False,
+    )
+    return dataset, loader
+
+
 def infer_sable(
     config: dict,
     model,
@@ -1131,34 +1177,12 @@ def infer_sable(
               saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
     """
-    from beast.data.sable_dataset import collate_with_correspondence_padding
     from beast.models.model_utils.train_vis import save_training_visuals
-    from beast.train_sable import _resolve_dataset_class
-
-    if include_splits is None:
-        include_splits = ['train', 'val']
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    training = config['training']
-    dataset_cls = _resolve_dataset_class(
-        training.get('dataset_name', 'beast.data.sable_dataset.SABLEDataset')
-    )
-    dataset = dataset_cls(config, include_splits=include_splits)
-    log_step(f'infer_sable: {len(dataset)} samples across splits {include_splits}', level='info')
-
-    num_workers = int(training.get('num_workers', 4))
-    batch_size = int(training.get('batch_size_per_gpu', 1))
-
-    loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=collate_with_correspondence_padding,
-        drop_last=False,
-    )
+    _dataset, loader = _build_sable_inference_loader(config, include_splits=include_splits)
 
     device = next(model.parameters()).device
     model.eval()
@@ -1211,4 +1235,182 @@ def infer_sable(
         'ply_files': all_ply,
         'camera_pointcloud_scene_glb_files': all_glb,
         'vis_files': all_vis,
+    }
+
+
+# maps a latent type name to the `data`/`config['model']` gate key read by
+# `beast.models.model_utils.utils_latent.latent_tensor_export_if_requested`
+_LATENT_GATE_KEYS: dict[str, str] = {
+    'frame_z': 'return_frame_cls_tokens',
+    'depth_z': 'return_dino_cls',
+    'combined_z': 'return_combined_z',
+    'img_tokens': 'return_img_tokens',
+}
+
+_SCENE_NAME_RE = re.compile(r'^(.+)_pair_(\d+)$')
+
+
+def _parse_scene_name(scene_name: str) -> tuple[str, int]:
+    """Split a Sable ``scene_name`` (``'{session_id}_pair_{pair_idx:06d}'``) into its parts.
+
+    Args:
+        scene_name: scene name as stored on each dataset record.
+
+    Returns:
+        tuple ``(session_id, pair_idx)``.
+
+    Raises:
+        ValueError: if ``scene_name`` doesn't match the expected ``'{session_id}_pair_{idx}'``
+            pattern.
+    """
+    match = _SCENE_NAME_RE.match(scene_name)
+    if not match:
+        raise ValueError(f"scene_name {scene_name!r} does not match '<session_id>_pair_<idx>'")
+    return match.group(1), int(match.group(2))
+
+
+def _latent_output_path(output_dir: Path, latent_type: str, session_id: str, pair_idx: int) -> Path:
+    """Path for a single per-pair latent file: ``output_dir/{type}/{type}_{sid}_{idx:06d}.npy``."""
+    return output_dir / latent_type / f'{latent_type}_{session_id}_{pair_idx:06d}.npy'
+
+
+def _is_valid_npy(path: Path) -> bool:
+    """True if ``path`` exists and loads successfully as a `.npy` array."""
+    if not path.is_file():
+        return False
+    try:
+        np.load(path)
+    except (OSError, ValueError, EOFError):
+        return False
+    return True
+
+
+def _save_latent_npy(path: Path, array: np.ndarray) -> None:
+    """Atomically save ``array`` to ``path`` (temp file + ``os.replace``).
+
+    Guards against a killed job leaving a file that looks complete but isn't, so a later
+    resume never mistakes a partial write for a finished one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f'{path.name}.tmp-{os.getpid()}')
+    # write via an open file handle so numpy doesn't append its own `.npy` suffix to tmp_path
+    with open(tmp_path, 'wb') as f:
+        np.save(f, array)
+    tmp_path.replace(path)
+
+
+def extract_sable_latents(
+    config: dict,
+    model,
+    output_dir: str | Path,
+    latent_types: list[str] | None = None,
+    max_batches: int | None = None,
+    include_splits: list[str] | None = None,
+    resume: bool = True,
+) -> dict:
+    """Extract and save per-pair Sable latent tensors for downstream encoding/decoding.
+
+    Sets the ``return_*`` gates already wired into ``beast.models.sable.Sable.forward`` (via
+    ``latent_tensor_export_if_requested``) and saves one ``.npy`` per ``(session_id, pair_idx)``
+    per requested latent type, under
+    ``output_dir/<latent_type>/<latent_type>_<session_id>_<pair_idx:06d>.npy`` — the exact
+    layout ``beast.sable_encoding_decoding.img_token.trials_assembly.load_latent_map_pair_files``
+    already expects.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        model: trained Sable Lightning model instance.
+        output_dir: root directory for per-latent-type subdirectories.
+        latent_types: subset of ``['frame_z', 'depth_z', 'combined_z', 'img_tokens']``; ``None``
+            exports all four (the ``--return-all-z`` analog).
+        max_batches: stop after this many batches.  ``None`` runs the full dataset.
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to both
+            ``'train'`` and ``'val'``.
+        resume: when ``True`` (default), skip a batch's forward pass entirely if every
+            requested output file for every row in that batch already exists and loads
+            successfully.
+
+    Returns:
+        dict with keys:
+            - ``'output_dir'``: str path of the output directory.
+            - ``'num_batches'``: number of batches for which a forward pass ran.
+            - ``'num_batches_skipped'``: number of batches skipped via resume.
+            - ``'saved_files'``: dict mapping latent type to list of saved Path objects.
+
+    Raises:
+        ValueError: if ``latent_types`` contains an unknown latent type.
+    """
+    if latent_types is None:
+        latent_types = list(_LATENT_GATE_KEYS)
+    unknown = sorted(set(latent_types) - set(_LATENT_GATE_KEYS))
+    if unknown:
+        raise ValueError(
+            f'unknown latent_types {unknown}; expected subset of {sorted(_LATENT_GATE_KEYS)}',
+        )
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    _dataset, loader = _build_sable_inference_loader(config, include_splits=include_splits)
+
+    device = next(model.parameters()).device
+    model.eval()
+
+    num_batches = 0
+    num_batches_skipped = 0
+    saved_files: dict[str, list[Path]] = {latent_type: [] for latent_type in latent_types}
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            scene_names = batch['scene_name']
+            row_ids = [_parse_scene_name(scene_name) for scene_name in scene_names]
+            row_paths = {
+                latent_type: [
+                    _latent_output_path(output_dir, latent_type, session_id, pair_idx)
+                    for session_id, pair_idx in row_ids
+                ]
+                for latent_type in latent_types
+            }
+
+            if resume and all(
+                _is_valid_npy(path) for paths in row_paths.values() for path in paths
+            ):
+                num_batches_skipped += 1
+                for latent_type, paths in row_paths.items():
+                    saved_files[latent_type].extend(paths)
+                continue
+
+            batch = {
+                k: v.to(device) if torch.is_tensor(v) else v
+                for k, v in batch.items()
+            }
+            for latent_type in latent_types:
+                batch[_LATENT_GATE_KEYS[latent_type]] = True
+
+            result = model.get_model_outputs(batch)
+
+            for latent_type, paths in row_paths.items():
+                z = getattr(result, latent_type)
+                z_np = z.detach().cpu().numpy()
+                for row_idx, path in enumerate(paths):
+                    _save_latent_npy(path, z_np[row_idx])
+                    saved_files[latent_type].append(path)
+
+            num_batches += 1
+
+    log_step(
+        f'extract_sable_latents: processed {num_batches} batches '
+        f'({num_batches_skipped} skipped via resume), '
+        f'latent types {latent_types}',
+        level='info',
+    )
+
+    return {
+        'output_dir': str(output_dir),
+        'num_batches': num_batches,
+        'num_batches_skipped': num_batches_skipped,
+        'saved_files': saved_files,
     }

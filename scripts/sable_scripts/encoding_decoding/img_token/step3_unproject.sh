@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH -t 0-05:59:00
 #SBATCH -J sable_unproject
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/unproject_%j.log
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step3_unproject_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -19,7 +19,8 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
 # Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,EID=...,MODEL_ROOT=... scripts/sable_scripts/encoding_decoding/unproject.sh
+#   sbatch --export=ALL,EID=...,MODEL_ROOT=... \
+#     scripts/sable_scripts/encoding_decoding/img_token/step3_unproject.sh
 EID="${EID:-<SESSION_ID>}"
 MODEL_ROOT="${MODEL_ROOT:-<MODEL_ROOT>}"
 LATENT_ROOT="${LATENT_ROOT:-<LATENT_ROOT>}"
