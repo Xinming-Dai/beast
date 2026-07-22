@@ -37,6 +37,7 @@ class _PrecacheRecord:
     right_mask_path: Path | None = None
     center_path: Path | None = None
     center_mask_path: Path | None = None
+    split: str | None = None
 
 
 class SABLEDataset(Dataset):
@@ -644,18 +645,25 @@ class IBLTwoViewDataset(SABLEDataset):
     ) -> list[_PrecacheRecord]:
         """Discover stereo pairs from the IBL filesystem layout without a JSON index.
 
-        Left images are expected at::
+        Two layouts are supported, tried in this order per session:
 
-            {image_root}/leftCamera.video/_iblrig_leftCamera.downsampled.{session_id}/img{N:08d}.png
+        1. Training layout — images directly under the session directory::
 
-        Right images at::
+               {image_root}/leftCamera.video/_iblrig_leftCamera.downsampled.{session_id}/img{N:08d}.png
+               {image_root}/rightCamera.video/_iblrig_rightCamera.downsampled.{session_id}/img{N:08d}.png
 
-            {image_root}/rightCamera.video/_iblrig_rightCamera.downsampled.{session_id}/img{N:08d}.png
+           Frame indices are parsed from filenames. The sorted position of each
+           frame index within a session becomes its ``pair_idx`` (used for
+           correspondence file lookup); the index value itself becomes
+           ``source_frame_index`` (used for depth file lookup).
 
-        Frame indices are parsed from filenames. The sorted position of each frame
-        index within a session becomes its ``pair_idx`` (used for correspondence
-        file lookup); the index value itself becomes ``source_frame_index`` (used
-        for depth file lookup).
+        2. Eval layout — a ``{train,val,test}`` split subdirectory between the
+           session directory and the images, with ``interval{N}timebin{M}.png``
+           filenames and a ``frame_index_mapping.json`` per split directory mapping
+           filename to ``{left,right}_source_frame_index``. See
+           :meth:`_discover_eval_split_records` for details. Used automatically
+           when no ``img*.png`` files are found directly under the session
+           directory.
 
         Args:
             image_root: base directory containing ``leftCamera.video/`` and
@@ -691,6 +699,7 @@ class IBLTwoViewDataset(SABLEDataset):
         self.session_id_to_idx = {session_id: idx for idx, session_id in enumerate(session_ids)}
 
         records: list[_PrecacheRecord] = []
+        eval_records: list[_PrecacheRecord] = []
         for session_id in session_ids:
             left_dir = left_video_dir / f'_iblrig_leftCamera.downsampled.{session_id}'
             right_dir = right_video_dir / f'_iblrig_rightCamera.downsampled.{session_id}'
@@ -708,33 +717,121 @@ class IBLTwoViewDataset(SABLEDataset):
             right_indices = self._parse_frame_indices(right_dir)
             common = sorted(left_indices & right_indices)
 
-            if not common:
-                _logger.warning('skipping session %s: no common frame indices', session_id)
+            if common:
+                for pair_idx, source_frame_index in enumerate(common):
+                    records.append(_PrecacheRecord(
+                        session_id=session_id,
+                        pair_idx=pair_idx,
+                        left_path=left_dir / f'img{source_frame_index:08d}.png',
+                        right_path=right_dir / f'img{source_frame_index:08d}.png',
+                        left_source_frame_index=source_frame_index,
+                        right_source_frame_index=source_frame_index,
+                        scene_name=f'{session_id}_pair_{pair_idx:06d}',
+                    ))
                 continue
 
-            for pair_idx, source_frame_index in enumerate(common):
-                records.append(_PrecacheRecord(
-                    session_id=session_id,
-                    pair_idx=pair_idx,
-                    left_path=left_dir / f'img{source_frame_index:08d}.png',
-                    right_path=right_dir / f'img{source_frame_index:08d}.png',
-                    left_source_frame_index=source_frame_index,
-                    right_source_frame_index=source_frame_index,
-                    scene_name=f'{session_id}_pair_{pair_idx:06d}',
-                ))
+            session_eval_records = self._discover_eval_split_records(
+                left_dir=left_dir,
+                right_dir=right_dir,
+                session_id=session_id,
+                include_splits=include_splits,
+            )
+            if not session_eval_records:
+                _logger.warning('skipping session %s: no common frame indices', session_id)
+                continue
+            eval_records.extend(session_eval_records)
 
-        if not records:
+        if not records and not eval_records:
             raise RuntimeError(
                 f'No valid stereo pairs found under {image_root} for sessions {session_ids}'
             )
 
-        return self._split_records(
-            records,
-            include_splits=include_splits,
-            val_split_ratio=val_split_ratio,
-            split_seed=split_seed,
-            source_desc=str(image_root),
-        )
+        if records:
+            records = self._split_records(
+                records,
+                include_splits=include_splits,
+                val_split_ratio=val_split_ratio,
+                split_seed=split_seed,
+                source_desc=str(image_root),
+            )
+
+        # eval-layout records already carry a fixed, on-disk train/val/test split
+        # (see _discover_eval_split_records), so they bypass _split_records's
+        # synthetic val_split_ratio-based reshuffling entirely.
+        return records + eval_records
+
+    def _discover_eval_split_records(
+        self,
+        left_dir: Path,
+        right_dir: Path,
+        session_id: str,
+        include_splits: list[str] | None,
+    ) -> list[_PrecacheRecord]:
+        """Discover stereo pairs from the IBL eval-set layout for one session.
+
+        Eval frames live under a ``{train,val,test}`` split subdirectory of the
+        session directory — a fixed, on-disk split (driven by ``neural_trial_idx``
+        upstream) rather than the synthetic ``val_split_ratio`` split used for the
+        training layout — and are named ``interval{N}timebin{M}.png`` instead of
+        ``img{N:08d}.png``. Each split directory has a ``frame_index_mapping.json``
+        mapping filename to its raw IBL ``*_source_frame_index``, e.g.::
+
+            {"interval0timebin0.png": {"left_source_frame_index": 19834, ...}}
+
+        (the right-camera mapping file uses ``right_source_frame_index`` instead).
+        Left/right frames are paired by identical filename — both cameras share the
+        same filenames within a split — rather than by a reconstructed numeric
+        index, and ``source_frame_index`` is looked up from the mapping instead of
+        parsed from the filename.
+
+        ``pair_idx`` is a single counter incremented across all requested splits
+        within the session (not reset per split), so it stays unique per session —
+        required by downstream consumers that key saved artifacts on
+        ``(session_id, pair_idx)`` alone.
+
+        Args:
+            left_dir: session directory under ``leftCamera.video``.
+            right_dir: session directory under ``rightCamera.video``.
+            session_id: session identifier.
+            include_splits: on-disk split subdirectories to include (``train``,
+                ``val``, ``test``); ``None`` includes all of them.
+
+        Returns:
+            list of ``_PrecacheRecord`` instances, empty if none found.
+        """
+        splits = include_splits if include_splits else ['train', 'val', 'test']
+        records: list[_PrecacheRecord] = []
+        pair_idx = 0
+        for split_name in splits:
+            left_split_dir = left_dir / split_name
+            right_split_dir = right_dir / split_name
+            left_mapping_path = left_split_dir / 'frame_index_mapping.json'
+            right_mapping_path = right_split_dir / 'frame_index_mapping.json'
+            if not left_mapping_path.is_file() or not right_mapping_path.is_file():
+                continue
+
+            with open(left_mapping_path) as f:
+                left_mapping = json.load(f)
+            with open(right_mapping_path) as f:
+                right_mapping = json.load(f)
+
+            common_filenames = sorted(set(left_mapping) & set(right_mapping))
+            for filename in common_filenames:
+                records.append(_PrecacheRecord(
+                    session_id=session_id,
+                    pair_idx=pair_idx,
+                    left_path=left_split_dir / filename,
+                    right_path=right_split_dir / filename,
+                    left_source_frame_index=int(left_mapping[filename]['left_source_frame_index']),
+                    right_source_frame_index=int(
+                        right_mapping[filename]['right_source_frame_index']
+                    ),
+                    scene_name=f'{session_id}_pair_{pair_idx:06d}',
+                    split=split_name,
+                ))
+                pair_idx += 1
+
+        return records
 
     @staticmethod
     def _parse_frame_indices(directory: Path) -> set[int]:
