@@ -16,7 +16,7 @@ import torch
 from scipy.special import gammaln
 from torcheval.metrics import R2Score
 
-_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'mu_s', 'psae', 'dino', 'cat', 'mu_u'))
+_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined'))
 
 
 def _parse_latent_kind(value: str) -> str:
@@ -75,12 +75,8 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         help='Latent layout under --latent_input_dir (matches src/inference.py '
         '--return-combined-*-z): '
         'frame → frame_z/<eid>/frame_z_trials.npz; '
-        'mu_s → pose_mu_s_z/<eid>/pose_mu_s_z_trials.npz (--return-combined-mu-s-z); '
-        'psae → psae_z/<eid>/psae_z_trials.npz full concat z '
-        '(--return-combined-psae-z; requires --model_config); '
         'dino → dino_z/<eid>/dino_z_trials.npz; '
-        'cat → cat_z/<eid>/cat_z_trials.npz; '
-        'mu_u → same npz as psae, sliced to unsupervised tail (requires --model_config); '
+        'combined → combined_z/<eid>/combined_z_trials.npz; '
         'any img_tokens_compressed* (e.g. img_tokens_compressed, img_tokens_compressed_3_comp) → '
         '<latent_kind>/<eid>/img_tokens_compressed_trials.npz (PCA outputs; '
         'run_encoding_decoding.py uses CNN Ray Tune only, no RRR). '
@@ -90,9 +86,8 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         '--model_config',
         type=str,
         default=None,
-        help='Training/inference YAML. Required for --latent_kind psae or mu_u: reads '
-        'num_latents and latent_partition.dim_supervised (default 6) for shape check; '
-        'mu_u additionally slices z[..., dim_supervised:].',
+        help='Training/inference YAML. Unused for the current fixed --latent_kind values '
+        '(frame, dino, combined); retained for img_tokens_compressed* and future latent kinds.',
     )
     parser.add_argument(
         '--eval_task', type=str, default='encoding', help='Evaluation task: encoding or decoding',
@@ -112,7 +107,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         default=None,
         help='Ray Tune experiment root; trial logs go under this directory. '
         'If --latent_kind is set and this is omitted, defaults to '
-        '<latent_input_dir>/<layout subdir>: frame_z, pose_mu_s_z, psae_z, dino_z, cat_z, '
+        '<latent_input_dir>/<layout subdir>: frame_z, dino_z, combined_z, '
         'or for img_tokens_compressed* the same name as --latent_kind. If --latent_kind is '
         'omitted, Ray uses its usual default (e.g. ~/ray_results) when this is unset.',
     )

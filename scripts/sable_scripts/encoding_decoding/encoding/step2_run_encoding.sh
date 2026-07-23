@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
-#SBATCH -t 0-11:59:00
-#SBATCH -J sable_run_encoding
+#SBATCH -t 0-1:59:00
+#SBATCH -J encoding
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/encoding/step2_run_encoding_%j.log
 #SBATCH --export=ALL
 
@@ -19,15 +19,14 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
 # Neural encoding: predicts neural activity from Sable latents (RRR/CNN, via Ray Tune).
-# Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,EID=<session-id>,... \
-#     scripts/sable_scripts/encoding_decoding/encoding/step2_run_encoding.sh
-EID="${EID:-<SESSION_ID>}"                                  # session / animal id
-NEURAL_INPUT_DIR="${NEURAL_INPUT_DIR:-<PATH_TO_NEURAL_ROOT>}"   # root dir of neural (spike) data
-LATENT_INPUT_DIR="${LATENT_INPUT_DIR:-<PATH_TO_LATENT_ROOT>}"   # root dir of latent data
-LATENT_KIND="${LATENT_KIND:-frame}"                         # frame | mu_s | psae | mu_u | depth | cat | img_tokens_compressed*
+NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data   # root dir of neural (spike) data
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural encoding for eid=$EID"
+EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"                                
+JOB_ID="20284092"                                         
+LATENT_INPUT_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID/latents
+LATENT_KIND="${LATENT_KIND:-frame}"                         # frame | dino | combined
+
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural encoding for eid=$EID with latent_kind=$LATENT_KIND"
 
 python -m beast.sable_encoding_decoding.neural.run_encoding_decoding \
     --eid "$EID" \

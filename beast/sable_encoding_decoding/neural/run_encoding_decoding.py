@@ -40,7 +40,7 @@ _LATENT_KIND_LAYOUT = {
     'mu_s': ('pose_mu_s_z', 'pose_mu_s_z_trials.npz'),
     'psae': ('psae_z', 'psae_z_trials.npz'),
     'dino': ('dino_z', 'dino_z_trials.npz'),
-    'cat': ('cat_z', 'cat_z_trials.npz'),
+    'combined': ('combined_z', 'combined_z_trials.npz'),
     'mu_u': ('psae_z', 'psae_z_trials.npz'),
 }
 
@@ -68,7 +68,7 @@ _SUBDIR_TO_RESULT_SUFFIX = {
     'pose_mu_s_z': 'mu_s',
     'dino_z': 'dino',
     'psae_z': 'psae',
-    'cat_z': 'cat',
+    'combined_z': 'combined',
 }
 
 
@@ -147,8 +147,7 @@ def _latent_session_dir_and_trials_npz(
 def _resolve_tune_storage_path(
     latent_root: str, latent_kind: str | None, explicit: str | None,
 ) -> str | None:
-    """Ray Tune root: under frame_z / pose_mu_s_z / psae_z / dino_z / cat_z when
-    `latent_kind` is set.
+    """Ray Tune root: under frame_z / dino_z / combined_z when `latent_kind` is set.
 
     Args:
         latent_root: `--latent_input_dir`.
