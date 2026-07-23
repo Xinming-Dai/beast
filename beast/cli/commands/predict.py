@@ -157,6 +157,15 @@ def register_parser(subparsers: Any) -> None:
         action='store_true',
         help='Disable resume-skip; always recompute and overwrite existing latent files',
     )
+    latent_group.add_argument(
+        '--latent-batch-size',
+        type=int,
+        default=None,
+        help=(
+            'Override training.batch_size_per_gpu for latent extraction (default: use the '
+            'saved training config\'s batch size)'
+        ),
+    )
 
 
 def handle(args: argparse.Namespace) -> None:
@@ -246,6 +255,7 @@ def _handle_sable_extract_latents(args, model, output_dir):
         max_batches=args.max_batches,
         session_names=args.session_names,
         resume=not args.no_resume,
+        batch_size=args.latent_batch_size,
     )
 
 

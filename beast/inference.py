@@ -1,7 +1,9 @@
 """Inference handlers for saving model predictions on images and videos."""
 
+import json
 import logging
 import os
+import pickle
 import re
 from pathlib import Path
 from typing import Any
@@ -1098,21 +1100,22 @@ def save_camera_pointcloud_scene(
 _save_camera_pointcloud_scene_fn = save_camera_pointcloud_scene
 
 
-def _build_sable_inference_loader(
-    config: dict,
-    include_splits: list[str] | None = None,
-) -> tuple[Any, torch.utils.data.DataLoader]:
-    """Build the ``(dataset, DataLoader)`` pair shared by Sable inference entrypoints.
+def _resolve_batch_size(training: dict, batch_size: int | None) -> int:
+    """``batch_size`` if given, else ``training.batch_size_per_gpu`` (default ``1``)."""
+    return int(batch_size) if batch_size is not None else int(training.get('batch_size_per_gpu', 1))
+
+
+def _build_sable_dataset(config: dict, include_splits: list[str] | None = None) -> Any:
+    """Construct the Sable inference dataset alone (no ``DataLoader``, no image loading).
 
     Args:
         config: full beast config dict (same as used for training).
-        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``). Defaults to
             ``'train'``, ``'val'``, and ``'test'``.
 
     Returns:
-        tuple ``(dataset, loader)``.
+        the constructed dataset instance.
     """
-    from beast.data.sable_dataset import collate_with_correspondence_padding
     from beast.train_sable import _resolve_dataset_class
 
     if include_splits is None:
@@ -1124,16 +1127,57 @@ def _build_sable_inference_loader(
     )
     dataset = dataset_cls(config, include_splits=include_splits)
     log_step(
-        f'_build_sable_inference_loader: {len(dataset)} samples across splits {include_splits}',
+        f'_build_sable_dataset: {len(dataset)} samples across splits {include_splits}',
         level='info',
     )
+    return dataset
 
+
+def _build_sable_inference_loader(
+    config: dict,
+    include_splits: list[str] | None = None,
+    batch_size: int | None = None,
+    start_row: int = 0,
+    dataset: Any = None,
+) -> tuple[Any, torch.utils.data.DataLoader]:
+    """Build the ``(dataset, DataLoader)`` pair shared by Sable inference entrypoints.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
+            ``'train'``, ``'val'``, and ``'test'``.
+        batch_size: overrides ``training.batch_size_per_gpu`` when given. Callers that key
+            saved artifacts on ``batch_idx`` (e.g. ``extract_sable_latents``'s resume logic)
+            must keep this the same across resumed runs against the same output directory,
+            since a different batch size reshuffles which rows land in which ``batch_idx``.
+        start_row: skip the dataset's first ``start_row`` rows (via a ``Subset``) so the
+            ``DataLoader``/its workers never load or collate already-completed rows. Callers
+            that key saved artifacts on ``batch_idx`` must offset the enumeration index by
+            ``start_row // resolved_batch_size`` to recover the true ``batch_idx``.
+        dataset: reuse an already-constructed dataset (e.g. one already inspected for resume
+            bookkeeping) instead of building a new one.
+
+    Returns:
+        tuple ``(dataset, loader)`` — ``dataset`` is always the full (unsliced) dataset, even
+        when ``loader`` iterates a ``start_row``-sliced ``Subset`` of it.
+    """
+    from beast.data.sable_dataset import collate_with_correspondence_padding
+
+    if dataset is None:
+        dataset = _build_sable_dataset(config, include_splits=include_splits)
+
+    training = config['training']
     num_workers = int(training.get('num_workers', 4))
-    batch_size = int(training.get('batch_size_per_gpu', 1))
+    resolved_batch_size = _resolve_batch_size(training, batch_size)
 
+    loader_dataset = (
+        torch.utils.data.Subset(dataset, range(start_row, len(dataset)))
+        if start_row > 0
+        else dataset
+    )
     loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
+        loader_dataset,
+        batch_size=resolved_batch_size,
         shuffle=False,
         num_workers=num_workers,
         collate_fn=collate_with_correspondence_padding,
@@ -1269,34 +1313,269 @@ def _parse_scene_name(scene_name: str) -> tuple[str, int]:
     return match.group(1), int(match.group(2))
 
 
-def _latent_output_path(output_dir: Path, latent_type: str, session_id: str, pair_idx: int) -> Path:
-    """Path for a single per-pair latent file: ``output_dir/{type}/{type}_{sid}_{idx:06d}.npy``."""
-    return output_dir / latent_type / f'{latent_type}_{session_id}_{pair_idx:06d}.npy'
+_BATCH_NPZ_REQUIRED_KEYS = (
+    'z',
+    'session_id',
+    'pair_idx',
+    'trial_split',
+    'neural_trial_idx',
+    'neural_bin_idx',
+    'neural_interval_sec',
+)
 
 
-def _is_valid_npy(path: Path) -> bool:
-    """True if ``path`` exists and loads successfully as a `.npy` array."""
+def _batch_output_path(
+    output_dir: Path, latent_type: str, session_id: str, split_name: str, batch_idx: int,
+) -> Path:
+    """Path for a per-batch latent file:
+    ``output_dir/{type}/{session}/{split}/{type}_batch{idx:04d}.npz``.
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import _session_subdir_key
+
+    return (
+        output_dir
+        / latent_type
+        / _session_subdir_key(session_id)
+        / split_name
+        / f'{latent_type}_batch{batch_idx:04d}.npz'
+    )
+
+
+def _num_batches_for(num_records: int, batch_size: int) -> int:
+    """Number of ``batch_size``-sized (last one possibly smaller) batches over ``num_records``."""
+    return (num_records + batch_size - 1) // batch_size if num_records else 0
+
+
+def _batch_session_ids(records: list, batch_idx: int, batch_size: int) -> list[str]:
+    """Distinct ``session_id``s covered by batch ``batch_idx``, in first-seen order.
+
+    Reads directly off the dataset's (already-sorted, already-loaded) record list, so this
+    never triggers ``__getitem__``/image loading — used to precompute resume state cheaply.
+    """
+    start = batch_idx * batch_size
+    end = min(start + batch_size, len(records))
+    seen: dict[str, None] = {}
+    for i in range(start, end):
+        seen.setdefault(records[i].session_id, None)
+    return list(seen)
+
+
+def _existing_batch_indices(directory: Path, file_prefix: str) -> set[int]:
+    """Batch indices with an existing ``<file_prefix>_batch{idx:04d}.npz`` under ``directory``.
+
+    A single directory listing rather than one open-and-parse per batch — see
+    ``_resume_batch_start``.
+    """
+    if not directory.is_dir():
+        return set()
+    pattern = re.compile(rf'^{re.escape(file_prefix)}_batch(\d+)\.npz$')
+    indices: set[int] = set()
+    for p in directory.glob(f'{file_prefix}_batch*.npz'):
+        match = pattern.match(p.name)
+        if match:
+            indices.add(int(match.group(1)))
+    return indices
+
+
+def _resume_batch_start(
+    output_dir: Path,
+    latent_types: list[str],
+    session_ids_by_batch: list[list[str]],
+    split_name: str,
+) -> int:
+    """Largest contiguous prefix of already-complete batches for one split.
+
+    A ``(latent_type, session_id)`` is considered done for every batch either because a valid
+    combined trials npz already exists for it (batches may have since been deleted — see
+    ``extract_sable_latents``'s post-combine cleanup), or because its per-batch npz file exists
+    on disk (checked via one directory listing per ``(latent_type, session_id)``, not one
+    ``np.load`` per batch). Saves are atomic and processed strictly in increasing ``batch_idx``
+    order within a split, so a complete batch implies every earlier batch is complete too —
+    this never needs to look past the first incomplete batch. The boundary batch (the last one
+    counted complete) is re-validated with ``_is_valid_batch_npz`` as a corruption guard.
+
+    Args:
+        output_dir: root directory for per-latent-type subdirectories.
+        latent_types: latent types requested this run.
+        session_ids_by_batch: ``session_ids_by_batch[b]`` is the list of distinct session ids
+            covered by batch ``b`` (see ``_batch_session_ids``).
+        split_name: IBL split these batches belong to.
+
+    Returns:
+        the first not-yet-complete ``batch_idx`` (i.e. how many leading batches to skip).
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import (
+        _is_valid_trials_npz,
+        _session_subdir_key,
+    )
+
+    # cache[(latent_type, session_id)] is `None` (session already fully combined — always
+    # done) or a concrete set of present batch indices.
+    cache: dict[tuple[str, str], set[int] | None] = {}
+
+    def _present(latent_type: str, session_id: str) -> set[int] | None:
+        key = (latent_type, session_id)
+        if key not in cache:
+            session_dir = output_dir / latent_type / _session_subdir_key(session_id)
+            if _is_valid_trials_npz(session_dir / f'{latent_type}_trials.npz'):
+                cache[key] = None
+            else:
+                cache[key] = _existing_batch_indices(session_dir / split_name, latent_type)
+        return cache[key]
+
+    def _done(latent_type: str, session_id: str, batch_idx: int) -> bool:
+        present = _present(latent_type, session_id)
+        return present is None or batch_idx in present
+
+    k = 0
+    for batch_idx, sessions in enumerate(session_ids_by_batch):
+        if all(_done(lt, sid, batch_idx) for lt in latent_types for sid in sessions):
+            k = batch_idx + 1
+        else:
+            break
+
+    if k > 0:
+        for lt in latent_types:
+            for sid in session_ids_by_batch[k - 1]:
+                if _present(lt, sid) is None:
+                    continue  # already validated via its combined trials npz
+                path = _batch_output_path(output_dir, lt, sid, split_name, k - 1)
+                if not _is_valid_batch_npz(path):
+                    k -= 1
+                    break
+            else:
+                continue
+            break
+
+    return k
+
+
+def _delete_session_batch_files(
+    output_dir: Path, latent_type: str, session_id: str, splits: list[str],
+) -> None:
+    """Remove a session's per-batch npz files (and now-empty split dirs) after a good combine."""
+    from beast.sable_encoding_decoding.img_token.trials_assembly import _session_subdir_key
+
+    session_dir = output_dir / latent_type / _session_subdir_key(session_id)
+    for split_name in splits:
+        split_dir = session_dir / split_name
+        if not split_dir.is_dir():
+            continue
+        for p in split_dir.glob(f'{latent_type}_batch*.npz'):
+            p.unlink()
+        try:
+            split_dir.rmdir()
+        except OSError:
+            pass  # left non-empty (unexpected stray files) — not our call to remove it
+
+
+def _is_valid_batch_npz(path: Path) -> bool:
+    """True if ``path`` exists and loads as a batch npz with the expected keys and shape."""
     if not path.is_file():
         return False
     try:
-        np.load(path)
-    except (OSError, ValueError, EOFError):
+        data = np.load(path, allow_pickle=True)
+        if not all(key in data.files for key in _BATCH_NPZ_REQUIRED_KEYS):
+            return False
+        if data['z'].ndim != 3:
+            return False
+    except (OSError, ValueError, EOFError, KeyError, pickle.UnpicklingError):
         return False
     return True
 
 
-def _save_latent_npy(path: Path, array: np.ndarray) -> None:
-    """Atomically save ``array`` to ``path`` (temp file + ``os.replace``).
+def _save_latent_batch_npz(
+    path: Path,
+    *,
+    z: np.ndarray,
+    session_ids: list[str],
+    pair_idxs: list[int],
+    splits: list[str],
+    neural_trial_idx: list[int],
+    neural_bin_idx: list[int],
+    neural_interval_sec: np.ndarray,
+) -> None:
+    """Atomically save one batch's latents plus row metadata as a single ``.npz``.
 
     Guards against a killed job leaving a file that looks complete but isn't, so a later
-    resume never mistakes a partial write for a finished one.
+    resume never mistakes a partial write for a finished one. The row metadata (session,
+    pair, split, neural trial/bin alignment) is exactly the schema
+    ``beast.sable_encoding_decoding.img_token.trials_assembly.assemble_from_inference_batch_npz``
+    reads.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f'{path.name}.tmp-{os.getpid()}')
-    # write via an open file handle so numpy doesn't append its own `.npy` suffix to tmp_path
+    # write via an open file handle so numpy doesn't append its own `.npz` suffix to tmp_path
     with open(tmp_path, 'wb') as f:
-        np.save(f, array)
+        np.savez(
+            f,
+            z=np.asarray(z, dtype=np.float32),
+            session_id=np.asarray(session_ids, dtype=object),
+            pair_idx=np.asarray(pair_idxs, dtype=np.int64),
+            trial_split=np.asarray(splits, dtype=object),
+            neural_trial_idx=np.asarray(neural_trial_idx, dtype=np.int64),
+            neural_bin_idx=np.asarray(neural_bin_idx, dtype=np.int64),
+            neural_interval_sec=np.asarray(neural_interval_sec, dtype=np.float64),
+        )
     tmp_path.replace(path)
+
+
+def _write_combined_trials_npz(
+    output_path: Path,
+    z_trials_time: np.ndarray,
+    trial_split_labels: list[str] | None,
+    trial_session_ids: list[str] | None,
+    neural_trial_idx: np.ndarray | None,
+    per_trial_iv: np.ndarray | None,
+    meta: dict[str, Any],
+    include_splits: str,
+) -> Path:
+    """Write one combined trials ``.npz`` spanning every session/split assembled so far.
+
+    Unlike ``trials_assembly``'s own writers (which either drop session identity entirely
+    or split output into one file per session subdirectory), this keeps everything as a
+    single tensor per this pipeline's "one big combined tensor" contract, with ``session_id``
+    stored as a per-trial metadata array (parallel to ``trial_split``) so the trial-to-session
+    mapping is never lost.
+
+    Args:
+        output_path: destination ``.npz`` path.
+        z_trials_time: ``[N_trials, T_bins, V, D]`` combined latent tensor.
+        trial_split_labels: per-trial split label, or ``None`` if unavailable.
+        trial_session_ids: per-trial session id, or ``None`` if unavailable.
+        neural_trial_idx: per-trial neural trial index, or ``None`` if unavailable.
+        per_trial_iv: per-trial ``[t_start, t_end]`` interval, or ``None`` if unavailable.
+        meta: assembly metadata dict, stored as ``meta_json``.
+        include_splits: comma-separated splits, used to key the per-split ``z_trials_time``.
+
+    Returns:
+        ``output_path``.
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import (
+        _per_split_z_trials_kw,
+        _stack_split_intervals_from_rows,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    save_kw: dict[str, Any] = {'meta_json': json.dumps(meta)}
+    if trial_split_labels is not None:
+        save_kw.update(_per_split_z_trials_kw(z_trials_time, trial_split_labels, include_splits))
+        save_kw['trial_split'] = np.array(trial_split_labels, dtype=object)
+    else:
+        save_kw['z_trials_time'] = z_trials_time
+    if trial_session_ids is not None:
+        save_kw['session_id'] = np.array(trial_session_ids, dtype=object)
+    if neural_trial_idx is not None:
+        save_kw['neural_trial_idx'] = neural_trial_idx
+    if trial_split_labels is not None and per_trial_iv is not None:
+        train_iv, val_iv, test_iv = _stack_split_intervals_from_rows(
+            trial_split_labels, per_trial_iv,
+        )
+        save_kw['train_intervals'] = train_iv
+        save_kw['val_intervals'] = val_iv
+        save_kw['test_intervals'] = test_iv
+    np.savez_compressed(output_path, **save_kw)
+    return output_path
 
 
 def extract_sable_latents(
@@ -1307,15 +1586,33 @@ def extract_sable_latents(
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
     resume: bool = True,
+    batch_size: int | None = None,
+    time_bins: int | None = None,
 ) -> dict:
-    """Extract and save per-pair Sable latent tensors for downstream encoding/decoding.
+    """Extract and save per-batch, per-session Sable latent tensors for encoding/decoding.
 
     Sets the ``return_*`` gates already wired into ``beast.models.sable.Sable.forward`` (via
-    ``latent_tensor_export_if_requested``) and saves one ``.npy`` per ``(session_id, pair_idx)``
-    per requested latent type, under
-    ``output_dir/<latent_type>/<latent_type>_<session_id>_<pair_idx:06d>.npy`` — the exact
-    layout ``beast.sable_encoding_decoding.img_token.trials_assembly.load_latent_map_pair_files``
-    already expects.
+    ``latent_tensor_export_if_requested``), processes one on-disk split at a time (so every
+    saved batch's rows share a single split), and saves one ``.npz`` per batch per session per
+    requested latent type under
+    ``output_dir/<latent_type>/<session_id>/<split>/<latent_type>_batch{idx:04d}.npz`` — a
+    batch whose rows span a session boundary is split into one file per session. This is the
+    exact layout ``beast.sable_encoding_decoding.img_token.trials_assembly``'s
+    split-subdirectory batch-npz assembly path expects, and matches the multisession
+    per-session-id convention used elsewhere (e.g.
+    ``beast.sable_encoding_decoding.img_token.run_pca_and_save``) and documented in
+    ``docs/sable/neural_encoding_decoding.md``.
+
+    After every split has been processed, assembles each session's batches into one combined
+    trials tensor at ``output_dir/<latent_type>/<session_id>/<latent_type>_trials.npz`` — except
+    for ``img_tokens``, whose combine step is always skipped (see below). Once a session's
+    combine succeeds and validates, its per-batch npz files are deleted (again, except for
+    ``img_tokens``).
+
+    ``img_tokens`` is never combined or cleaned up here: its per-batch shards are exactly what
+    ``beast.sable_encoding_decoding.img_token.run_pca_and_save`` (Stage 2 of the neural
+    encoding/decoding pipeline) reads directly off disk. Combining and deleting them would
+    silently break that stage.
 
     Args:
         config: full beast config dict (same as used for training).
@@ -1323,19 +1620,29 @@ def extract_sable_latents(
         output_dir: root directory for per-latent-type subdirectories.
         latent_types: subset of ``['frame_z', 'dino_z', 'combined_z', 'img_tokens']``; ``None``
             exports all four (the ``--return-all-z`` analog).
-        max_batches: stop after this many batches.  ``None`` runs the full dataset.
-        include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
-            ``'train'``, ``'val'``, and ``'test'``.
-        resume: when ``True`` (default), skip a batch's forward pass entirely if every
-            requested output file for every row in that batch already exists and loads
-            successfully.
+        max_batches: stop after this many batches per split.  ``None`` runs the full dataset.
+        include_splits: IBL splits to load and process, in order (e.g. ``['train', 'val']``).
+            Defaults to ``'train'``, ``'val'``, and ``'test'``.
+        resume: when ``True`` (default), skip a batch's forward pass (and the dataset row
+            loading behind it) entirely once it's already saved or its session's combined
+            trials file already exists, and skip re-combining a session whose combined trials
+            file already exists and validates.
+        batch_size: overrides ``training.batch_size_per_gpu``. Must stay the same across
+            resumed runs against the same ``output_dir`` — see
+            ``_build_sable_inference_loader``.
+        time_bins: neural bins per trial, used to decide whether a trial is "complete" during
+            the combine step. ``None`` derives it from the dataset's on-disk neural-alignment
+            metadata (``SABLEDataset.max_neural_bin_idx``).
 
     Returns:
         dict with keys:
             - ``'output_dir'``: str path of the output directory.
             - ``'num_batches'``: number of batches for which a forward pass ran.
             - ``'num_batches_skipped'``: number of batches skipped via resume.
-            - ``'saved_files'``: dict mapping latent type to list of saved Path objects.
+            - ``'saved_files'``: dict mapping latent type to list of saved Path objects
+              (batch files already deleted by a prior successful combine are not listed).
+            - ``'combined_trials_files'``: list of combined trials ``.npz`` Path objects, one
+              per ``(latent_type, session_id)`` (excluding ``img_tokens``).
 
     Raises:
         ValueError: if ``latent_types`` contains an unknown latent type.
@@ -1350,8 +1657,8 @@ def extract_sable_latents(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    _dataset, loader = _build_sable_inference_loader(config, include_splits=include_splits)
+    splits_to_process = include_splits or ['train', 'val', 'test']
+    resolved_batch_size = _resolve_batch_size(config['training'], batch_size)
 
     device = next(model.parameters()).device
     model.eval()
@@ -1359,58 +1666,237 @@ def extract_sable_latents(
     num_batches = 0
     num_batches_skipped = 0
     saved_files: dict[str, list[Path]] = {latent_type: [] for latent_type in latent_types}
+    max_bin_idx_seen: int | None = None
 
     with torch.no_grad():
-        for batch_idx, batch in enumerate(loader):
-            if max_batches is not None and batch_idx >= max_batches:
-                break
-
-            scene_names = batch['scene_name']
-            row_ids = [_parse_scene_name(scene_name) for scene_name in scene_names]
-            row_paths = {
-                latent_type: [
-                    _latent_output_path(output_dir, latent_type, session_id, pair_idx)
-                    for session_id, pair_idx in row_ids
-                ]
-                for latent_type in latent_types
-            }
-
-            if resume and all(
-                _is_valid_npy(path) for paths in row_paths.values() for path in paths
-            ):
-                num_batches_skipped += 1
-                for latent_type, paths in row_paths.items():
-                    saved_files[latent_type].extend(paths)
+        for split_name in splits_to_process:
+            dataset = _build_sable_dataset(config, include_splits=[split_name])
+            if len(dataset) == 0:
+                log_step(
+                    f'extract_sable_latents: split {split_name!r} has no records, skipping',
+                    level='info',
+                )
                 continue
+            split_max_bin = dataset.max_neural_bin_idx()
+            if split_max_bin is not None:
+                max_bin_idx_seen = max(max_bin_idx_seen or 0, split_max_bin)
 
-            batch = {
-                k: v.to(device) if torch.is_tensor(v) else v
-                for k, v in batch.items()
-            }
-            for latent_type in latent_types:
-                batch[_LATENT_GATE_KEYS[latent_type]] = True
+            num_total_batches = _num_batches_for(len(dataset), resolved_batch_size)
+            session_ids_by_batch = [
+                _batch_session_ids(dataset._records, b, resolved_batch_size)
+                for b in range(num_total_batches)
+            ]
+            resume_start = (
+                _resume_batch_start(output_dir, latent_types, session_ids_by_batch, split_name)
+                if resume
+                else 0
+            )
+            effective_start = (
+                min(resume_start, max_batches) if max_batches is not None else resume_start
+            )
+            log_step(
+                f'extract_sable_latents: split {split_name!r} has {num_total_batches} batches '
+                f'total (resuming from batch {effective_start})',
+                level='info',
+            )
 
-            result = model.get_model_outputs(batch)
+            for b in range(effective_start):
+                num_batches_skipped += 1
+                for latent_type in latent_types:
+                    for session_id in session_ids_by_batch[b]:
+                        path = _batch_output_path(
+                            output_dir, latent_type, session_id, split_name, b,
+                        )
+                        if path.is_file():
+                            saved_files[latent_type].append(path)
 
-            for latent_type, paths in row_paths.items():
-                z = getattr(result, latent_type)
-                z_np = z.detach().cpu().numpy()
-                for row_idx, path in enumerate(paths):
-                    _save_latent_npy(path, z_np[row_idx])
-                    saved_files[latent_type].append(path)
+            _, loader = _build_sable_inference_loader(
+                config,
+                include_splits=[split_name],
+                batch_size=resolved_batch_size,
+                start_row=effective_start * resolved_batch_size,
+                dataset=dataset,
+            )
 
-            num_batches += 1
+            for local_idx, batch in enumerate(loader):
+                batch_idx = effective_start + local_idx
+                if max_batches is not None and batch_idx >= max_batches:
+                    break
+
+                scene_names = batch['scene_name']
+                row_ids = [_parse_scene_name(scene_name) for scene_name in scene_names]
+                session_ids = [session_id for session_id, _ in row_ids]
+                pair_idxs = [pair_idx for _, pair_idx in row_ids]
+                splits = list(batch['split'])
+                neural_trial_idx = batch['neural_trial_idx'].cpu().numpy().tolist()
+                neural_bin_idx = batch['neural_bin_idx'].cpu().numpy().tolist()
+                neural_interval_sec = batch['neural_interval_sec'].cpu().numpy()
+
+                batch = {
+                    k: v.to(device) if torch.is_tensor(v) else v
+                    for k, v in batch.items()
+                }
+                for latent_type in latent_types:
+                    batch[_LATENT_GATE_KEYS[latent_type]] = True
+
+                result = model.get_model_outputs(batch)
+
+                # group row indices by session so a session-boundary batch is split into one
+                # saved file per session, never mixing sessions within a file
+                session_row_groups: dict[str, list[int]] = {}
+                for row_idx, session_id in enumerate(session_ids):
+                    session_row_groups.setdefault(session_id, []).append(row_idx)
+
+                for latent_type in latent_types:
+                    z_np = result[latent_type].detach().cpu().numpy()
+                    for session_id, rows in session_row_groups.items():
+                        path = _batch_output_path(
+                            output_dir, latent_type, session_id, split_name, batch_idx,
+                        )
+                        _save_latent_batch_npz(
+                            path,
+                            z=z_np[rows],
+                            session_ids=[session_ids[i] for i in rows],
+                            pair_idxs=[pair_idxs[i] for i in rows],
+                            splits=[splits[i] for i in rows],
+                            neural_trial_idx=[neural_trial_idx[i] for i in rows],
+                            neural_bin_idx=[neural_bin_idx[i] for i in rows],
+                            neural_interval_sec=neural_interval_sec[rows],
+                        )
+                        saved_files[latent_type].append(path)
+
+                        combine_note = (
+                            ' (combined_z = cat([frame_z, dino_z]))'
+                            if latent_type == 'combined_z' else ''
+                        )
+                        log_step(
+                            f'extract_sable_latents: [{split_name}] batch '
+                            f'{batch_idx + 1}/{num_total_batches} saved '
+                            f'{latent_type}{combine_note} -> {path}',
+                            level='info',
+                        )
+
+                num_batches += 1
 
     log_step(
         f'extract_sable_latents: processed {num_batches} batches '
-        f'({num_batches_skipped} skipped via resume), '
+        f'({num_batches_skipped} skipped via resume) across splits {splits_to_process}, '
         f'latent types {latent_types}',
         level='info',
     )
+
+    resolved_time_bins = time_bins or max_bin_idx_seen
+    combined_trials_files: list[Path] = []
+    if resolved_time_bins is None:
+        log_step(
+            'extract_sable_latents: no neural-alignment metadata found in this run, '
+            'skipping trial combine step',
+            level='info',
+        )
+    else:
+        combined_trials_files = _combine_and_cleanup_sessions(
+            output_dir=output_dir,
+            latent_types=latent_types,
+            splits_to_process=splits_to_process,
+            resolved_time_bins=resolved_time_bins,
+            resume=resume,
+        )
 
     return {
         'output_dir': str(output_dir),
         'num_batches': num_batches,
         'num_batches_skipped': num_batches_skipped,
         'saved_files': saved_files,
+        'combined_trials_files': combined_trials_files,
     }
+
+
+def _combine_and_cleanup_sessions(
+    output_dir: Path,
+    latent_types: list[str],
+    splits_to_process: list[str],
+    resolved_time_bins: int,
+    resume: bool,
+) -> list[Path]:
+    """Combine each discovered session's batches into a trials npz, then delete the batches.
+
+    ``img_tokens`` is always skipped (see ``extract_sable_latents``'s docstring): its raw
+    per-batch shards are what ``img_token.run_pca_and_save`` consumes directly.
+
+    Args:
+        output_dir: root directory for per-latent-type subdirectories.
+        latent_types: latent types requested this run.
+        splits_to_process: splits that were processed this run (only these splits' batch dirs
+            are cleaned up).
+        resolved_time_bins: neural bins per trial, passed through to the assembler.
+        resume: when ``True``, a session already having a valid combined trials file is left
+            untouched (not re-assembled, not re-deleted).
+
+    Returns:
+        list of combined trials ``.npz`` paths, one per discovered ``(latent_type, session)``.
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import (
+        _is_valid_trials_npz,
+        assemble_z_trials_time_from_inference_batches,
+    )
+
+    include_splits_str = ','.join(splits_to_process)
+    combined_trials_files: list[Path] = []
+
+    for latent_type in latent_types:
+        if latent_type == 'img_tokens':
+            log_step(
+                'extract_sable_latents: skipping combine for img_tokens — '
+                'img_token.run_pca_and_save reads its raw per-batch shards directly',
+                level='info',
+            )
+            continue
+
+        latent_dir = output_dir / latent_type
+        if not latent_dir.is_dir():
+            continue
+
+        for session_dir in sorted(p for p in latent_dir.iterdir() if p.is_dir()):
+            trials_path = session_dir / f'{latent_type}_trials.npz'
+            if resume and _is_valid_trials_npz(trials_path):
+                combined_trials_files.append(trials_path)
+                continue
+
+            combine_note = (
+                ' (combined_z = cat([frame_z, dino_z]))' if latent_type == 'combined_z' else ''
+            )
+            log_step(
+                f'extract_sable_latents: combining {latent_type!r}{combine_note} for session '
+                f'{session_dir.name!r} into trials tensor',
+                level='info',
+            )
+            assembly = assemble_z_trials_time_from_inference_batches(
+                input_dir=session_dir,
+                include_splits=include_splits_str,
+                time_bins=resolved_time_bins,
+                file_prefix=latent_type,
+                split_subdirs=True,
+            )
+            written_path = _write_combined_trials_npz(
+                output_path=trials_path,
+                z_trials_time=assembly.z_trials_time,
+                trial_split_labels=assembly.trial_split_labels,
+                trial_session_ids=assembly.trial_session_ids,
+                neural_trial_idx=assembly.neural_trial_idx,
+                per_trial_iv=assembly.per_trial_iv,
+                meta=assembly.meta,
+                include_splits=include_splits_str,
+            )
+            log_step(
+                f'extract_sable_latents: saved combined {latent_type!r} trials '
+                f'({assembly.z_trials_time.shape}) -> {written_path}',
+                level='info',
+            )
+            combined_trials_files.append(written_path)
+
+            if _is_valid_trials_npz(written_path):
+                _delete_session_batch_files(
+                    output_dir, latent_type, session_dir.name, splits_to_process,
+                )
+
+    return combined_trials_files

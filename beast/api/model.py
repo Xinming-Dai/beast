@@ -248,8 +248,9 @@ class Model:
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
         resume: bool = True,
+        batch_size: int | None = None,
     ) -> dict[str, Any]:
-        """Extract and save per-pair Sable latent tensors for downstream encoding/decoding.
+        """Extract and save per-batch Sable latent tensors for downstream encoding/decoding.
 
         Args:
             dataset_path: path to the scene dataset. For IBL: raw frames root
@@ -267,10 +268,14 @@ class Model:
             session_names: session IDs to load. Accepts a list or a single string.
                 When ``None``, the value from the saved training config is used.
             resume: when ``True`` (default), skip a batch's forward pass entirely if every
-                requested output file for every row in that batch already exists.
+                requested output file for that batch already exists, and skip the whole run
+                immediately if the combined trials output already exists.
+            batch_size: overrides the saved training config's ``training.batch_size_per_gpu``
+                when given.
 
         Returns:
-            dict with keys 'output_dir', 'num_batches', 'num_batches_skipped', 'saved_files'.
+            dict with keys 'output_dir', 'num_batches', 'num_batches_skipped', 'saved_files',
+            'combined_trials_files'.
         """
         from beast.inference import extract_sable_latents as _extract_sable_latents
 
@@ -303,6 +308,7 @@ class Model:
             max_batches=max_batches,
             include_splits=splits,
             resume=resume,
+            batch_size=batch_size,
         )
 
     def predict_images(
