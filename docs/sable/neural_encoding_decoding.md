@@ -35,8 +35,15 @@ beast predict --model $MODEL_ROOT --input $DATASET_PATH --extract-latents \
 
 `--return-all-z` is shorthand for `--return-frame-z --return-dino-z --return-cat-z`; each can also
 be requested individually (`--return-frame-z`, `--return-dino-z`, `--return-cat-z`,
-`--return-img-tokens`, any combination). This saves one `.npy` per `(session_id, pair_idx)` under
-`<output_dir>/<latent_type>/` — the exact layout Stage 1's `--latent_kind` table below expects.
+`--return-img-tokens`, any combination). This saves one `.npz` per batch per session under
+`<output_dir>/<latent_type>/<session_id>/<split>/` (a batch whose rows span a session boundary is
+split into one file per session), then combines each session's batches into
+`<output_dir>/<latent_type>/<session_id>/<latent_type>_trials.npz` — the exact layout Stage 1's
+`--latent_kind` table below expects. `img_tokens` is never combined this way (see the note under
+Stage 2) — its raw per-batch shards are consumed directly by `img_token.run_pca_and_save`. Once a
+session's combine succeeds, its per-batch files are deleted automatically (except for
+`img_tokens`); resuming a run whose session was already combined and cleaned up skips it entirely
+rather than rerunning the model.
 
 ---
 
@@ -157,6 +164,11 @@ Key flags (see `img_token/run_pca_and_save.py::parse_args`):
 
 Run stage 1 alone when val/test image tokens are not yet available (e.g. inference is still
 running), then stage 2 once they are — stage 2 reuses the stage-1 PCA fit rather than refitting.
+
+`--input-dir` points at the raw `img_tokens_batch*.npz` shards `extract_sable_latents` writes
+under `<output_dir>/img_tokens/<session_id>/<split>/` — `extract_sable_latents` intentionally
+never combines or deletes `img_tokens` batches (unlike `frame_z`/`dino_z`/`combined_z`), since
+this stage reads them directly rather than from a combined trials `.npz`.
 
 **Output**: two files, typically under `<model-root>/img_tokens_compressed/`:
 

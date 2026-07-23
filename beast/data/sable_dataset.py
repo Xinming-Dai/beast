@@ -38,6 +38,9 @@ class _PrecacheRecord:
     center_path: Path | None = None
     center_mask_path: Path | None = None
     split: str | None = None
+    neural_trial_idx: int | None = None
+    neural_bin_idx: int | None = None
+    neural_interval_sec: tuple[float, float] | None = None
 
 
 class SABLEDataset(Dataset):
@@ -121,7 +124,8 @@ class SABLEDataset(Dataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``.
+            ``scene_name``, ``split``, ``neural_trial_idx``, ``neural_bin_idx``,
+            ``neural_interval_sec``.
         """
         rec = self._records[idx]
 
@@ -143,6 +147,12 @@ class SABLEDataset(Dataset):
             right_orig_size=(right_orig_w, right_orig_h),
         )
 
+        neural_interval_sec = (
+            torch.tensor(rec.neural_interval_sec, dtype=torch.float64)
+            if rec.neural_interval_sec is not None
+            else torch.full((2,), float('nan'), dtype=torch.float64)
+        )
+
         return {
             'image': image_tensor,
             'context_indices': context_indices,
@@ -152,7 +162,26 @@ class SABLEDataset(Dataset):
             'rightcamera_xy': correspondences['rightcamera_xy'],
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
+            'split': rec.split or '',
+            'neural_trial_idx': (
+                rec.neural_trial_idx if rec.neural_trial_idx is not None else -1
+            ),
+            'neural_bin_idx': rec.neural_bin_idx if rec.neural_bin_idx is not None else -1,
+            'neural_interval_sec': neural_interval_sec,
         }
+
+    def max_neural_bin_idx(self) -> int | None:
+        """Return the neural bins-per-trial count implied by this dataset's records.
+
+        Returns:
+            ``max(neural_bin_idx) + 1`` over all records that carry neural-alignment
+            metadata, or ``None`` if no record does (e.g. a regular training-layout-only
+            dataset with no on-disk neural alignment).
+        """
+        bin_idxs = [
+            rec.neural_bin_idx for rec in self._records if rec.neural_bin_idx is not None
+        ]
+        return max(bin_idxs) + 1 if bin_idxs else None
 
     def _load_records(
         self,
@@ -784,6 +813,11 @@ class IBLTwoViewDataset(SABLEDataset):
         index, and ``source_frame_index`` is looked up from the mapping instead of
         parsed from the filename.
 
+        Each mapping entry also carries ``neural_trial_idx``, ``neural_bin_idx``, and
+        ``neural_interval_sec`` (from the left-camera mapping file), used to align saved
+        latents back into neural trials downstream; missing fields fall back to ``None``
+        for datasets predating this metadata.
+
         ``pair_idx`` is a single counter incremented across all requested splits
         within the session (not reset per split), so it stays unique per session —
         required by downstream consumers that key saved artifacts on
@@ -817,6 +851,10 @@ class IBLTwoViewDataset(SABLEDataset):
 
             common_filenames = sorted(set(left_mapping) & set(right_mapping))
             for filename in common_filenames:
+                entry = left_mapping[filename]
+                neural_trial_idx = entry.get('neural_trial_idx')
+                neural_bin_idx = entry.get('neural_bin_idx')
+                neural_interval_sec_raw = entry.get('neural_interval_sec')
                 records.append(_PrecacheRecord(
                     session_id=session_id,
                     pair_idx=pair_idx,
@@ -828,6 +866,15 @@ class IBLTwoViewDataset(SABLEDataset):
                     ),
                     scene_name=f'{session_id}_pair_{pair_idx:06d}',
                     split=split_name,
+                    neural_trial_idx=(
+                        int(neural_trial_idx) if neural_trial_idx is not None else None
+                    ),
+                    neural_bin_idx=int(neural_bin_idx) if neural_bin_idx is not None else None,
+                    neural_interval_sec=(
+                        (float(neural_interval_sec_raw[0]), float(neural_interval_sec_raw[1]))
+                        if neural_interval_sec_raw is not None
+                        else None
+                    ),
                 ))
                 pair_idx += 1
 
@@ -902,8 +949,9 @@ class IBLTwoViewDataset(SABLEDataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``, ``session_idx``, and (for ``pseudo_center_finetune``)
-            ``context_full_mask``.
+            ``scene_name``, ``session_idx``, ``split``, ``neural_trial_idx``,
+            ``neural_bin_idx``, ``neural_interval_sec``, and (for
+            ``pseudo_center_finetune``) ``context_full_mask``.
         """
         rec = self._records[idx]
 
@@ -942,6 +990,16 @@ class IBLTwoViewDataset(SABLEDataset):
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
             'session_idx': self.session_id_to_idx[rec.session_id],
+            'split': rec.split or '',
+            'neural_trial_idx': (
+                rec.neural_trial_idx if rec.neural_trial_idx is not None else -1
+            ),
+            'neural_bin_idx': rec.neural_bin_idx if rec.neural_bin_idx is not None else -1,
+            'neural_interval_sec': (
+                torch.tensor(rec.neural_interval_sec, dtype=torch.float64)
+                if rec.neural_interval_sec is not None
+                else torch.full((2,), float('nan'), dtype=torch.float64)
+            ),
         }
 
         if self._training_regime == 'pseudo_center_finetune':
