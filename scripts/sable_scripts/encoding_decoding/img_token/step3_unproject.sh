@@ -18,6 +18,9 @@ conda activate beast
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
+# Stage 4 un-PCA and de-normalize decoded compressed img tokens back to full-dimensional img tokens. 
+# Requires step1's PCA bundle (PCA_NPZ) and step2's decoded output (DECODING_NPY); 
+# produces per-trial img_tokens_estimated*.npz, consumed by step4_decode_and_render.sh as --z-source.
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,EID=...,MODEL_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step3_unproject.sh
