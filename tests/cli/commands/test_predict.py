@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from beast.cli.commands.predict import handle
+from beast.cli.commands.predict import _handle_sable_extract_latents, handle
 from beast.cli.main import build_parser
 
 
@@ -60,6 +60,37 @@ class TestRegisterParser:
         ])
         # Assert
         assert args.batch_size == 64
+
+    def test_latent_extraction_flags_default_false(self) -> None:
+        # Arrange
+        parser = build_parser()
+        # Act
+        args = parser.parse_args(['predict', '--model', '/m', '--input', '/i'])
+        # Assert
+        assert args.extract_latents is False
+        assert args.return_frame_z is False
+        assert args.return_dino_z is False
+        assert args.return_cat_z is False
+        assert args.return_img_tokens is False
+        assert args.return_all_z is False
+        assert args.no_resume is False
+        assert args.latent_batch_size is None
+
+    def test_latent_extraction_flags_set_true(self) -> None:
+        # Arrange
+        parser = build_parser()
+        # Act
+        args = parser.parse_args([
+            'predict', '--model', '/m', '--input', '/i',
+            '--extract-latents', '--return-all-z', '--return-img-tokens', '--no-resume',
+            '--latent-batch-size', '16',
+        ])
+        # Assert
+        assert args.extract_latents is True
+        assert args.return_all_z is True
+        assert args.return_img_tokens is True
+        assert args.no_resume is True
+        assert args.latent_batch_size == 16
 
 
 class TestHandle:
@@ -184,3 +215,67 @@ class TestHandle:
             handle(args)
         # Assert
         assert any('no outputs will be saved' in r.message for r in caplog.records)
+
+
+class TestHandleSableExtractLatents:
+    """Test the _handle_sable_extract_latents function."""
+
+    @staticmethod
+    def _args(**overrides):
+        defaults = dict(
+            input=Path('/i'),
+            return_frame_z=False,
+            return_dino_z=False,
+            return_cat_z=False,
+            return_img_tokens=False,
+            return_all_z=False,
+            no_resume=False,
+            latent_batch_size=None,
+            vda_cache_root=None,
+            correspondence_cache_root=None,
+            splits=['train', 'val'],
+            max_batches=None,
+            session_names=None,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_return_all_z_conflicts_with_individual_flag(self) -> None:
+        # Arrange
+        args = self._args(return_all_z=True, return_frame_z=True)
+        mock_model = MagicMock()
+        # Act
+        _handle_sable_extract_latents(args, mock_model, Path('/out'))
+        # Assert
+        mock_model.extract_sable_latents.assert_not_called()
+
+    def test_no_return_flags_does_not_dispatch(self) -> None:
+        # Arrange
+        args = self._args()
+        mock_model = MagicMock()
+        # Act
+        _handle_sable_extract_latents(args, mock_model, Path('/out'))
+        # Assert
+        mock_model.extract_sable_latents.assert_not_called()
+
+    def test_return_all_z_expands_to_three_latent_types(self) -> None:
+        # Arrange
+        args = self._args(return_all_z=True)
+        mock_model = MagicMock()
+        # Act
+        _handle_sable_extract_latents(args, mock_model, Path('/out'))
+        # Assert
+        called_kwargs = mock_model.extract_sable_latents.call_args.kwargs
+        assert sorted(called_kwargs['latent_types']) == ['combined_z', 'dino_z', 'frame_z']
+        assert called_kwargs['resume'] is True
+
+    def test_return_img_tokens_composes_with_other_flags(self) -> None:
+        # Arrange
+        args = self._args(return_frame_z=True, return_img_tokens=True, no_resume=True)
+        mock_model = MagicMock()
+        # Act
+        _handle_sable_extract_latents(args, mock_model, Path('/out'))
+        # Assert
+        called_kwargs = mock_model.extract_sable_latents.call_args.kwargs
+        assert sorted(called_kwargs['latent_types']) == ['frame_z', 'img_tokens']
+        assert called_kwargs['resume'] is False
