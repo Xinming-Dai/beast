@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
@@ -15,7 +16,15 @@ from PIL import Image
 from beast.inference import (
     ImagePredictionHandler,
     VideoPredictionHandler,
+    _batch_output_path,
+    _batch_session_ids,
     _flatten_mask_for_points,
+    _is_valid_batch_npz,
+    _num_batches_for,
+    _parse_scene_name,
+    _resume_batch_start,
+    _save_latent_batch_npz,
+    extract_sable_latents,
     predict_images,
     predict_video,
     save_camera_pointcloud_scene,
@@ -860,3 +869,493 @@ class TestSaveCameraPointcloudScene:
         assert len(saved) == 1
         scene = trimesh.load(saved[0])
         assert len(scene.geometry) == 1 + num_views
+
+
+class TestParseSceneName:
+    """Test the _parse_scene_name function."""
+
+    def test_parse_scene_name_splits_session_id_and_pair_idx(self) -> None:
+        assert _parse_scene_name('sess_a_pair_000123') == ('sess_a', 123)
+
+    def test_parse_scene_name_handles_underscores_in_session_id(self) -> None:
+        assert _parse_scene_name('sub_01_2024_01_01_pair_000007') == ('sub_01_2024_01_01', 7)
+
+    def test_parse_scene_name_raises_on_unexpected_format(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_scene_name('not_a_valid_scene_name')
+
+
+class TestBatchOutputPath:
+    """Test the _batch_output_path function."""
+
+    def test_batch_output_path_includes_session_and_split_subdirs(self) -> None:
+        path = _batch_output_path(Path('/out'), 'frame_z', 'sess0', 'train', 3)
+        assert path == Path('/out/frame_z/sess0/train/frame_z_batch0003.npz')
+
+    def test_batch_output_path_sanitizes_session_id(self) -> None:
+        path = _batch_output_path(Path('/out'), 'frame_z', 'a/b', 'train', 0)
+        assert path == Path('/out/frame_z/a_b/train/frame_z_batch0000.npz')
+
+
+class TestNumBatchesFor:
+    """Test the _num_batches_for function."""
+
+    def test_num_batches_for_divides_evenly(self) -> None:
+        assert _num_batches_for(4, 2) == 2
+
+    def test_num_batches_for_rounds_up(self) -> None:
+        assert _num_batches_for(5, 2) == 3
+
+    def test_num_batches_for_zero_records(self) -> None:
+        assert _num_batches_for(0, 2) == 0
+
+
+class _Rec:
+    """Minimal stand-in for a `_PrecacheRecord`, exposing only `session_id`."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+
+
+class TestBatchSessionIds:
+    """Test the _batch_session_ids function."""
+
+    def test_batch_session_ids_single_session_batch(self) -> None:
+        records = [_Rec('sess0'), _Rec('sess0'), _Rec('sess1'), _Rec('sess1')]
+        assert _batch_session_ids(records, batch_idx=0, batch_size=2) == ['sess0']
+        assert _batch_session_ids(records, batch_idx=1, batch_size=2) == ['sess1']
+
+    def test_batch_session_ids_boundary_batch_spans_two_sessions(self) -> None:
+        records = [_Rec('sess0'), _Rec('sess0'), _Rec('sess0'), _Rec('sess1'), _Rec('sess1')]
+        # batch_idx 1 (rows 2,3) straddles sess0 -> sess1
+        assert _batch_session_ids(records, batch_idx=1, batch_size=2) == ['sess0', 'sess1']
+
+    def test_batch_session_ids_last_batch_may_be_partial(self) -> None:
+        records = [_Rec('sess0')] * 3
+        assert _batch_session_ids(records, batch_idx=1, batch_size=2) == ['sess0']
+
+
+class TestResumeBatchStart:
+    """Test the _resume_batch_start function."""
+
+    @pytest.fixture
+    def temp_output_dir(self):
+        temp_output = Path(tempfile.mkdtemp())
+        yield temp_output
+        shutil.rmtree(temp_output)
+
+    @staticmethod
+    def _touch_batch(output_dir: Path, latent_type: str, session_id: str, split: str, idx: int):
+        path = _batch_output_path(output_dir, latent_type, session_id, split, idx)
+        _save_latent_batch_npz(
+            path,
+            z=np.zeros((1, 3, 4), dtype=np.float32),
+            session_ids=[session_id],
+            pair_idxs=[0],
+            splits=[split],
+            neural_trial_idx=[0],
+            neural_bin_idx=[0],
+            neural_interval_sec=np.zeros((1, 2), dtype=np.float64),
+        )
+        return path
+
+    def test_resume_batch_start_zero_when_nothing_saved(self, temp_output_dir) -> None:
+        sessions_by_batch = [['sess0'], ['sess0']]
+        assert _resume_batch_start(temp_output_dir, ['frame_z'], sessions_by_batch, 'train') == 0
+
+    def test_resume_batch_start_finds_contiguous_prefix(self, temp_output_dir) -> None:
+        sessions_by_batch = [['sess0'], ['sess0'], ['sess0']]
+        self._touch_batch(temp_output_dir, 'frame_z', 'sess0', 'train', 0)
+        self._touch_batch(temp_output_dir, 'frame_z', 'sess0', 'train', 1)
+        assert _resume_batch_start(temp_output_dir, ['frame_z'], sessions_by_batch, 'train') == 2
+
+    def test_resume_batch_start_requires_every_latent_type(self, temp_output_dir) -> None:
+        sessions_by_batch = [['sess0']]
+        self._touch_batch(temp_output_dir, 'frame_z', 'sess0', 'train', 0)
+        # dino_z batch 0 missing -> batch 0 is not complete
+        assert _resume_batch_start(
+            temp_output_dir, ['frame_z', 'dino_z'], sessions_by_batch, 'train',
+        ) == 0
+
+    def test_resume_batch_start_revalidates_boundary_batch(self, temp_output_dir) -> None:
+        sessions_by_batch = [['sess0'], ['sess0']]
+        self._touch_batch(temp_output_dir, 'frame_z', 'sess0', 'train', 0)
+        path1 = _batch_output_path(temp_output_dir, 'frame_z', 'sess0', 'train', 1)
+        path1.parent.mkdir(parents=True, exist_ok=True)
+        path1.write_bytes(b'not a valid npz')
+        assert _resume_batch_start(temp_output_dir, ['frame_z'], sessions_by_batch, 'train') == 1
+
+    def test_resume_batch_start_treats_valid_combined_trials_as_all_done(
+        self, temp_output_dir,
+    ) -> None:
+        # batches deleted after a prior successful combine -> only the trials npz remains
+        session_dir = temp_output_dir / 'frame_z' / 'sess0'
+        session_dir.mkdir(parents=True)
+        np.savez(
+            session_dir / 'frame_z_trials.npz',
+            train_z_trials_time=np.zeros((1, 1, 3, 4), dtype=np.float32),
+        )
+        sessions_by_batch = [['sess0'], ['sess0']]
+        assert _resume_batch_start(temp_output_dir, ['frame_z'], sessions_by_batch, 'train') == 2
+
+
+class TestSaveLatentBatchNpz:
+    """Test the _save_latent_batch_npz and _is_valid_batch_npz functions."""
+
+    @pytest.fixture
+    def temp_output_dir(self):
+        temp_output = Path(tempfile.mkdtemp())
+        yield temp_output
+        shutil.rmtree(temp_output)
+
+    @staticmethod
+    def _save_kwargs(batch_size: int = 2):
+        return {
+            'z': np.arange(batch_size * 3 * 4, dtype=np.float32).reshape(batch_size, 3, 4),
+            'session_ids': [f'sess{i}' for i in range(batch_size)],
+            'pair_idxs': list(range(batch_size)),
+            'splits': ['train'] * batch_size,
+            'neural_trial_idx': list(range(batch_size)),
+            'neural_bin_idx': [0] * batch_size,
+            'neural_interval_sec': np.zeros((batch_size, 2), dtype=np.float64),
+        }
+
+    def test_save_latent_batch_npz_round_trips(self, temp_output_dir) -> None:
+        path = temp_output_dir / 'frame_z' / 'train' / 'frame_z_batch0000.npz'
+        kwargs = self._save_kwargs()
+
+        _save_latent_batch_npz(path, **kwargs)
+
+        assert path.is_file()
+        assert list(temp_output_dir.rglob('*.tmp-*')) == []
+        data = np.load(path, allow_pickle=True)
+        np.testing.assert_array_equal(data['z'], kwargs['z'])
+        assert list(data['session_id']) == kwargs['session_ids']
+        assert _is_valid_batch_npz(path)
+
+    def test_save_latent_batch_npz_leaves_no_partial_file_on_crash(self, temp_output_dir) -> None:
+        path = temp_output_dir / 'frame_z' / 'train' / 'frame_z_batch0000.npz'
+
+        with patch('numpy.savez', side_effect=OSError('disk full')):
+            with pytest.raises(OSError):
+                _save_latent_batch_npz(path, **self._save_kwargs())
+
+        assert not path.is_file()
+
+    def test_is_valid_batch_npz_false_for_missing_file(self, temp_output_dir) -> None:
+        assert not _is_valid_batch_npz(temp_output_dir / 'does_not_exist.npz')
+
+    def test_is_valid_batch_npz_false_for_missing_keys(self, temp_output_dir) -> None:
+        path = temp_output_dir / 'incomplete.npz'
+        np.savez(path, z=np.zeros((2, 3, 4), dtype=np.float32))
+        assert not _is_valid_batch_npz(path)
+
+
+class _FakeDataset:
+    """Minimal stand-in for a SABLEDataset, supporting only what extract_sable_latents needs."""
+
+    def __init__(self, records: list[_Rec], max_bin_idx: int | None) -> None:
+        self._records = records
+        self._max_bin_idx = max_bin_idx
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def max_neural_bin_idx(self) -> int | None:
+        return self._max_bin_idx
+
+
+@contextmanager
+def _patched_extract_deps(dataset, batches: list[dict]):
+    """Patch dataset/loader construction so `extract_sable_latents` serves `batches` in order.
+
+    `_build_sable_dataset` always returns `dataset`; `_build_sable_inference_loader` returns
+    `batches` sliced from `start_row // batch_size` onward, mimicking a `Subset`-skipped loader
+    without needing a real `DataLoader`.
+    """
+    def fake_loader(config, include_splits=None, batch_size=None, start_row=0, dataset=None):
+        start_idx = start_row // batch_size
+        return dataset, batches[start_idx:]
+
+    with (
+        patch('beast.inference._build_sable_dataset', return_value=dataset),
+        patch('beast.inference._build_sable_inference_loader', side_effect=fake_loader),
+    ):
+        yield
+
+
+class TestExtractSableLatents:
+    """Test the extract_sable_latents function."""
+
+    @pytest.fixture
+    def temp_output_dir(self):
+        temp_output = Path(tempfile.mkdtemp())
+        yield temp_output
+        shutil.rmtree(temp_output)
+
+    @staticmethod
+    def _fake_batches(
+        num_batches: int = 2, batch_size: int = 2, split_name: str = 'train',
+    ) -> list[dict]:
+        """Fake collated batches; batch `i`'s rows all belong to session `sess{i}`."""
+        return [
+            {
+                'scene_name': [
+                    f'sess{batch_idx}_pair_{row_idx:06d}' for row_idx in range(batch_size)
+                ],
+                'split': [split_name] * batch_size,
+                'neural_trial_idx': torch.arange(
+                    batch_idx * batch_size, batch_idx * batch_size + batch_size, dtype=torch.int64,
+                ),
+                'neural_bin_idx': torch.zeros(batch_size, dtype=torch.int64),
+                'neural_interval_sec': torch.zeros(batch_size, 2, dtype=torch.float64),
+            }
+            for batch_idx in range(num_batches)
+        ]
+
+    @staticmethod
+    def _records_for(batches: list[dict]) -> list[_Rec]:
+        """Build the `_records` list implied by `batches`' `scene_name`s, in row order."""
+        records = []
+        for batch in batches:
+            for scene_name in batch['scene_name']:
+                session_id, _ = _parse_scene_name(scene_name)
+                records.append(_Rec(session_id))
+        return records
+
+    @staticmethod
+    def _fake_model(batch_size: int = 2, view_dim: int = 3, feat_dim: int = 4):
+        model = Mock()
+        model.parameters.return_value = iter([torch.zeros(1)])
+        # get_model_outputs returns `vars(self(batch_dict))` in production -> a plain dict
+        model.get_model_outputs.return_value = vars(SimpleNamespace(
+            frame_z=torch.arange(batch_size * view_dim * feat_dim, dtype=torch.float32).reshape(
+                batch_size, view_dim, feat_dim,
+            ),
+            dino_z=torch.zeros(batch_size, view_dim, feat_dim),
+            combined_z=torch.ones(batch_size, view_dim, 2 * feat_dim),
+            img_tokens=torch.full((batch_size, view_dim, feat_dim), 2.0),
+        ))
+        return model
+
+    def test_extract_sable_latents_saves_requested_types_with_correct_filenames(
+        self, temp_output_dir,
+    ) -> None:
+        model = self._fake_model()
+        batches = self._fake_batches()
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=None)
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z', 'img_tokens'],
+                include_splits=['train'],
+                resume=True,
+                batch_size=2,
+            )
+
+        assert result['num_batches'] == 2
+        assert result['num_batches_skipped'] == 0
+        expected = temp_output_dir / 'frame_z' / 'sess0' / 'train' / 'frame_z_batch0000.npz'
+        assert expected.is_file()
+        # batch 1 is session sess1
+        expected_sess1 = temp_output_dir / 'frame_z' / 'sess1' / 'train' / 'frame_z_batch0001.npz'
+        assert expected_sess1.is_file()
+        assert not (temp_output_dir / 'dino_z').exists()
+        assert len(result['saved_files']['frame_z']) == 2
+        assert len(result['saved_files']['img_tokens']) == 2
+        # no neural-alignment metadata (max_bin_idx=None) -> combine step is skipped
+        assert result['combined_trials_files'] == []
+
+    def test_extract_sable_latents_splits_a_session_boundary_batch(self, temp_output_dir) -> None:
+        # one batch of 2 rows straddling two sessions
+        batches = [
+            {
+                'scene_name': ['sessA_pair_000000', 'sessB_pair_000000'],
+                'split': ['train', 'train'],
+                'neural_trial_idx': torch.tensor([0, 0], dtype=torch.int64),
+                'neural_bin_idx': torch.zeros(2, dtype=torch.int64),
+                'neural_interval_sec': torch.zeros(2, 2, dtype=torch.float64),
+            },
+        ]
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=None)
+        model = self._fake_model()
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z'],
+                include_splits=['train'],
+                resume=True,
+                batch_size=2,
+            )
+
+        path_a = temp_output_dir / 'frame_z' / 'sessA' / 'train' / 'frame_z_batch0000.npz'
+        path_b = temp_output_dir / 'frame_z' / 'sessB' / 'train' / 'frame_z_batch0000.npz'
+        assert path_a.is_file()
+        assert path_b.is_file()
+        # each session's file only carries its own row
+        assert list(np.load(path_a, allow_pickle=True)['session_id']) == ['sessA']
+        assert list(np.load(path_b, allow_pickle=True)['session_id']) == ['sessB']
+        assert sorted(result['saved_files']['frame_z']) == sorted([path_a, path_b])
+
+    def test_extract_sable_latents_resume_skips_completed_batches(self, temp_output_dir) -> None:
+        model = self._fake_model()
+        batches = self._fake_batches()
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=None)
+
+        # pre-create batch 0's frame_z output (session sess0)
+        path = _batch_output_path(temp_output_dir, 'frame_z', 'sess0', 'train', 0)
+        _save_latent_batch_npz(
+            path,
+            z=np.zeros((2, 3, 4), dtype=np.float32),
+            session_ids=['sess0', 'sess0'],
+            pair_idxs=[0, 1],
+            splits=['train', 'train'],
+            neural_trial_idx=[0, 1],
+            neural_bin_idx=[0, 0],
+            neural_interval_sec=np.zeros((2, 2), dtype=np.float64),
+        )
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z'],
+                include_splits=['train'],
+                resume=True,
+                batch_size=2,
+            )
+
+        assert result['num_batches_skipped'] == 1
+        assert result['num_batches'] == 1
+        assert model.get_model_outputs.call_count == 1
+
+    def test_extract_sable_latents_no_resume_overwrites(self, temp_output_dir) -> None:
+        model = self._fake_model()
+        batches = self._fake_batches()
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=None)
+        path = _batch_output_path(temp_output_dir, 'frame_z', 'sess0', 'train', 0)
+        _save_latent_batch_npz(
+            path,
+            z=np.zeros((2, 3, 4), dtype=np.float32),
+            session_ids=['sess0', 'sess0'],
+            pair_idxs=[0, 1],
+            splits=['train', 'train'],
+            neural_trial_idx=[0, 1],
+            neural_bin_idx=[0, 0],
+            neural_interval_sec=np.zeros((2, 2), dtype=np.float64),
+        )
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z'],
+                include_splits=['train'],
+                resume=False,
+                batch_size=2,
+            )
+
+        assert result['num_batches_skipped'] == 0
+        assert result['num_batches'] == 2
+        assert model.get_model_outputs.call_count == 2
+
+    def test_extract_sable_latents_invalid_latent_type_raises(self, temp_output_dir) -> None:
+        with pytest.raises(ValueError):
+            extract_sable_latents(
+                config={'training': {}},
+                model=self._fake_model(),
+                output_dir=temp_output_dir,
+                latent_types=['not_a_real_latent'],
+            )
+
+    def test_extract_sable_latents_resume_skips_already_combined_session(
+        self, temp_output_dir,
+    ) -> None:
+        # a valid combined trials npz already on disk for sess0 (its batches may already be
+        # deleted by a prior successful combine)
+        session_dir = temp_output_dir / 'frame_z' / 'sess0'
+        session_dir.mkdir(parents=True)
+        trials_path = session_dir / 'frame_z_trials.npz'
+        np.savez(trials_path, train_z_trials_time=np.zeros((1, 1, 3, 4), dtype=np.float32))
+
+        batches = self._fake_batches(num_batches=1, batch_size=2)  # sess0 only
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=1)
+        model = self._fake_model()
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z'],
+                include_splits=['train'],
+                resume=True,
+                batch_size=2,
+            )
+
+        model.get_model_outputs.assert_not_called()
+        assert result['num_batches'] == 0
+        assert result['combined_trials_files'] == [trials_path]
+
+    def test_extract_sable_latents_combines_and_deletes_batches_per_session(
+        self, temp_output_dir,
+    ) -> None:
+        model = self._fake_model()
+        batches = self._fake_batches(num_batches=1, batch_size=2)
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=1)
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z'],
+                include_splits=['train'],
+                resume=False,
+                batch_size=2,
+            )
+
+        combined_path = temp_output_dir / 'frame_z' / 'sess0' / 'frame_z_trials.npz'
+        assert result['combined_trials_files'] == [combined_path]
+        assert combined_path.is_file()
+        data = np.load(combined_path, allow_pickle=True)
+        assert 'train_z_trials_time' in data.files
+        # 2 rows, distinct neural_trial_idx, single bin each -> 2 complete trials
+        assert data['train_z_trials_time'].shape[0] == 2
+        assert list(data['session_id']) == ['sess0', 'sess0']
+        # batch file deleted (and its now-empty split dir) after a successful combine
+        assert not _batch_output_path(temp_output_dir, 'frame_z', 'sess0', 'train', 0).is_file()
+        assert not (temp_output_dir / 'frame_z' / 'sess0' / 'train').exists()
+
+    def test_extract_sable_latents_never_combines_or_deletes_img_tokens(
+        self, temp_output_dir,
+    ) -> None:
+        model = self._fake_model()
+        batches = self._fake_batches(num_batches=1, batch_size=2)
+        dataset = _FakeDataset(self._records_for(batches), max_bin_idx=1)
+
+        with _patched_extract_deps(dataset, batches):
+            result = extract_sable_latents(
+                config={'training': {}},
+                model=model,
+                output_dir=temp_output_dir,
+                latent_types=['frame_z', 'img_tokens'],
+                include_splits=['train'],
+                resume=False,
+                batch_size=2,
+            )
+
+        assert not (temp_output_dir / 'img_tokens' / 'sess0' / 'img_tokens_trials.npz').is_file()
+        assert result['combined_trials_files'] == [
+            temp_output_dir / 'frame_z' / 'sess0' / 'frame_z_trials.npz',
+        ]
+        # img_tokens batch file untouched
+        assert _batch_output_path(temp_output_dir, 'img_tokens', 'sess0', 'train', 0).is_file()
