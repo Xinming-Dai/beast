@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 #SBATCH -t 0-00:30:00
-#SBATCH -J sable_run_decoding
+#SBATCH -J decoding
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step2_run_decoding_%j.log
 #SBATCH --export=ALL
 

@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
-#SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
+#SBATCH -A bfsr-delta-cpu
+#SBATCH -p cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH -t 0-01:59:00
-#SBATCH -J sable_generate_video
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=5G
+#SBATCH -t 0-00:15:00
+#SBATCH -J generate_vids
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step5_generate_video_%j.log
 #SBATCH --export=ALL
 

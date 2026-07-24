@@ -246,7 +246,8 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     t0 = time.perf_counter()
-    pca, z_avg, z_std = _load_pca_bundle(args.pca_npz)
+    pca_npz_path = resolve_compressed_trials_npz_path(args.pca_npz, session_id=args.eid)
+    pca, z_avg, z_std = _load_pca_bundle(pca_npz_path)
     log_step(
         f'Loaded PCA bundle in {time.perf_counter() - t0:.2f}s  '
         f'z_avg_shape={z_avg.shape}  z_std_shape={z_std.shape}',
@@ -275,7 +276,7 @@ def main(argv: list[str] | None = None) -> None:
                 {
                     'source': 'unproject.py',
                     'decoding_npy': str(args.decoding_npy.resolve()),
-                    'pca_npz': str(args.pca_npz.resolve()),
+                    'pca_npz': str(pca_npz_path.resolve()),
                     'compressed_trials_npz': str(trials_path.resolve()),
                     'trial_row_in_test_split': row_in_full,
                     'layout': 'z shape (1, T, L, D_full)',
