@@ -1494,6 +1494,7 @@ def _save_latent_batch_npz(
     neural_trial_idx: list[int],
     neural_bin_idx: list[int],
     neural_interval_sec: np.ndarray,
+    aux: dict[str, np.ndarray] | None = None,
 ) -> None:
     """Atomically save one batch's latents plus row metadata as a single ``.npz``.
 
@@ -1501,10 +1502,13 @@ def _save_latent_batch_npz(
     resume never mistakes a partial write for a finished one. The row metadata (session,
     pair, split, neural trial/bin alignment) is exactly the schema
     ``beast.sable_encoding_decoding.img_token.trials_assembly.assemble_from_inference_batch_npz``
-    reads.
+    reads. ``aux`` optionally carries extra per-row arrays (e.g. the ``img_tokens`` camera
+    tensors keyed by ``trials_assembly.IMG_TOKEN_CAM_BATCH_KEYS``), saved as additional
+    top-level ``.npz`` keys.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f'{path.name}.tmp-{os.getpid()}')
+    aux_arrays = {k: np.asarray(v, dtype=np.float32) for k, v in (aux or {}).items()}
     # write via an open file handle so numpy doesn't append its own `.npz` suffix to tmp_path
     with open(tmp_path, 'wb') as f:
         np.savez(
@@ -1516,6 +1520,7 @@ def _save_latent_batch_npz(
             neural_trial_idx=np.asarray(neural_trial_idx, dtype=np.int64),
             neural_bin_idx=np.asarray(neural_bin_idx, dtype=np.int64),
             neural_interval_sec=np.asarray(neural_interval_sec, dtype=np.float64),
+            **aux_arrays,
         )
     tmp_path.replace(path)
 
@@ -1749,6 +1754,22 @@ def extract_sable_latents(
 
                 for latent_type in latent_types:
                     z_np = result[latent_type].detach().cpu().numpy()
+                    aux = None
+                    if latent_type == 'img_tokens':
+                        from beast.sable_encoding_decoding.img_token.trials_assembly import (
+                            IMG_TOKEN_CAM_BATCH_KEYS,
+                        )
+
+                        cam_key_to_result_attr = {
+                            'c2w_target_out': 'c2w_target',
+                            'fxfycxcy_target_out': 'fxfycxcy_target',
+                            'c2w_input_out': 'c2w_input',
+                            'fxfycxcy_input_out': 'fxfycxcy_input',
+                        }
+                        aux = {}
+                        for cam_key in IMG_TOKEN_CAM_BATCH_KEYS:
+                            cam_tensor = result[cam_key_to_result_attr[cam_key]]
+                            aux[cam_key] = cam_tensor.detach().float().cpu().numpy()
                     for session_id, rows in session_row_groups.items():
                         path = _batch_output_path(
                             output_dir, latent_type, session_id, split_name, batch_idx,
@@ -1762,6 +1783,7 @@ def extract_sable_latents(
                             neural_trial_idx=[neural_trial_idx[i] for i in rows],
                             neural_bin_idx=[neural_bin_idx[i] for i in rows],
                             neural_interval_sec=neural_interval_sec[rows],
+                            aux={k: v[rows] for k, v in aux.items()} if aux else None,
                         )
                         saved_files[latent_type].append(path)
 
