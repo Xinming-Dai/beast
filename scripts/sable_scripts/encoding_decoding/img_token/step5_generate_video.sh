@@ -17,6 +17,7 @@ conda activate beast
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
+# Stage 5 stitch a folder of rendered frames (from step4_decode_and_render.sh) into an MP4.
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,INPUT_DIR=...,OUTPUT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step5_generate_video.sh

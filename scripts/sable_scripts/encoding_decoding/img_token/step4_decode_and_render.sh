@@ -18,6 +18,9 @@ conda activate beast
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
+# Stage 4 feeds (real or decoded) img tokens through SABLE's decoder to reconstruct images, save point clouds, and/or compute PSNR/SSIM.
+# Requires step3's unprojected tokens (or raw step0 img tokens) as Z_SOURCE; produces
+# rendered frames under OUT_DIR, consumed by step5_generate_video.sh.
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,Z_SOURCE=...,MODEL_ROOT=...,DATASET_PATH=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step4_decode_and_render.sh
