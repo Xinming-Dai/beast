@@ -138,7 +138,10 @@ PCA output subdirectory in stage 2) — the output is
 Full per-patch SABLE image tokens are too high-dimensional to decode directly from spikes.
 `beast.sable_encoding_decoding.img_token.run_pca_and_save` assembles trial-aligned image-token
 tensors from SABLE inference output, fits a PCA on the **train** split, and projects
-train/val/test into the compressed space.
+train/val/test into the compressed space. In a multisession layout
+(`<input-dir>/<session_name>/<train|val|test>/...`), each session is fit and applied
+**independently** — a session's own train split fits its own PCA basis, never pooled with other
+sessions.
 
 ```bash
 python -m beast.sable_encoding_decoding.img_token.run_pca_and_save \
@@ -153,6 +156,7 @@ Key flags (see `img_token/run_pca_and_save.py::parse_args`):
 | Flag | Meaning |
 |---|---|
 | `--input-dir` | inference directory of `img_tokens_batch*.npz` / `img_tokens_chunk*.npz` shards to assemble into trials |
+| `--session-names` | space-separated session/EID names to process (each fit independently); defaults to auto-discovering every immediate subfolder of `--input-dir` |
 | `--combined-trials-{train,val,test}-npz` | skip assembling a given split from `--input-dir`; use a pre-assembled trials `.npz` instead |
 | `--stage` | `1` (fit PCA on train only), `2` (project val/test using stage-1's PCA + train data), or `all` (both in one pass, default) |
 | `--n-feat-keep` | number of PCA components to keep (default 3) |
@@ -163,17 +167,19 @@ Key flags (see `img_token/run_pca_and_save.py::parse_args`):
 | `--include-splits` | comma-separated splits to include (default `train,val,test`) |
 
 Run stage 1 alone when val/test image tokens are not yet available (e.g. inference is still
-running), then stage 2 once they are — stage 2 reuses the stage-1 PCA fit rather than refitting.
+running), then stage 2 once they are — stage 2 reuses each session's stage-1 PCA fit rather than
+refitting. Both stages must be given the same `--session-names` (or the same auto-discoverable
+`--input-dir` tree) so the two runs line up session-for-session.
 
 `--input-dir` points at the raw `img_tokens_batch*.npz` shards `extract_sable_latents` writes
 under `<output_dir>/img_tokens/<session_id>/<split>/` — `extract_sable_latents` intentionally
 never combines or deletes `img_tokens` batches (unlike `frame_z`/`dino_z`/`combined_z`), since
 this stage reads them directly rather than from a combined trials `.npz`.
 
-**Output**: two files, typically under `<model-root>/img_tokens_compressed/`:
+**Output**: two files per session, under `<model-root>/img_tokens_compressed/<session_name>/`:
 
-- `img_tokens_pca_joint.npz` — the fitted PCA bundle (portable PCA arrays + pickled sklearn
-  `PCA` + train-session normalization stats).
+- `img_tokens_pca_joint.npz` — that session's fitted PCA bundle (portable PCA arrays + pickled
+  sklearn `PCA` + train-session normalization stats).
 - `img_tokens_compressed_trials.npz` — per-split (`train_z_trials_time`, `val_z_trials_time`,
   `test_z_trials_time`) PCA-compressed trial tensors, plus `trial_split`, interval, and
   `neural_trial_idx` metadata.

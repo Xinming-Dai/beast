@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-11:59:00
-#SBATCH -J sable_decode_and_render
+#SBATCH -t 0-01:00:00
+#SBATCH -J decode_and_render
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step4_decode_and_render_%j.log
 #SBATCH --export=ALL
 

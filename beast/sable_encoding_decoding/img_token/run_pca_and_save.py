@@ -36,40 +36,40 @@ corresponding combined NPZ and you use explicit outputs or ``--model-root``.
 
 If ``--output-pca-npz`` and ``--output-trials-npz`` are both omitted, they default to::
 
-    ``<MODEL_ROOT>/img_tokens_compressed/img_tokens_pca_joint.npz``
-    ``<MODEL_ROOT>/img_tokens_compressed/img_tokens_compressed_trials.npz``
+    ``<MODEL_ROOT>/img_tokens_compressed/<session_name>/img_tokens_pca_joint.npz``
+    ``<MODEL_ROOT>/img_tokens_compressed/<session_name>/img_tokens_compressed_trials.npz``
 
 where ``MODEL_ROOT`` is set explicitly via ``--model-root``, or inferred as the parent of
 ``--input-dir`` when its last path segment is ``img_tokens``. When ``--input-dir`` is omitted,
 you must pass ``--model-root`` for default output paths.
 
+When ``--input-dir`` is given, each session is fit **independently**: ``--session-names`` selects
+which ``<input-dir>/<session_name>/`` subfolders to process (space-separated), or, when omitted,
+every immediate subfolder of ``--input-dir`` is auto-discovered and processed. Each session gets
+its own PCA basis fit on that session's train split only — sessions are never pooled together.
+
 Example — two-pass (explicit outputs or use ``--model-root`` + omit ``--output-*``)::
 
-    # Stage 1: train only (val/test tokens not yet extracted)
+    # Stage 1: train only (val/test tokens not yet extracted); processes every session found
+    # under $MODEL_ROOT/img_tokens/ unless --session-names restricts it
     python -m beast.sable_encoding_decoding.img_token.run_pca_and_save \\
       --input-dir $MODEL_ROOT/img_tokens \\
-      --pair-metadata .../precached_video/<EID>/pair_metadata.json \\
-      --session-id <EID> \\
+      --session-names <EID1> <EID2> \\
       --model-root $MODEL_ROOT \\
       --n-feat-keep 3 --stage 1
 
     # Stage 2: project val/test once those tokens exist
     python -m beast.sable_encoding_decoding.img_token.run_pca_and_save \\
       --input-dir $MODEL_ROOT/img_tokens \\
-      --pair-metadata .../precached_video/<EID>/pair_metadata.json \\
-      --session-id <EID> \\
+      --session-names <EID1> <EID2> \\
       --model-root $MODEL_ROOT \\
-      --neural-npz .../<EID>_aligned.npz \\
       --n-feat-keep 3 --stage 2
 
-Example — single pass::
+Example — single pass, auto-discovering every session under ``--input-dir``::
 
     python -m beast.sable_encoding_decoding.img_token.run_pca_and_save \\
       --input-dir .../eval_results_.../img_tokens \\
-      --pair-metadata .../precached_video/<EID>/pair_metadata.json \\
-      --session-id <EID> \\
-      --model-root ... \\
-      --neural-npz .../<EID>_aligned.npz
+      --model-root ...
 
 Loading the saved PCA bundle later::
 
@@ -578,9 +578,16 @@ def _write_compressed_trials_npz(
 _CAMERA_SIDECAR_NAME = 'img_tokens_camera_parameters.npz'
 
 
-def _camera_sidecar_path(trials_npz: Path) -> Path:
-    """Derive the camera sidecar path alongside ``trials_npz``."""
-    return trials_npz.resolve().parent / _CAMERA_SIDECAR_NAME
+def _camera_sidecar_path(trials_npz: Path, session_id: str | None = None) -> Path:
+    """Derive the camera sidecar path alongside ``trials_npz``.
+
+    When `session_id` is given, nests under `<parent>/<session_subdir>/` to match the
+    per-session partitioning `_write_compressed_trials_npz` applies to the trials npz itself.
+    """
+    parent = trials_npz.resolve().parent
+    if session_id is not None:
+        parent = parent / _session_subdir_key(session_id)
+    return parent / _CAMERA_SIDECAR_NAME
 
 
 def _write_camera_sidecar(
@@ -736,7 +743,7 @@ def run_img_tokens_pca_joint(
         sid_flat: list[str] | None = list(sids_train) if sids_train is not None else None
 
         # load train cameras from stage-1 sidecar (may be None if not saved)
-        cam_sidecar_path = _camera_sidecar_path(output_trials_npz)
+        cam_sidecar_path = _camera_sidecar_path(output_trials_npz, session_id)
         train_cams = _load_stage1_train_cameras(cam_sidecar_path, log)
         cameras_by_split: dict[str, dict[str, np.ndarray]] = {}
         if train_cams is not None:
@@ -1097,7 +1104,7 @@ def run_img_tokens_pca_joint(
     )
 
     if cameras_by_split_:
-        cam_sidecar = _camera_sidecar_path(output_trials_npz)
+        cam_sidecar = _camera_sidecar_path(output_trials_npz, session_id)
         cam_splits = (
             {'train': cameras_by_split_['train']}
             if stage == '1' and 'train' in cameras_by_split_
@@ -1201,6 +1208,32 @@ def resolve_output_npz_paths(
     return (comp / default_pca).resolve(), (comp / default_trials).resolve()
 
 
+def discover_session_names(input_dir: Path) -> list[str]:
+    """Sorted names of `input_dir`'s immediate subdirectories (session/EID folders).
+
+    Args:
+        input_dir: root directory expected to contain one subfolder per session, e.g.
+            ``<input_dir>/<EID>/<train|val|test>/...``.
+
+    Returns:
+        Sorted list of subdirectory names.
+
+    Raises:
+        NotADirectoryError: if `input_dir` does not exist.
+        RuntimeError: if `input_dir` has no subdirectories.
+    """
+    input_dir = input_dir.expanduser().resolve()
+    if not input_dir.is_dir():
+        raise NotADirectoryError(input_dir)
+    names = sorted(p.name for p in input_dir.iterdir() if p.is_dir())
+    if not names:
+        raise RuntimeError(
+            f'No session subdirectories found under {input_dir}; expected '
+            '<input_dir>/<session_name>/<train|val|test>/... or pass --session-names explicitly.',
+        )
+    return names
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the img-token PCA fit/apply entry point.
 
@@ -1257,7 +1290,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='Optional pair_metadata.json (recommended for IBL neural-aligned precache).',
     )
     p.add_argument(
-        '--session-id', type=str, default=None, help='Override session id for pair-metadata mode.',
+        '--session-names',
+        nargs='+',
+        metavar='SESSION',
+        default=None,
+        help=(
+            'Session/EID names to process, space-separated. Each is fit independently: PCA is '
+            'fit on that session\'s own train split and applied to that session\'s own val/test '
+            '(sessions are never pooled). Defaults to auto-discovering every immediate '
+            'subdirectory of --input-dir. Ignored when --input-dir is omitted.'
+        ),
     )
     p.add_argument(
         '--include-splits',
@@ -1379,25 +1421,61 @@ def main() -> None:
         output_trials_npz=args.output_trials_npz,
     )
     split_flag = {'auto': None, 'on': True, 'off': False}[args.split_subdirs]
-    run_img_tokens_pca_joint(
-        input_dir=args.input_dir,
-        pair_metadata=args.pair_metadata,
-        session_id=args.session_id,
-        include_splits=args.include_splits,
-        time_bins=args.time_bins,
-        file_prefix=args.file_prefix,
-        output_pca_npz=out_pca,
-        output_trials_npz=out_tri,
-        n_feat_keep=args.n_feat_keep,
-        random_state=args.random_state,
-        neural_npz=args.neural_npz,
-        verbose=not args.quiet,
-        split_subdirs=split_flag,
-        stage=args.stage,
-        combined_trials_train_npz=ct_train,
-        combined_trials_val_npz=ct_val,
-        combined_trials_test_npz=ct_test,
+
+    if args.input_dir is None:
+        # combined-trials-only invocation: no per-session directory tree to loop over.
+        run_img_tokens_pca_joint(
+            input_dir=None,
+            pair_metadata=args.pair_metadata,
+            session_id=None,
+            include_splits=args.include_splits,
+            time_bins=args.time_bins,
+            file_prefix=args.file_prefix,
+            output_pca_npz=out_pca,
+            output_trials_npz=out_tri,
+            n_feat_keep=args.n_feat_keep,
+            random_state=args.random_state,
+            neural_npz=args.neural_npz,
+            verbose=not args.quiet,
+            split_subdirs=split_flag,
+            stage=args.stage,
+            combined_trials_train_npz=ct_train,
+            combined_trials_val_npz=ct_val,
+            combined_trials_test_npz=ct_test,
+        )
+        return
+
+    session_names = (
+        list(args.session_names)
+        if args.session_names
+        else discover_session_names(args.input_dir)
     )
+    print(f'[sessions] Processing {len(session_names)} session(s): {session_names}', flush=True)
+
+    for i, session_name in enumerate(session_names):
+        print(
+            f'[session {i + 1}/{len(session_names)}] {session_name}',
+            flush=True,
+        )
+        run_img_tokens_pca_joint(
+            input_dir=args.input_dir / session_name,
+            pair_metadata=args.pair_metadata,
+            session_id=session_name,
+            include_splits=args.include_splits,
+            time_bins=args.time_bins,
+            file_prefix=args.file_prefix,
+            output_pca_npz=out_pca.parent / session_name / out_pca.name,
+            output_trials_npz=out_tri,
+            n_feat_keep=args.n_feat_keep,
+            random_state=args.random_state,
+            neural_npz=args.neural_npz,
+            verbose=not args.quiet,
+            split_subdirs=split_flag,
+            stage=args.stage,
+            combined_trials_train_npz=ct_train,
+            combined_trials_val_npz=ct_val,
+            combined_trials_test_npz=ct_test,
+        )
 
 
 if __name__ == '__main__':

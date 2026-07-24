@@ -1,13 +1,10 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
-#SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
-#SBATCH -t 0-05:59:00
-#SBATCH -J sable_unproject
+#SBATCH -A bfsx-delta-cpu
+#SBATCH --job-name="pca_decompress"
+#SBATCH --partition=cpu
+#SBATCH -c 1
+#SBATCH --mem 10G
+#SBATCH -t 0-00:20:00
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step3_unproject_%j.log
 #SBATCH --export=ALL
 
