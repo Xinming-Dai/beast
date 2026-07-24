@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH -t 0-11:59:00
-#SBATCH -J sable_latent_extraction
+#SBATCH -J extraction
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/encoding/step1_sable_latent_%j.log
 #SBATCH --export=ALL
 
@@ -15,26 +15,23 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
-# Extracts per-pair Sable latent tensors (frame_z / dino_z / combined_z / img_tokens) from a
-# trained checkpoint, for downstream neural encoding/decoding. Analogous to E-RayZer's
-# scripts/mia/erz_dino/encoding/step1_erz_latent.sh + src/inference.py latent-export flags
-# (--return-cat-z, --return-combined-all-z, --return-img-tokens); this repo only supports the
-# "legacy" per-pair .npy resume layout (safe to rerun after a killed job: already-completed
-# batches are skipped, unless RESUME=false).
-# Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,MODEL_DIR=...,DATASET_PATH=... \
-#     scripts/sable_scripts/encoding_decoding/encoding/step1_sable_latent.sh
-MODEL_DIR="${MODEL_DIR:-<MODEL_ROOT>}"                      # dir with config.yaml + *best.ckpt
-DATASET_PATH="${DATASET_PATH:-<PATH_TO_DATASET>}"
-OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/latents}"
-SPLITS="${SPLITS:-train val}"
+JOB_ID="20284092"
+EIDS="${EIDS:72cb5550-43b4-4ef0-add5-e4adfdfb5e02 781b35fd-e1f0-4d14-b2bb-95b7263082bb}"                                            # space-separated session IDs (eids); default: use training config's session_names
+
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID}"
+DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
+DATASET_PATH="${DATASET_PATH:-$DATASET_BASE/extracted_frames/eval}"
+VDA_CACHE_ROOT=$DATASET_BASE/extracted_frames_for_eyz/eval/depth_map
+CORRESPONDENCE_CACHE_ROOT=$DATASET_BASE/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences                      # dir with config.yaml + *best.ckpt
+OUTPUT_DIR=$MODEL_DIR/latents
 LATENT_FLAGS="${LATENT_FLAGS:---return-all-z --return-img-tokens}"   # or e.g. "--return-frame-z"
-RESUME="${RESUME:-true}"                                    # set to "false" to force recompute
-VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-}"                        # optional override
-CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-}"  # optional override
+RESUME="${RESUME:-true}"                                             # set to "false" to force recompute
+BATCH_SIZE="${BATCH_SIZE:-64}"                                       # override training.batch_size_per_gpu
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting Sable latents -> $OUTPUT_DIR"
 
@@ -43,11 +40,12 @@ ARGS=(
     --input "$DATASET_PATH"
     --output "$OUTPUT_DIR"
     --extract-latents
-    --splits $SPLITS
 )
+[ -n "$EIDS" ] && ARGS+=(--session-names $EIDS)
 [ -n "$VDA_CACHE_ROOT" ] && ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
 [ "$RESUME" = "false" ] && ARGS+=(--no-resume)
+[ -n "$BATCH_SIZE" ] && ARGS+=(--latent-batch-size "$BATCH_SIZE")
 
 beast predict "${ARGS[@]}" $LATENT_FLAGS
 
