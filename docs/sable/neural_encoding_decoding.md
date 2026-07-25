@@ -301,3 +301,5 @@ beast dependency) if the ffmpeg plugin isn't installed.
   from the source repo.
 - [`extract_data_for_sable.md`](extract_data_for_sable.md) — preparing the raw IBL dataset that
   feeds SABLE training/inference in the first place.
+- [`neural_extraction.md`](neural_extraction.md) — building the `<eid>_aligned.npz` and
+  eval-layout frames this pipeline consumes, per source dataset (currently: Cheese3D).
