@@ -578,6 +578,119 @@ class SABLEDataset(Dataset):
                 'To use a custom regime, subclass and override _resolve_view_indices.'
             )
 
+    @staticmethod
+    def _discover_eval_split_records(
+        left_dir: Path,
+        right_dir: Path,
+        session_id: str,
+        include_splits: list[str] | None,
+    ) -> list[_PrecacheRecord]:
+        """Discover stereo pairs from an eval-set layout for one session.
+
+        Shared by :class:`IBLTwoViewDataset` (raw IBL frames) and :class:`Cheese3DDataset`
+        (frames extracted from Cheese3D ephys videos) — both use the same on-disk contract,
+        differing only in which two camera directories they pass as ``left_dir``/``right_dir``.
+
+        Eval frames live under a ``{train,val,test}`` split subdirectory of the
+        session directory — a fixed, on-disk split (driven by ``neural_trial_idx``
+        upstream) rather than the synthetic ``val_split_ratio`` split used for the
+        training layout — and are named ``interval{N}timebin{M}.png`` instead of
+        ``img{N:08d}.png``. Each split directory has a ``frame_index_mapping.json``
+        mapping filename to its raw ``*_source_frame_index``, e.g.::
+
+            {"interval0timebin0.png": {"left_source_frame_index": 19834, ...}}
+
+        (the right-camera mapping file uses ``right_source_frame_index`` instead).
+        Left/right frames are paired by identical filename — both cameras share the
+        same filenames within a split — rather than by a reconstructed numeric
+        index, and ``source_frame_index`` is looked up from the mapping instead of
+        parsed from the filename.
+
+        Each mapping entry also carries ``neural_trial_idx``, ``neural_bin_idx``, and
+        ``neural_interval_sec`` (from the left-camera mapping file), used to align saved
+        latents back into neural trials downstream; missing fields fall back to ``None``
+        for datasets predating this metadata.
+
+        ``pair_idx`` is a single counter incremented across all requested splits
+        within the session (not reset per split), so it stays unique per session —
+        required by downstream consumers that key saved artifacts on
+        ``(session_id, pair_idx)`` alone.
+
+        Args:
+            left_dir: session directory for the "left" camera (role assignment, not
+                necessarily a physically left-facing camera).
+            right_dir: session directory for the "right" camera.
+            session_id: session identifier.
+            include_splits: on-disk split subdirectories to include (``train``,
+                ``val``, ``test``); ``None`` includes all of them.
+
+        Returns:
+            list of ``_PrecacheRecord`` instances, empty if none found.
+        """
+        splits = include_splits if include_splits else ['train', 'val', 'test']
+        records: list[_PrecacheRecord] = []
+        pair_idx = 0
+        for split_name in splits:
+            left_split_dir = left_dir / split_name
+            right_split_dir = right_dir / split_name
+            left_mapping_path = left_split_dir / 'frame_index_mapping.json'
+            right_mapping_path = right_split_dir / 'frame_index_mapping.json'
+            if not left_mapping_path.is_file() or not right_mapping_path.is_file():
+                continue
+
+            with open(left_mapping_path) as f:
+                left_mapping = json.load(f)
+            with open(right_mapping_path) as f:
+                right_mapping = json.load(f)
+
+            common_filenames = sorted(set(left_mapping) & set(right_mapping))
+            for filename in common_filenames:
+                entry = left_mapping[filename]
+                neural_trial_idx = entry.get('neural_trial_idx')
+                neural_bin_idx = entry.get('neural_bin_idx')
+                neural_interval_sec_raw = entry.get('neural_interval_sec')
+                records.append(_PrecacheRecord(
+                    session_id=session_id,
+                    pair_idx=pair_idx,
+                    left_path=left_split_dir / filename,
+                    right_path=right_split_dir / filename,
+                    left_source_frame_index=int(left_mapping[filename]['left_source_frame_index']),
+                    right_source_frame_index=int(
+                        right_mapping[filename]['right_source_frame_index']
+                    ),
+                    scene_name=f'{session_id}_pair_{pair_idx:06d}',
+                    split=split_name,
+                    neural_trial_idx=(
+                        int(neural_trial_idx) if neural_trial_idx is not None else None
+                    ),
+                    neural_bin_idx=int(neural_bin_idx) if neural_bin_idx is not None else None,
+                    neural_interval_sec=(
+                        (float(neural_interval_sec_raw[0]), float(neural_interval_sec_raw[1]))
+                        if neural_interval_sec_raw is not None
+                        else None
+                    ),
+                ))
+                pair_idx += 1
+
+        return records
+
+    @staticmethod
+    def _parse_frame_indices(directory: Path) -> set[int]:
+        """Parse integer frame indices from ``img*.png`` filenames in a directory.
+
+        Args:
+            directory: directory containing ``img{N:08d}.png`` image files.
+
+        Returns:
+            set of integer frame indices found.
+        """
+        indices: set[int] = set()
+        for p in directory.glob('img*.png'):
+            m = re.search(r'(\d+)\.png$', p.name)
+            if m:
+                indices.add(int(m.group(1)))
+        return indices
+
 
 class IBLTwoViewDataset(SABLEDataset):
     """Two-view IBL dataset that discovers frame pairs from the raw IBL filesystem layout.
@@ -788,114 +901,6 @@ class IBLTwoViewDataset(SABLEDataset):
         # (see _discover_eval_split_records), so they bypass _split_records's
         # synthetic val_split_ratio-based reshuffling entirely.
         return records + eval_records
-
-    def _discover_eval_split_records(
-        self,
-        left_dir: Path,
-        right_dir: Path,
-        session_id: str,
-        include_splits: list[str] | None,
-    ) -> list[_PrecacheRecord]:
-        """Discover stereo pairs from the IBL eval-set layout for one session.
-
-        Eval frames live under a ``{train,val,test}`` split subdirectory of the
-        session directory — a fixed, on-disk split (driven by ``neural_trial_idx``
-        upstream) rather than the synthetic ``val_split_ratio`` split used for the
-        training layout — and are named ``interval{N}timebin{M}.png`` instead of
-        ``img{N:08d}.png``. Each split directory has a ``frame_index_mapping.json``
-        mapping filename to its raw IBL ``*_source_frame_index``, e.g.::
-
-            {"interval0timebin0.png": {"left_source_frame_index": 19834, ...}}
-
-        (the right-camera mapping file uses ``right_source_frame_index`` instead).
-        Left/right frames are paired by identical filename — both cameras share the
-        same filenames within a split — rather than by a reconstructed numeric
-        index, and ``source_frame_index`` is looked up from the mapping instead of
-        parsed from the filename.
-
-        Each mapping entry also carries ``neural_trial_idx``, ``neural_bin_idx``, and
-        ``neural_interval_sec`` (from the left-camera mapping file), used to align saved
-        latents back into neural trials downstream; missing fields fall back to ``None``
-        for datasets predating this metadata.
-
-        ``pair_idx`` is a single counter incremented across all requested splits
-        within the session (not reset per split), so it stays unique per session —
-        required by downstream consumers that key saved artifacts on
-        ``(session_id, pair_idx)`` alone.
-
-        Args:
-            left_dir: session directory under ``leftCamera.video``.
-            right_dir: session directory under ``rightCamera.video``.
-            session_id: session identifier.
-            include_splits: on-disk split subdirectories to include (``train``,
-                ``val``, ``test``); ``None`` includes all of them.
-
-        Returns:
-            list of ``_PrecacheRecord`` instances, empty if none found.
-        """
-        splits = include_splits if include_splits else ['train', 'val', 'test']
-        records: list[_PrecacheRecord] = []
-        pair_idx = 0
-        for split_name in splits:
-            left_split_dir = left_dir / split_name
-            right_split_dir = right_dir / split_name
-            left_mapping_path = left_split_dir / 'frame_index_mapping.json'
-            right_mapping_path = right_split_dir / 'frame_index_mapping.json'
-            if not left_mapping_path.is_file() or not right_mapping_path.is_file():
-                continue
-
-            with open(left_mapping_path) as f:
-                left_mapping = json.load(f)
-            with open(right_mapping_path) as f:
-                right_mapping = json.load(f)
-
-            common_filenames = sorted(set(left_mapping) & set(right_mapping))
-            for filename in common_filenames:
-                entry = left_mapping[filename]
-                neural_trial_idx = entry.get('neural_trial_idx')
-                neural_bin_idx = entry.get('neural_bin_idx')
-                neural_interval_sec_raw = entry.get('neural_interval_sec')
-                records.append(_PrecacheRecord(
-                    session_id=session_id,
-                    pair_idx=pair_idx,
-                    left_path=left_split_dir / filename,
-                    right_path=right_split_dir / filename,
-                    left_source_frame_index=int(left_mapping[filename]['left_source_frame_index']),
-                    right_source_frame_index=int(
-                        right_mapping[filename]['right_source_frame_index']
-                    ),
-                    scene_name=f'{session_id}_pair_{pair_idx:06d}',
-                    split=split_name,
-                    neural_trial_idx=(
-                        int(neural_trial_idx) if neural_trial_idx is not None else None
-                    ),
-                    neural_bin_idx=int(neural_bin_idx) if neural_bin_idx is not None else None,
-                    neural_interval_sec=(
-                        (float(neural_interval_sec_raw[0]), float(neural_interval_sec_raw[1]))
-                        if neural_interval_sec_raw is not None
-                        else None
-                    ),
-                ))
-                pair_idx += 1
-
-        return records
-
-    @staticmethod
-    def _parse_frame_indices(directory: Path) -> set[int]:
-        """Parse integer frame indices from ``img*.png`` filenames in a directory.
-
-        Args:
-            directory: directory containing ``img{N:08d}.png`` image files.
-
-        Returns:
-            set of integer frame indices found.
-        """
-        indices: set[int] = set()
-        for p in directory.glob('img*.png'):
-            m = re.search(r'(\d+)\.png$', p.name)
-            if m:
-                indices.add(int(m.group(1)))
-        return indices
 
     # ------------------------------------------------------------------
     # overrides
@@ -1366,6 +1371,7 @@ class Cheese3DDataset(SABLEDataset):
             else f'{left_camera}/{right_camera}'
         )
         records: list[_PrecacheRecord] = []
+        eval_records: list[_PrecacheRecord] = []
         for session_name in session_names:
             session_dir = dataset_path / session_name
             left_dir = session_dir / left_camera
@@ -1376,6 +1382,37 @@ class Cheese3DDataset(SABLEDataset):
                     f'{right_camera!r} camera directory',
                     level='warning',
                 )
+                continue
+
+            # Eval layout — {camera}/{split}/interval{N}timebin{M}.png plus a
+            # frame_index_mapping.json per split — used automatically when no flat
+            # img*.png files sit directly under the camera directories. Mirrors
+            # IBLTwoViewDataset._discover_filesystem_records's dual-layout fallback; see
+            # SABLEDataset._discover_eval_split_records for the on-disk contract. Eval
+            # sessions carry a fixed train/val/test split already, so they bypass
+            # val_split_ratio entirely, and (like IBLTwoViewDataset) support only two
+            # cameras — a center_camera is ignored for eval-layout sessions.
+            if not self._frame_indices(left_dir, prefix='img', suffix='.png'):
+                session_eval_records = self._discover_eval_split_records(
+                    left_dir=left_dir,
+                    right_dir=right_dir,
+                    session_id=session_name,
+                    include_splits=include_splits,
+                )
+                if not session_eval_records:
+                    log_step(
+                        f'skipping session {session_name!r}: no flat img*.png files and no '
+                        f'eval-layout frame_index_mapping.json found',
+                        level='warning',
+                    )
+                    continue
+                if center_camera is not None:
+                    log_step(
+                        f'session {session_name!r}: eval layout does not support a center '
+                        f'camera; {center_camera!r} is ignored',
+                        level='warning',
+                    )
+                eval_records.extend(session_eval_records)
                 continue
 
             center_dir: Path | None = None
@@ -1437,19 +1474,24 @@ class Cheese3DDataset(SABLEDataset):
                     ),
                 ))
 
-        if not records:
+        if not records and not eval_records:
             raise RuntimeError(
                 f'No common {camera_names} frames found for sessions '
                 f'{session_names} under {dataset_path}'
             )
 
-        return self._split_records(
-            records,
-            include_splits=include_splits,
-            val_split_ratio=val_split_ratio,
-            split_seed=split_seed,
-            source_desc=str(dataset_path),
-        )
+        if records:
+            records = self._split_records(
+                records,
+                include_splits=include_splits,
+                val_split_ratio=val_split_ratio,
+                split_seed=split_seed,
+                source_desc=str(dataset_path),
+            )
+
+        # eval-layout records already carry a fixed, on-disk train/val/test split, so they
+        # bypass _split_records's synthetic val_split_ratio-based reshuffling entirely.
+        return records + eval_records
 
     @staticmethod
     def _resolve_mask_dir(segmentation_root: Path, session_name: str, camera: str) -> Path:
