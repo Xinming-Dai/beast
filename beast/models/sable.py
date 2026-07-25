@@ -442,15 +442,28 @@ class Sable(BaseLightningModel):
         )
 
     def maybe_randomize_view_indices(self, input_idx, target_idx, device):
-        """Randomize view ordering for two-view training."""
-        b = input_idx.shape[0]
-        swap = (torch.rand(b, device=device) < 0.5).unsqueeze(1)
+        """Randomize view ordering for single-view-context training.
 
-        if input_idx.shape[1] == 1:
+        For true 1-to-1 regimes (``target_idx`` also single-view, e.g. ``fixed_1to1``),
+        swaps which single view is context vs. target. For 1-to-N regimes (e.g.
+        ``fixed_1to2``, where ``target_idx`` already covers every view the context
+        could be), resamples which of the target views is used as context instead;
+        ``target_idx`` is left unchanged since it already spans all candidate views.
+        """
+        b = input_idx.shape[0]
+
+        if input_idx.shape[1] != 1:
+            return input_idx, target_idx
+
+        if target_idx.shape[1] == 1:
+            swap = (torch.rand(b, device=device) < 0.5).unsqueeze(1)
             return torch.where(swap, target_idx, input_idx), torch.where(
                 swap, input_idx, target_idx
             )
-        return input_idx, target_idx
+
+        rand_pos = torch.randint(0, target_idx.shape[1], (b, 1), device=device)
+        new_input_idx = target_idx.gather(1, rand_pos)
+        return new_input_idx, target_idx
 
     def prepare_view_indices(
         self,

@@ -914,6 +914,11 @@ class IBLTwoViewDataset(SABLEDataset):
         For ``pseudo_center_finetune`` all three views (left, right, pseudo center)
         are context but only left and right (indices 0, 1) are targets for loss;
         the pseudo center view has no ground truth so it is excluded from the loss.
+        For ``fixed_1to2`` index 0 is the sole context view but both indices 0 and 1
+        are targets for loss; this gives the model only one input image (single-image
+        cross-view prediction) while still building the pseudo point cloud from both
+        views' depth and correspondences. ``Sable.maybe_randomize_view_indices``
+        randomly resamples which of the two views is used as context during training.
 
         Returns:
             tuple of (context_indices, target_indices) as long tensors.
@@ -932,11 +937,13 @@ class IBLTwoViewDataset(SABLEDataset):
                 torch.arange(3, dtype=torch.long),
                 torch.tensor([0, 1], dtype=torch.long),
             )
+        elif self._training_regime == 'fixed_1to2':
+            return torch.tensor([0], dtype=torch.long), torch.tensor([0, 1], dtype=torch.long)
         else:
             raise ValueError(
                 f'Unsupported training_regime: {self._training_regime!r}. '
-                'Built-in values: all_views_reconstruction, fixed_1to1, pseudo_center_finetune. '
-                'To use a custom regime, subclass and override _resolve_view_indices.'
+                'Built-in values: all_views_reconstruction, fixed_1to1, pseudo_center_finetune, '
+                'fixed_1to2. To use a custom regime, subclass and override _resolve_view_indices.'
             )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
