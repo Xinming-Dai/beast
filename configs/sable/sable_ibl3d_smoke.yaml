@@ -1,0 +1,23 @@
+# SABLE IBL smoke config — extends sable_ibl3d.yaml with overrides for short
+# smoke runs. Use via `python -m beast.cli.main train --config .../sable_ibl3d.yaml --overrides ...`
+# plus the cell-level overrides from run_one_cell.sh.
+#
+# This file is documentation/reference; the actual base config that ships with
+# the repo is configs/sable/sable_ibl3d.yaml. We do NOT duplicate that config
+# here to avoid drift.
+
+# Smoke runs use:
+#   --overrides "training.batch_size_per_gpu=2 training.grad_accum_steps=1
+#                training.max_fwdbwd_passes=10 training.val_every=5
+#                training.checkpoint_every=10 optimizer.warmup=2
+#                training.dataset_path=/data/jqh/Datasets/beast3d-data/sable_ibl_4b00
+#                training.session_names=4b00df29-3769-43be-bb40-128b1cba6d35
+#                training.checkpoint_dir=$OUT training.resume_ckpt=...
+#                model.vda.mode=online model.vda.cache_root=null
+#                model.vda.encoder=vitb model.vda.metric=false
+#                model.vda.repo_root=/home/jqh/NeuralWorkshops/third_party/VDA
+#                model.vda.checkpoint_path=/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/video_depth_anything_vitb.pth
+#                model.merge_pcd.correspondence_cache_root=/data/jqh/Datasets/beast3d-data/sable_ibl_4b00/litpose_correspondences/processed_correspondences"
+#
+# Reference: docs/sable/extract_data_for_sable.md and
+# beast/beast/data/sable_dataset.py::_load_vda_depth_sable for the depth zero-tensor behavior in online mode.
