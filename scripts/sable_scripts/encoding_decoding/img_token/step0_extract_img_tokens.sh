@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-11:59:00
+#SBATCH -t 0-5:59:00
 #SBATCH -J extract_img_tokens
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step0_extract_img_tokens_%j.log
 #SBATCH --export=ALL
