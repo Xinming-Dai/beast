@@ -30,12 +30,13 @@ cd "$REPO_ROOT"
 #   sbatch --export=ALL,MODEL_DIR=...,EID=... \
 #     scripts/sable_scripts/encoding_decoding/cheese3d/step2_extract_img_tokens.sh
 EID="${EID:-20250523_B1_ephys-record_awake_000}"
-MODEL_DIR="${MODEL_DIR:-<MODEL_ROOT>}"                        # dir with config.yaml + *best.ckpt
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/20156493}"                        # dir with config.yaml + *best.ckpt
 EVAL_FRAMES_DIR="${EVAL_FRAMES_DIR:-/work/hdd/bfsr/xdai3/cheese3d_neural/eval_frames}"
-OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/latents}"
+OUTPUT_DIR="$MODEL_DIR/latents"
 LATENT_FLAGS="${LATENT_FLAGS:---return-all-z --return-img-tokens}"   # or e.g. "--return-frame-z"
 RESUME="${RESUME:-true}"                                             # set to "false" to force recompute
 BATCH_SIZE="${BATCH_SIZE:-64}"                                       # override training.batch_size_per_gpu
+DISABLE_INIT_GS="${DISABLE_INIT_GS:-true}"                          # set to "true" to skip VDA-depth Gaussian init/reg at inference
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting Sable latents for eid=$EID -> $OUTPUT_DIR"
 
@@ -48,6 +49,7 @@ ARGS=(
 )
 [ "$RESUME" = "false" ] && ARGS+=(--no-resume)
 [ -n "$BATCH_SIZE" ] && ARGS+=(--latent-batch-size "$BATCH_SIZE")
+[ "$DISABLE_INIT_GS" = "true" ] && ARGS+=(--disable-init-gs)
 
 beast predict "${ARGS[@]}" $LATENT_FLAGS
 

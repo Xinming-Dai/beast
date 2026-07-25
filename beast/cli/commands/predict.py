@@ -105,6 +105,16 @@ def register_parser(subparsers: Any) -> None:
         ),
     )
     sable_group.add_argument(
+        '--disable-init-gs',
+        action='store_true',
+        help=(
+            'Override the trained config\'s model.gaussians.init_gs to skip VDA-depth-based '
+            'Gaussian initialization/regularization at inference. Rendered output is '
+            'unaffected (the render path never depends on init_gs); depth_output will be '
+            'None and inference is faster'
+        ),
+    )
+    sable_group.add_argument(
         '--max-batches',
         type=int,
         default=None,
@@ -178,6 +188,9 @@ def handle(args: argparse.Namespace) -> None:
     model = Model.from_dir(args.model)
 
     if isinstance(model.model, Sable):
+        if args.disable_init_gs:
+            _logger.info('disabling init_gs for inference (model.gaussians.init_gs override)')
+            model.model.init_gs = False
         _handle_sable(args, model)
     else:
         _handle_video_or_images(args, model)
