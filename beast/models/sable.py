@@ -1080,6 +1080,8 @@ class Sable(BaseLightningModel):
                     step_back=self.config.get('evaluation_step_back_distance', 0),
                 )
                 # vis_only_results_input = self.render_images_video(gaussian_attrs, c2w_input, fxfycxcy_input, normalized=False)
+                
+        v_gaussian_views = v_target if self.full_context_partial_target else v_input
 
         gaussians = []
         pixelalign_xyz = []
@@ -1120,7 +1122,7 @@ class Sable(BaseLightningModel):
             img_aligned_xyz = rearrange(
                 img_aligned_xyz,
                 '(v hh ww ph pw) c -> v c (hh ph) (ww pw)',
-                v=v_target,
+                v=v_gaussian_views,
                 hh=self.hh,
                 ww=self.ww,
                 ph=self.ph,

@@ -54,7 +54,7 @@ model:
   use_deferred_rendering: false
   use_gsplat: true
   patch_masking:
-    ratio: 0.75
+    ratio: 0.0   # disabled to match vanilla E-RayZer's cross-view prediction recipe
     pixel_mask: true
     gaussian_mask: false
   merge_pcd:
