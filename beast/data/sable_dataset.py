@@ -1587,10 +1587,16 @@ class Cheese3DDataset(SABLEDataset):
         Returns:
             dict with keys ``image``, ``context_indices``, ``target_indices``,
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
-            ``scene_name``, optionally ``centercamera_xy``, optionally ``mask``,
-            (when ``training.use_camera_params`` is ``true``) ``c2w`` ``[V, 4, 4]`` and
-            ``fxfycxcy`` ``[V, 4]``, and (when ``training.load_gt_camera_params_for_vis``
-            is ``true``) ``gt_c2w`` ``[V, 4, 4]`` and ``gt_fxfycxcy`` ``[V, 4]``.
+            ``scene_name``, ``split``, ``neural_trial_idx``, ``neural_bin_idx``,
+            ``neural_interval_sec``, optionally ``centercamera_xy``, optionally
+            ``mask``, (when ``training.use_camera_params`` is ``true``) ``c2w``
+            ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``, and (when
+            ``training.load_gt_camera_params_for_vis`` is ``true``) ``gt_c2w``
+            ``[V, 4, 4]`` and ``gt_fxfycxcy`` ``[V, 4]``. ``split``,
+            ``neural_trial_idx``, ``neural_bin_idx``, and ``neural_interval_sec``
+            are only meaningful for eval-layout records (from
+            :meth:`_discover_eval_split_records`); training-layout records fall back
+            to ``''``, ``-1``, ``-1``, and NaN respectively.
         """
         rec = self._records[idx]
 
@@ -1627,6 +1633,16 @@ class Cheese3DDataset(SABLEDataset):
             'rightcamera_xy': correspondences['rightcamera_xy'],
             'confidence': correspondences['confidence'],
             'scene_name': rec.scene_name,
+            'split': rec.split or '',
+            'neural_trial_idx': (
+                rec.neural_trial_idx if rec.neural_trial_idx is not None else -1
+            ),
+            'neural_bin_idx': rec.neural_bin_idx if rec.neural_bin_idx is not None else -1,
+            'neural_interval_sec': (
+                torch.tensor(rec.neural_interval_sec, dtype=torch.float64)
+                if rec.neural_interval_sec is not None
+                else torch.full((2,), float('nan'), dtype=torch.float64)
+            ),
         }
 
         if 'centercamera_xy' in correspondences:
