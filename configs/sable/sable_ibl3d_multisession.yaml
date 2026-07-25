@@ -58,7 +58,7 @@ model:
     pixel_mask: true
     gaussian_mask: false
   session_token:
-    num_sessions: 2  # must match len(training.session_names)
+    num_sessions: 5  # must match len(training.session_names)
   merge_pcd:
     num_points: 3
     debug_merged_pcd: false
@@ -80,8 +80,11 @@ training:
   dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
   dataset_path: null   # set via DATASET_PATH override in the training script
   session_names: # Multisession
-    - 4b00df29-3769-43be-bb40-128b1cba6d35
     - 72cb5550-43b4-4ef0-add5-e4adfdfb5e02
+    - 781b35fd-e1f0-4d14-b2bb-95b7263082bb
+    - ecb5520d-1358-434c-95ec-93687ecd1396
+    - 4b00df29-3769-43be-bb40-128b1cba6d35
+    - f312aaec-3b6f-44b3-86b4-3a0c119c0438
 
   # Validation
   val_split_ratio: 0.1
