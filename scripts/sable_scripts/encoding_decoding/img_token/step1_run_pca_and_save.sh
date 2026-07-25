@@ -28,10 +28,10 @@ cd "$REPO_ROOT"
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step1_run_pca_and_save.sh
-MODEL_ROOT="${MODEL_ROOT:-<MODEL_ROOT>}"                    # output paths
-INPUT_DIR="${INPUT_DIR:-<MODEL_ROOT>/img_tokens}"           # inference dir of img_tokens_batch*.npz shards
+MODEL_ROOT="${MODEL_ROOT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20284092/latents}"                    # output paths
+INPUT_DIR="$MODEL_ROOT/img_tokens"                          # inference dir of img_tokens_batch*.npz shards
 STAGE="${STAGE:-all}"                                       # 1 | 2 | all
-N_FEAT_KEEP="${N_FEAT_KEEP:-6}"                             # PCA components to keep
+N_FEAT_KEEP=6                                               # PCA components to keep
 SESSION_NAMES="${SESSION_NAMES:-}"                          # space-separated session/EID names; empty = auto-discover all
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running img-token PCA fit/apply, stage=$STAGE"
