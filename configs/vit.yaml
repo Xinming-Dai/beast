@@ -23,6 +23,7 @@ model:
     decoder_intermediate_size: 2048
     mask_ratio: 0.75 # 0 for no masking, usually 0.75 (MAE)
     norm_pix_loss: False
+    pretrained_model: facebook/vit-mae-base # HF checkpoint to load when random_init is False
 
     embed_size: 768 # projected embedding size, used for contrastive learning
     temp_scale: False # temperature scaling for contrastive loss

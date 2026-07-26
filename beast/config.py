@@ -62,6 +62,7 @@ class VitModelParams(BaseModel):
     decoder_intermediate_size: int = 2048
     mask_ratio: float = 0.75
     norm_pix_loss: bool = False
+    pretrained_model: str = 'facebook/vit-mae-base'
     embed_size: int = 768
     temp_scale: bool = False
     random_init: bool = False
