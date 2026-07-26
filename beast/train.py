@@ -184,12 +184,13 @@ def train(config: dict, model: BaseLightningModel, output_dir: str | Path) -> Ba
         lr_monitor=True,
         ckpt_every_n_epochs=config['training'].get('ckpt_every_n_epochs', None),
     )
-    if rank_zero_only.rank == 0:
-        log_step(f"Callbacks created: {len(callbacks)} callbacks", level='debug')
 
     # initialize to Trainer defaults. Note max_steps defaults to -1.
     min_epochs = config['training']['num_epochs']
     max_epochs = min_epochs
+    callbacks.append(EpochLoggerCallback(max_epochs=max_epochs))
+    if rank_zero_only.rank == 0:
+        log_step(f"Callbacks created: {len(callbacks)} callbacks", level='debug')
 
     # our custom sampler does not play nice with DDP
     if config['model']['model_params'].get('use_infoNCE', False):
@@ -238,6 +239,42 @@ def train(config: dict, model: BaseLightningModel, output_dir: str | Path) -> Ba
 
     # return trained model
     return model
+
+
+class EpochLoggerCallback(pl_callbacks.Callback):
+    """Prints training epoch progress to stdout at the start, every N epochs, and on validation.
+
+    Args:
+        max_epochs: total number of training epochs, shown alongside the current epoch.
+        log_every_n_epochs: print train progress every this many epochs (in addition to
+            the very first epoch).
+    """
+
+    def __init__(self, max_epochs: int, log_every_n_epochs: int = 20) -> None:
+        """Initialize with the total epoch count and logging interval."""
+        super().__init__()
+        self._max_epochs = max_epochs
+        self._log_every_n_epochs = max(1, log_every_n_epochs)
+
+    @rank_zero_only
+    def on_train_epoch_start(self, trainer: pl.Trainer, _pl_module: pl.LightningModule) -> None:
+        """Log the epoch about to start, only at the beginning or every N epochs."""
+        epoch = trainer.current_epoch
+        if epoch != 0 and epoch % self._log_every_n_epochs != 0:
+            return
+        log_step(f'[train] epoch={epoch + 1}/{self._max_epochs}', level='info')
+
+    @rank_zero_only
+    def on_validation_epoch_end(self, trainer: pl.Trainer, _pl_module: pl.LightningModule) -> None:
+        """Log aggregated val (and train, if available) metrics whenever validation runs."""
+        if trainer.sanity_checking:
+            return
+        m = trainer.callback_metrics
+        parts = [f'[val] epoch={trainer.current_epoch + 1}/{self._max_epochs}']
+        for key, val in m.items():
+            if key.startswith('train_') or key.startswith('val_'):
+                parts.append(f'{key}={val.item():.6f}')
+        log_step(' '.join(parts), level='info')
 
 
 def get_callbacks(
