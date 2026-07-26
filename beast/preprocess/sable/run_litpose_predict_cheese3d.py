@@ -145,6 +145,28 @@ def _fixed_collect_video_files_by_view(
     return video_files_by_view
 
 
+def _is_valid_trim(path: Path, expected_frames: int) -> bool:
+    """Check whether a cached trimmed video is complete and has the expected frame count.
+
+    A trim can be left truncated (e.g. missing the trailing moov atom) if a previous job
+    was killed mid-``ffmpeg`` (walltime, preemption); ``get_video_stats`` raises ``OSError``
+    on such files, so that's treated as invalid rather than propagating.
+
+    Args:
+        path: path to the cached trimmed video.
+        expected_frames: frame count the video should have.
+
+    Returns:
+        True if the video is readable and has exactly ``expected_frames`` frames.
+    """
+    if not path.is_file():
+        return False
+    try:
+        return get_video_stats(path)['total_frames'] == expected_frames
+    except OSError:
+        return False
+
+
 def sync_session_frame_counts(
     cam_videos: dict[str, Path],
     trimmed_dir: Path,
@@ -174,8 +196,13 @@ def sync_session_frame_counts(
             synced[cam] = vpath
             continue
         out_path = trimmed_dir / vpath.name
-        if not out_path.is_file():
-            trim_video(vpath, out_path, start_frame=0, end_frame=min_count - 1)
+        if not _is_valid_trim(out_path, min_count):
+            # trim into a temp file and rename atomically, so a job killed mid-ffmpeg
+            # (walltime, preemption) never leaves a truncated file at out_path for a later
+            # run to mistake for a completed trim
+            tmp_path = out_path.with_suffix('.mp4.tmp')
+            trim_video(vpath, tmp_path, start_frame=0, end_frame=min_count - 1)
+            tmp_path.replace(out_path)
         synced[cam] = out_path
     return synced
 
