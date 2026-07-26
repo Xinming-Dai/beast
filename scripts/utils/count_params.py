@@ -1,7 +1,7 @@
 """Report total and trainable parameter counts for a BEAST model config.
 
 Usage:
-    python scripts/utils/count_params.py configs/vit.yaml configs/vit_huge.yaml ...
+    python scripts/utils/count_params.py configs/vit.yaml configs/vit_large.yaml ...
 """
 
 import argparse

@@ -66,13 +66,19 @@ class VisionTransformer(BaseLightningModel):
             pretrained_model = config['model']['model_params'].get(
                 'pretrained_model', 'facebook/vit-mae-base'
             )
+            pretrained_revision = config['model']['model_params'].get('pretrained_revision')
             log_step(
                 f"Loading pretrained model from '{pretrained_model}'"
                 ' (this may take several minutes if downloading)...',
                 level='debug',
             )
             log_step("Note: Model will be cached locally after first download", level='debug')
-            self.vit_mae = ViTMAE.from_pretrained(pretrained_model, config=vit_mae_config)
+            self.vit_mae = ViTMAE.from_pretrained(
+                pretrained_model,
+                config=vit_mae_config,
+                revision=pretrained_revision,
+                use_safetensors=True,
+            )
         else:
             log_step("Using random initialization (random_init=True)", level='debug')
             self.vit_mae = ViTMAE(vit_mae_config)
