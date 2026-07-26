@@ -435,6 +435,7 @@ def trim_video(
         '-crf', '18',
         '-preset', 'fast',
         '-an',
+        '-f', 'mp4',
         str(output_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
