@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A beez-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -23,10 +23,10 @@ CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_ibl3d_fixed_1to2.yaml}"
 STAGE=finetune
 DATASET_ROOT="${DATASET_ROOT:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/$STAGE}"
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
 VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$DATASET_ROOT/depth_map}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_correspondences/processed_correspondences}"
-RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
+RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553/tb_logs/version_0/checkpoints/epoch=93-step=7238-best.ckpt}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/${EID}}"
 
