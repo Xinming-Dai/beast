@@ -441,29 +441,23 @@ class Sable(BaseLightningModel):
             num_input_views == num_views and num_target_views < num_views
         )
 
+        # only for regimes where every context view is a candidate to be the masked one
+        # (e.g. fixed_1to2, both views symmetric); fixed regimes like pseudo_center_finetune
+        # / center_camera_holdout have one semantically fixed masked view and must not set this.
+        self.randomize_context_full_mask = bool(
+            config['training'].get('randomize_context_full_mask', False)
+        )
+
     def maybe_randomize_view_indices(self, input_idx, target_idx, device):
-        """Randomize view ordering for single-view-context training.
-
-        For true 1-to-1 regimes (``target_idx`` also single-view, e.g. ``fixed_1to1``),
-        swaps which single view is context vs. target. For 1-to-N regimes (e.g.
-        ``fixed_1to2``, where ``target_idx`` already covers every view the context
-        could be), resamples which of the target views is used as context instead;
-        ``target_idx`` is left unchanged since it already spans all candidate views.
-        """
+        """Randomize view ordering for two-view training."""
         b = input_idx.shape[0]
+        swap = (torch.rand(b, device=device) < 0.5).unsqueeze(1)
 
-        if input_idx.shape[1] != 1:
-            return input_idx, target_idx
-
-        if target_idx.shape[1] == 1:
-            swap = (torch.rand(b, device=device) < 0.5).unsqueeze(1)
+        if input_idx.shape[1] == 1:
             return torch.where(swap, target_idx, input_idx), torch.where(
                 swap, input_idx, target_idx
             )
-
-        rand_pos = torch.randint(0, target_idx.shape[1], (b, 1), device=device)
-        new_input_idx = target_idx.gather(1, rand_pos)
-        return new_input_idx, target_idx
+        return input_idx, target_idx
 
     def prepare_view_indices(
         self,
@@ -757,14 +751,25 @@ class Sable(BaseLightningModel):
         img_tokens_all = rearrange(img_tokens, '(b v) n d -> b v n d', b=b, v=v_all)
         img_tokens_input = img_tokens_all[batch_idx, input_idx, ...]            # [b, v_input, n, d]
 
+        # [b, v_input] bool; True = zero out all tokens for that view. Applied during
+        # training only — decoupled from mask_ratio so a fully-masked view (e.g.
+        # fixed_1to2) still gets masked even when random per-token masking is disabled.
+        full_mask = None
+        if self.training and 'context_full_mask' in data:
+            full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
+            if self.randomize_context_full_mask:
+                flip = (torch.rand(b, device=full_mask.device) < 0.5).unsqueeze(1)
+                full_mask = torch.where(flip, full_mask.flip(dims=[1]), full_mask)
+
         keep = None
         pixel_mask = None
         gaussian_mask = None
-        if self.training and self.mask_ratio > 0:
-            keep = (torch.rand((b, v_input, n), device=img_tokens_input.device) >= self.mask_ratio)
-            if 'context_full_mask' in data:
-                # [b, v_input] bool; True = zero out all tokens for that view
-                full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
+        if self.training and (self.mask_ratio > 0 or full_mask is not None):
+            if self.mask_ratio > 0:
+                keep = (torch.rand((b, v_input, n), device=img_tokens_input.device) >= self.mask_ratio)
+            else:
+                keep = torch.ones((b, v_input, n), dtype=torch.bool, device=img_tokens_input.device)
+            if full_mask is not None:
                 keep = keep & ~full_mask.unsqueeze(-1)  # broadcast over n → [b, v_input, n]
             masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
             if self.pixel_mask_enabled or self.gaussian_mask_enabled:

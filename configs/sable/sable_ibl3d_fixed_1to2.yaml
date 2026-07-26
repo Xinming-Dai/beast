@@ -129,15 +129,17 @@ training:
   random_split: false
   random_shuffle: false
 
-  # fixed_1to2: index 0 (left) is the sole context view; indices 0 and 1 (left, right)
-  # are both targets for loss. Sable.maybe_randomize_view_indices randomly resamples
-  # which of the two views is used as context during training. The pseudo point cloud
-  # (merge_pcd Kabsch alignment) is built from both views' depth and correspondences
-  # regardless of which one is context.
+  # fixed_1to2: both views are context and target (num_input_views == num_views), but
+  # the dataset's context_full_mask zeroes one view's image tokens entirely before
+  # Gaussian decoding, so only the unmasked view's real pixels inform the predicted
+  # Gaussians. Camera-pose prediction and the pseudo point cloud (merge_pcd Kabsch
+  # alignment) still see both views. randomize_context_full_mask randomly resamples
+  # which view is masked per training step.
   training_regime: fixed_1to2
   num_views: 2
-  num_input_views: 1
+  num_input_views: 2
   num_target_views: 2
+  randomize_context_full_mask: true
 
   view_selector:
     type: all

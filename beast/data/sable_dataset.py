@@ -914,11 +914,14 @@ class IBLTwoViewDataset(SABLEDataset):
         For ``pseudo_center_finetune`` all three views (left, right, pseudo center)
         are context but only left and right (indices 0, 1) are targets for loss;
         the pseudo center view has no ground truth so it is excluded from the loss.
-        For ``fixed_1to2`` index 0 is the sole context view but both indices 0 and 1
-        are targets for loss; this gives the model only one input image (single-image
-        cross-view prediction) while still building the pseudo point cloud from both
-        views' depth and correspondences. ``Sable.maybe_randomize_view_indices``
-        randomly resamples which of the two views is used as context during training.
+        For ``fixed_1to2`` both views are context and target (like
+        ``all_views_reconstruction``), but ``__getitem__`` additionally returns
+        ``context_full_mask`` so ``Sable.forward`` zeroes one view's image tokens
+        entirely before Gaussian decoding — only the unmasked view's real pixels
+        feed the Gaussian-prediction pass, while both views still contribute to
+        camera-pose prediction and the pseudo point cloud. ``Sable`` randomly
+        resamples which view is masked during training when
+        ``training.randomize_context_full_mask`` is set.
 
         Returns:
             tuple of (context_indices, target_indices) as long tensors.
@@ -927,7 +930,7 @@ class IBLTwoViewDataset(SABLEDataset):
             ValueError: if ``training_regime`` is not a recognised built-in value.
                 Subclass and override this method to add a custom regime.
         """
-        if self._training_regime == 'all_views_reconstruction':
+        if self._training_regime in ('all_views_reconstruction', 'fixed_1to2'):
             all_idx = torch.arange(2, dtype=torch.long)
             return all_idx, all_idx.clone()
         elif self._training_regime == 'fixed_1to1':
@@ -937,8 +940,6 @@ class IBLTwoViewDataset(SABLEDataset):
                 torch.arange(3, dtype=torch.long),
                 torch.tensor([0, 1], dtype=torch.long),
             )
-        elif self._training_regime == 'fixed_1to2':
-            return torch.tensor([0], dtype=torch.long), torch.tensor([0, 1], dtype=torch.long)
         else:
             raise ValueError(
                 f'Unsupported training_regime: {self._training_regime!r}. '
@@ -963,7 +964,7 @@ class IBLTwoViewDataset(SABLEDataset):
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
             ``scene_name``, ``session_idx``, ``split``, ``neural_trial_idx``,
             ``neural_bin_idx``, ``neural_interval_sec``, and (for
-            ``pseudo_center_finetune``) ``context_full_mask``.
+            ``pseudo_center_finetune`` and ``fixed_1to2``) ``context_full_mask``.
         """
         rec = self._records[idx]
 
@@ -1017,6 +1018,11 @@ class IBLTwoViewDataset(SABLEDataset):
         if self._training_regime == 'pseudo_center_finetune':
             # center view (index 2) is pseudo — zero out all its image tokens in the encoder
             result['context_full_mask'] = torch.tensor([False, False, True], dtype=torch.bool)
+        elif self._training_regime == 'fixed_1to2':
+            # index 1 (right) masked by default; Sable.forward randomly resamples which
+            # physical view this corresponds to per training step when
+            # training.randomize_context_full_mask is set.
+            result['context_full_mask'] = torch.tensor([False, True], dtype=torch.bool)
 
         return result
 
