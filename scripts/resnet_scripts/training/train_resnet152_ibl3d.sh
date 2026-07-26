@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-24:00:00
+#SBATCH -t 0-00:10:00
 #SBATCH -J resnet152_ibl
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/training/train_resnet152_ibl3d_%j.log
 #SBATCH --export=ALL
@@ -22,8 +22,9 @@ CONFIG="${CONFIG:-$REPO_ROOT/configs/resnet_ae_152.yaml}"
 #   sbatch --export=ALL,DATASET_PATH=/path/to/frames scripts/resnet_scripts/training/train_resnet152_ibl3d.sh)
 STAGE=finetune
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/ibl3d}"
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/$EID}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
@@ -41,6 +42,7 @@ Job ID: ${SLURM_JOB_ID:-local}
 Running on node(s): ${SLURM_NODELIST:-$(hostname)}
 Config: $CONFIG
 Dataset path: $DATASET_PATH
+Session ID: $EID
 Checkpoint dir (output): $CHECKPOINT_DIR
 ---------------------------------------
 EOF
@@ -65,6 +67,7 @@ cd "$REPO_ROOT"
 
 OVERRIDES=(
     "data.data_dir=$DATASET_PATH"
+    "data.session_names=$EID"
 )
 
 beast train \

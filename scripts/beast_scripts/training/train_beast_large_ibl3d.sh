@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A beez-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-24:00:00
-#SBATCH -J beast_huge_ibl
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/training/train_beast_huge_ibl3d_%j.log
+#SBATCH -t 0-00:10:00
+#SBATCH -J beast_large_ibl
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/training/train_beast_large_ibl3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -16,14 +16,15 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-CONFIG="${CONFIG:-$REPO_ROOT/configs/vit_huge.yaml}"
+CONFIG="${CONFIG:-$REPO_ROOT/configs/vit_large.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
-#   sbatch --export=ALL,DATASET_PATH=/path/to/frames scripts/beast_scripts/training/train_beast_huge_ibl3d.sh)
+#   sbatch --export=ALL,DATASET_PATH=/path/to/frames scripts/beast_scripts/training/train_beast_large_ibl3d.sh)
 STAGE=finetune
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_huge/ibl3d}"
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_large/$EID}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
@@ -41,6 +42,7 @@ Job ID: ${SLURM_JOB_ID:-local}
 Running on node(s): ${SLURM_NODELIST:-$(hostname)}
 Config: $CONFIG
 Dataset path: $DATASET_PATH
+Session ID: $EID
 Checkpoint dir (output): $CHECKPOINT_DIR
 ---------------------------------------
 EOF
@@ -65,6 +67,7 @@ cd "$REPO_ROOT"
 
 OVERRIDES=(
     "data.data_dir=$DATASET_PATH"
+    "data.session_names=$EID"
 )
 
 beast train \

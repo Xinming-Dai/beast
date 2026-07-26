@@ -13,10 +13,10 @@ model:
 training:
   seed: 0
   imgaug: default
-  train_batch_size: 256      # per GPU, reduced from base config due to larger model memory footprint
-  val_batch_size: 1024
-  test_batch_size: 128
-  num_epochs: 800
+  train_batch_size: 32       # per GPU, reduced from base config due to larger model memory footprint
+  val_batch_size: 128
+  test_batch_size: 32
+  num_epochs: 280
   num_workers: 8              # Number of CPU workers for the DataLoader
   num_gpus: 1
   num_nodes: 1
@@ -26,7 +26,7 @@ training:
 # optimizer configuration
 optimizer:
   type: AdamW
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 8  # effective batch size stays 256 (32 * 8)
   lr: 5.e-4
   wd: 0.05
   scheduler: cosine  # {step, cosine}

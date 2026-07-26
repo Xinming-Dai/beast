@@ -40,6 +40,7 @@ class BaseDataset(torch.utils.data.Dataset):
         data_dir: str | Path,
         imgaug_pipeline: Callable | None,
         num_channels: int = 3,
+        session_names: list[str] | str | None = None,
     ) -> None:
         """Initialize a dataset for autoencoder models.
 
@@ -49,8 +50,13 @@ class BaseDataset(torch.utils.data.Dataset):
         imgaug_pipeline: imgaug transform pipeline to apply to images
         num_channels: number of output channels; 1 loads as grayscale then converts to RGB,
             3 loads directly as RGB
+        session_names: if provided, restrict images to paths whose directory parts contain
+            one of these session IDs as a substring; accepts a single string or a list of
+            strings; all images under data_dir are used when null
 
         """
+        if isinstance(session_names, str):
+            session_names = [session_names]
         if num_channels not in (1, 3):
             raise ValueError(f'num_channels must be 1 or 3, got {num_channels}')
         self.num_channels = num_channels
@@ -79,6 +85,20 @@ class BaseDataset(torch.utils.data.Dataset):
         except Exception as e:
             log_step(f"ERROR during file scanning: {e}", level='error')
             raise
+        if session_names:
+            self.image_list = [
+                img_path for img_path in self.image_list
+                if any(
+                    session_name in part
+                    for part in img_path.parts
+                    for session_name in session_names
+                )
+            ]
+            log_step(
+                f"Filtered to {len(self.image_list)} PNG files matching sessions"
+                f' {session_names}',
+                level='debug',
+            )
         if len(self.image_list) == 0:
             raise ValueError(f'{self.data_dir} does not contain image data in png format')
         log_step(
