@@ -58,7 +58,7 @@ model:
     pixel_mask: true
     gaussian_mask: false
   session_token:
-    num_sessions: 5  # must match len(training.session_names)
+    num_sessions: 2  # must match len(training.session_names)
   merge_pcd:
     num_points: 3
     debug_merged_pcd: false
@@ -71,7 +71,7 @@ optimizer:
   wd: 0.05
   beta1: 0.9
   beta2: 0.95
-  warmup: 3000
+  warmup: 6000
   div_factor: 1.0
   final_div_factor: 1.0
   scheduler: cosine
@@ -80,11 +80,8 @@ training:
   dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
   dataset_path: null   # set via DATASET_PATH override in the training script
   session_names: # Multisession
-    - 72cb5550-43b4-4ef0-add5-e4adfdfb5e02
-    - 781b35fd-e1f0-4d14-b2bb-95b7263082bb
-    - ecb5520d-1358-434c-95ec-93687ecd1396
-    - 4b00df29-3769-43be-bb40-128b1cba6d35
     - f312aaec-3b6f-44b3-86b4-3a0c119c0438
+    - 4b00df29-3769-43be-bb40-128b1cba6d35
 
   # Validation
   val_split_ratio: 0.1
@@ -107,12 +104,12 @@ training:
   use_tf32: true
 
   checkpoint_dir: path/to/ckpt_folder
-  checkpoint_every: 10000
-  checkpoint_steps: [20000]
+  checkpoint_every: 40000
+  checkpoint_steps: [40000]
 
   resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 20000
+  max_fwdbwd_passes: 40000
   print_every: 10
   save_visuals: true
   save_pointclouds: true
