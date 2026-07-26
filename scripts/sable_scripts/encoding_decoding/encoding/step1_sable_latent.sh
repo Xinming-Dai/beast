@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A bezq-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -20,10 +20,10 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
-JOB_ID="20434515"
-EIDS="${EIDS:72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"                                            # space-separated session IDs (eids); default: use training config's session_names
+JOB_ID="20014553"
+EIDS="${EIDS:781b35fd-e1f0-4d14-b2bb-95b7263082bb}"                                            # space-separated session IDs (eids); default: use training config's session_names
 
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID}"
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/$EIDS/$JOB_ID}"
 DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
 DATASET_PATH="${DATASET_PATH:-$DATASET_BASE/extracted_frames/eval}"
 VDA_CACHE_ROOT=$DATASET_BASE/extracted_frames_for_eyz/eval/depth_map
