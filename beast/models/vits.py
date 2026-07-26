@@ -63,13 +63,16 @@ class VisionTransformer(BaseLightningModel):
         # Check if we should use pretrained weights or random initialization
         use_pretrained = not config['model']['model_params'].get('random_init', False)
         if use_pretrained:
+            pretrained_model = config['model']['model_params'].get(
+                'pretrained_model', 'facebook/vit-mae-base'
+            )
             log_step(
-                "Loading pretrained model from 'facebook/vit-mae-base'"
+                f"Loading pretrained model from '{pretrained_model}'"
                 ' (this may take several minutes if downloading)...',
                 level='debug',
             )
             log_step("Note: Model will be cached locally after first download", level='debug')
-            self.vit_mae = ViTMAE.from_pretrained("facebook/vit-mae-base", config=vit_mae_config)
+            self.vit_mae = ViTMAE.from_pretrained(pretrained_model, config=vit_mae_config)
         else:
             log_step("Using random initialization (random_init=True)", level='debug')
             self.vit_mae = ViTMAE(vit_mae_config)

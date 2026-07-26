@@ -4,17 +4,17 @@ model:
   checkpoint: null  # load weights from checkpoint
   model_class: vit
   model_params:
-    hidden_size: 768
-    num_hidden_layers: 12
-    num_attention_heads: 12
-    intermediate_size: 3072
+    hidden_size: 1280
+    num_hidden_layers: 32
+    num_attention_heads: 16
+    intermediate_size: 5120
     hidden_act: "gelu"
     hidden_dropout_prob: 0.0
     attention_probs_dropout_prob: 0.0
     initializer_range: 0.02
     layer_norm_eps: 1.e-12
     image_size: 224 # usually 224
-    patch_size: 16 # default is 16, we use large patch size
+    patch_size: 14 # vit-mae-huge uses patch14, not patch16
     num_channels: 3 # 3 for RGB
     qkv_bias: True
     decoder_num_attention_heads: 16
@@ -23,11 +23,11 @@ model:
     decoder_intermediate_size: 2048
     mask_ratio: 0.75 # 0 for no masking, usually 0.75 (MAE)
     norm_pix_loss: False
-    pretrained_model: facebook/vit-mae-base # HF checkpoint to load when random_init is False
+    pretrained_model: facebook/vit-mae-huge # ~630M encoder, for size-ablation comparison to SABLE
 
-    embed_size: 768 # projected embedding size, used for contrastive learning
+    embed_size: 1280 # projected embedding size, used for contrastive learning
     temp_scale: False # temperature scaling for contrastive loss
-    random_init: False # use random initialization instead of pretrained weights
+    random_init: False # keep pretrained weights, same training regime as the base config
     use_infoNCE: False # use InfoNCE loss
     infoNCE_weight: 0.03 # weight for InfoNCE loss
     use_perceptual_loss: False # use perceptual loss (AlexNet features)
@@ -37,9 +37,9 @@ model:
 training:
   seed: 0
   imgaug: default  # default | top-down
-  train_batch_size: 128    # per GPU
-  val_batch_size: 1024
-  test_batch_size: 128
+  train_batch_size: 32    # per GPU, reduced from base config due to larger model memory footprint
+  val_batch_size: 256
+  test_batch_size: 32
   num_epochs: 800
   num_workers: 8  # Number of CPU workers for the DataLoader
   num_gpus: 1
