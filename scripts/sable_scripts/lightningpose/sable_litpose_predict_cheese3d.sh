@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -A bezq-delta-gpu
+#SBATCH -A bfsx-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=20G
-#SBATCH -t 0-6:00:00
+#SBATCH -t 0-24:00:00
 #SBATCH -J litpose
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/lightningpose/litpose_predict_sable_%j.log
 #SBATCH --export=ALL
