@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsx-delta-gpu
+#SBATCH -A beez-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
