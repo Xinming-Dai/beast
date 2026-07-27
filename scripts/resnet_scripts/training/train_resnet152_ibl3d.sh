@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A beez-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:10:00
+#SBATCH -t 0-03:00:00
 #SBATCH -J resnet152_ibl
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/training/train_resnet152_ibl3d_%j.log
 #SBATCH --export=ALL
@@ -15,7 +15,9 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
-REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
+REPO_ROOT="/u/xdai3/project3d/SABLE_repo_3/beast"
+cd "$REPO_ROOT"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 CONFIG="${CONFIG:-$REPO_ROOT/configs/resnet_ae_152.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:

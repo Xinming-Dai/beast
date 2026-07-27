@@ -1,6 +1,13 @@
 """Command modules for the beast CLI."""
 
-from beast.cli.commands import extract, extract_3d, extract_sable, predict, train
+from beast.cli.commands import (
+    combine_view_latents,
+    extract,
+    extract_3d,
+    extract_sable,
+    predict,
+    train,
+)
 
 # dictionary of all available commands
 COMMANDS = {
@@ -9,4 +16,5 @@ COMMANDS = {
     'predict': predict,              # model inference on images and videos
     'extract_3d': extract_3d,        # 3D frame extraction and segmentation
     'extract_sable': extract_sable,  # SABLE IBL stereo extraction pipeline
+    'combine-view-latents': combine_view_latents,  # pair per-view latents for ViT/ResNet
 }
