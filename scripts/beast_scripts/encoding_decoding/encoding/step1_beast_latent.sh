@@ -28,7 +28,7 @@ DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
 # <split>/interval<N>timebin<M>.png plus a <split>/frame_index_mapping.json sidecar
 LEFT_INPUT="${LEFT_INPUT:-$DATASET_BASE/extracted_frames/eval/leftCamera.video/_iblrig_leftCamera.downsampled.$EID}"
 RIGHT_INPUT="${RIGHT_INPUT:-$DATASET_BASE/extracted_frames/eval/rightCamera.video/_iblrig_rightCamera.downsampled.$EID}"
-OUTPUT_DIR=$MODEL_DIR/latents
+OUTPUT_DIR=$MODEL_DIR/latents/frame_z/$EID
 RAW_DIR=$OUTPUT_DIR/raw
 BATCH_SIZE="${BATCH_SIZE:-64}"
 
