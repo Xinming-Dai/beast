@@ -27,7 +27,7 @@ DRY_RUN=${DRY_RUN:-0}
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "[DRY-RUN] cell=${CELL_DIR}"
   # Still verify the VDA checkpoint hash so silent weight drift is caught.
-  VDA_CKPT_DRY="/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
+  VDA_CKPT_DRY="/cephfs/jinqihang/SABLE/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
   VDA_EXPECTED_SHA_DRY="775e578e8f9431ec0496514aa466bd0a1f67c28d0f518267809f35a43c04329b"
   ACTUAL_SHA_DRY="$(sha256sum "${VDA_CKPT_DRY}" | awk '{print $1}')"
   if [[ "${ACTUAL_SHA_DRY}" != "${VDA_EXPECTED_SHA_DRY}" ]]; then
@@ -35,7 +35,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
     exit 1
   fi
   echo "[DRY-RUN] VDA SHA256 ✓"
-  VGG_DRY="/data/jqh/pretrained_checkpoints/beast/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
+  VGG_DRY="/cephfs/jinqihang/SABLE/ckpt/imagenet-vgg-verydeep-19.mat"
   VGG_EXPECTED_SHA_DRY="abdb57167f82a2a1fbab1e1c16ad9373411883f262a1a37ee5db2e6fb0044695"
   ACTUAL_VGG_SHA_DRY="$(sha256sum "${VGG_DRY}" | awk '{print $1}')"
   if [[ "${ACTUAL_VGG_SHA_DRY}" != "${VGG_EXPECTED_SHA_DRY}" ]]; then
@@ -51,15 +51,15 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 # ---- Path-independent config (frozen contract) ----
-REPO_ROOT="/home/jqh/NeuralWorkshops/beast"
+REPO_ROOT="/cephfs/jinqihang/SABLE/beast"
 BASE_CONFIG="${BASE_CONFIG:-${REPO_ROOT}/configs/sable/sable_ibl3d.yaml}"
 EID="4b00df29-3769-43be-bb40-128b1cba6d35"
-DATASET_PATH="/data/jqh/Datasets/beast3d-data/sable_ibl_4b00"
+DATASET_PATH="${DATASET_PATH:-/cephfs/jinqihang/SABLE/datasets/beast3d-data/sable_ibl_4b00}"
 CORR_ROOT="${DATASET_PATH}/litpose_correspondences/processed_correspondences"
-RESUME_CKPT="/data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints/erayzer_dl3dv.pt"
-VDA_CKPT="/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
-VDA_REPO_ROOT="/home/jqh/NeuralWorkshops/third_party/VDA"
-VGG_SRC="/data/jqh/pretrained_checkpoints/beast/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
+RESUME_CKPT="/cephfs/jinqihang/SABLE/ckpt/E-RayZer-private/checkpoints/erayzer_dl3dv.pt"
+VDA_CKPT="/cephfs/jinqihang/SABLE/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
+VDA_REPO_ROOT="/cephfs/jinqihang/SABLE/third_party/VDA"
+VGG_SRC="/cephfs/jinqihang/SABLE/ckpt/imagenet-vgg-verydeep-19.mat"
 
 # ---- Pinned VDA checkpoint SHA256 (online VDA contract) ----
 # Hard-pinned SHA256. If the file drifts, abort.
@@ -69,8 +69,8 @@ RESUME_EXPECTED_SHA="56fd798d831e9c2a300932e5c41ead29a4ef3a084480c5bfc31d58ba3a8
 
 # Isolate local beast from PyPI beast 2.1.0 (astronomy package collision).
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
-export PATH="/home/jqh/miniconda3/envs/neuro/bin:${PATH}"
-export HF_HOME="/home/jqh/.cache/huggingface"
+export PATH="/root/miniconda3/envs/neuro/bin:${PATH}"
+export HF_HOME="/root/.cache/huggingface"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
@@ -127,8 +127,29 @@ echo "----------------------------------------"
 echo "Cell: ${CELL_DIR}"
 echo "Base config: ${BASE_CONFIG}"
 echo "EID: ${EID}"
-echo "Online VDA checkpoint: ${VDA_CKPT}"
-echo "Online VDA checkpoint SHA256: ${VDA_EXPECTED_SHA}"
+
+# ---- VDA mode (default: precomputed; override VDA_MODE=online to force online) ----
+VDA_MODE="${VDA_MODE:-precomputed}"
+VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-${DATASET_PATH}/vda_cache}"
+if [[ "${VDA_MODE}" == "precomputed" ]]; then
+  if [[ ! -d "${VDA_CACHE_ROOT}" ]]; then
+    echo "ERROR: VDA_MODE=precomputed but cache root not found: ${VDA_CACHE_ROOT}" >&2
+    echo "  Run precompute first: python3 scripts/sable_scripts/training/precompute_vda_4b00.py" >&2
+    exit 1
+  fi
+  VDA_MODE_OVERRIDE="model.vda.mode=precomputed"
+  VDA_CACHE_OVERRIDE="model.vda.cache_root=${VDA_CACHE_ROOT}"
+else
+  VDA_MODE_OVERRIDE="model.vda.mode=online"
+  VDA_CACHE_OVERRIDE="model.vda.cache_root=null"
+fi
+
+if [[ "${VDA_MODE}" == "precomputed" ]]; then
+  echo "VDA mode: precomputed (cache: ${VDA_CACHE_ROOT})"
+else
+  echo "Online VDA checkpoint: ${VDA_CKPT}"
+  echo "Online VDA checkpoint SHA256: ${VDA_EXPECTED_SHA}"
+fi
 echo "VGG symlink: ${CELL_DIR}/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
 echo "VGG checkpoint SHA256: ${VGG_EXPECTED_SHA}"
 echo "Resume ckpt: ${RESUME_CKPT}"
@@ -137,7 +158,7 @@ echo "Beast import: ${RESOLVED_BEAST}"
 echo "Extra overrides: ${EXTRA_OVERRIDES[@]:-(none)}"
 echo "----------------------------------------"
 
-# Cell-level + frozen online-VDA overrides. Order matters for tie-breaking
+# Cell-level + frozen VDA overrides. Order matters for tie-breaking
 # (later overrides win), so cell-level overrides come last via EXTRA_OVERRIDES.
 BASE_OVERRIDES=(
     "training.dataset_path=${DATASET_PATH}"
@@ -145,8 +166,8 @@ BASE_OVERRIDES=(
     "training.checkpoint_dir=${CELL_DIR}"
     "training.resume_ckpt=${RESUME_CKPT}"
     "training.reset_training_state=True"
-    "model.vda.mode=online"
-    "model.vda.cache_root=null"
+    "${VDA_MODE_OVERRIDE}"
+    "${VDA_CACHE_OVERRIDE}"
     "model.vda.encoder=vitb"
     "model.vda.metric=false"
     "model.vda.repo_root=${VDA_REPO_ROOT}"

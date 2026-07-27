@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-ROOT=${ROOT:-/data/jqh/Outputs/beast/rebuttal/loss_weighting}
+ROOT=${ROOT:-/cephfs/jinqihang/SABLE/outputs/loss_weighting}
 # Run cells under ROOT/cell_<name>/. If ROOT already contains a smoke subdir,
 # callers can override ROOT to point at a different parent.
 RUNS=(
@@ -31,8 +31,8 @@ RUNS=(
 
 ABLATION_STEPS=${ABLATION_STEPS:-10000}
 ABLATION_WARMUP=${ABLATION_WARMUP:-1000}
-BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-12}
-GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-2}
+BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-24}
+GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-1}
 GPU_IDS=${GPU_IDS:-0,1}
 
 if (( ABLATION_WARMUP < 2 || ABLATION_WARMUP >= ABLATION_STEPS )); then
@@ -41,7 +41,7 @@ if (( ABLATION_WARMUP < 2 || ABLATION_WARMUP >= ABLATION_STEPS )); then
   exit 1
 fi
 
-FORMAL_ROOT=/data/jqh/Outputs/beast/rebuttal/loss_weighting
+FORMAL_ROOT=/cephfs/jinqihang/SABLE/outputs/loss_weighting
 FORMAL_STEPS=10000
 if (( ABLATION_STEPS < FORMAL_STEPS )) && [[ "${ROOT}" == "${FORMAL_ROOT}" ]] \
     && [[ "${ALLOW_SHORT_IN_FORMAL_ROOT:-0}" != "1" ]]; then
@@ -86,7 +86,7 @@ launch_spec() {
     "training.checkpoint_every=${ABLATION_STEPS}"
     "training.save_val_best_checkpoint=false"
     "optimizer.warmup=${ABLATION_WARMUP}"
-    "model.vda.mode=online"
+    # VDA mode is controlled by the launcher (VDA_MODE env var, default precomputed).
   )
   echo "============================================="
   echo "Launching cell '${name}' at ${out} on physical GPU ${gpu_id}"
@@ -95,7 +95,7 @@ launch_spec() {
   echo "  batch=${BATCH_SIZE_PER_GPU}  grad_accum=${GRAD_ACCUM_STEPS}"
   echo "============================================="
   CUDA_VISIBLE_DEVICES="${gpu_id}" \
-    bash /home/jqh/NeuralWorkshops/beast/scripts/sable_scripts/training/run_one_cell.sh \
+    bash /cephfs/jinqihang/SABLE/beast/scripts/sable_scripts/training/run_one_cell.sh \
       "${out}" "${OVERRIDES[@]}" >"${out}/launcher.log" 2>&1
 }
 

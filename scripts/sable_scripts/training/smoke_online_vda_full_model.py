@@ -9,12 +9,12 @@ Steps:
 4. Forward + backward + optimizer step.
 5. Record peak VRAM via torch.cuda.max_memory_allocated() and elapsed time.
 6. Assertions:
-   - Peak VRAM <= 22 GiB (24 GiB GPU - 2 GiB headroom for CUDA kernels).
+   - Peak VRAM <= 70 GiB (H100 80GB - 10 GiB headroom for CUDA kernels).
    - All loss components finite.
    - Gradients finite.
    - Parameters updated.
 
-If OOM at batch=12, reduce micro-batch and increase grad_accum proportionally
+If OOM at batch=24, reduce micro-batch and increase grad_accum proportionally
 to keep effective batch=24. The chosen micro-batch is printed and MUST be
 echoed by all 8 cells' run_one_cell.sh invocations.
 """
@@ -30,8 +30,8 @@ from pathlib import Path
 
 import torch
 
-REPO_ROOT = "/home/jqh/NeuralWorkshops/beast"
-PROJECT_ROOT = "/home/jqh/NeuralWorkshops"
+REPO_ROOT = "/cephfs/jinqihang/SABLE/beast"
+PROJECT_ROOT = "/cephfs/jinqihang/SABLE"
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,25 +42,25 @@ def parse_args() -> argparse.Namespace:
         "--out",
         type=Path,
         default=Path(
-            "/data/jqh/Outputs/beast/rebuttal/loss_weighting/_smoke/online_vda_full_model"
+            "/cephfs/jinqihang/SABLE/outputs/loss_weighting/_smoke/online_vda_full_model"
         ),
     )
     parser.add_argument(
         "--init-ckpt",
         type=str,
-        default="/data/jqh/pretrained_checkpoints/E-RayZer-private/checkpoints/erayzer_dl3dv.pt",
+        default="/cephfs/jinqihang/SABLE/ckpt/E-RayZer-private/checkpoints/erayzer_dl3dv.pt",
     )
     parser.add_argument(
-        "--dataset-path", type=str, default="/data/jqh/Datasets/beast3d-data/sable_ibl_4b00"
+        "--dataset-path", type=str, default="/cephfs/jinqihang/SABLE/datasets/beast3d-data/sable_ibl_4b00"
     )
     parser.add_argument("--eid", type=str, default="4b00df29-3769-43be-bb40-128b1cba6d35")
     parser.add_argument(
         "--vda-ckpt",
         type=str,
-        default="/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/video_depth_anything_vitb.pth",
+        default="/cephfs/jinqihang/SABLE/third_party/VDA/checkpoints/video_depth_anything_vitb.pth",
     )
     parser.add_argument(
-        "--vda-repo", type=str, default="/home/jqh/NeuralWorkshops/third_party/VDA"
+        "--vda-repo", type=str, default="/cephfs/jinqihang/SABLE/third_party/VDA"
     )
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument(
@@ -132,7 +132,7 @@ def main() -> int:
 
     # Symlink VGG weights into the CWD so LossComputer can find them.
     vgg_src = (
-        "/data/jqh/pretrained_checkpoints/beast/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
+        "/cephfs/jinqihang/SABLE/ckpt/imagenet-vgg-verydeep-19.mat"
     )
     here = Path.cwd()
     here.joinpath("metric_checkpoint").mkdir(parents=True, exist_ok=True)
@@ -328,8 +328,8 @@ def main() -> int:
     ):
         print("RESULT: gradient/parameter update check failed", flush=True)
         return 3
-    if peak_vram_gib > 22.0:
-        print(f"RESULT: peak VRAM {peak_vram_gib:.2f} GiB > 22 GiB limit", flush=True)
+    if peak_vram_gib > 70.0:
+        print(f"RESULT: peak VRAM {peak_vram_gib:.2f} GiB > 70 GiB limit", flush=True)
         return 4
     print("RESULT: PASS", flush=True)
     return 0

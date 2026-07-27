@@ -172,8 +172,25 @@ def save_single_token_metrics_npz(
     trial_split: np.ndarray,
     source_files: list[str],
     view_names: tuple[str, ...] = ('left', 'right'),
+    temporal_blocks: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Save one token file's metrics using the same schema as the combined NPZ."""
+    """Save one token file's metrics using the same schema as the combined NPZ.
+
+    Args:
+        shard_path: target `.npz` path for this source file.
+        psnr_block, ssim_block: image-quality arrays shaped `[K, T, V]`.
+        neural_trial_idx: array shaped `[K]`.
+        neural_bin_idx: array shaped `[K, T]`.
+        trial_split: array shaped `[K]`.
+        source_files: list of one path per K trial.
+        view_names: ordered view labels.
+        temporal_blocks: optional dict of per-source temporal arrays keyed by metric name.
+            Each value should be shaped `[K, T-1, V]` (or `[K, V]` for `motion_energy_corr`).
+            Values are wrapped in a list before being forwarded to the shared saver.
+    """
+    temporal_block_lists: dict[str, list[np.ndarray]] | None = None
+    if temporal_blocks:
+        temporal_block_lists = {k: [v] for k, v in temporal_blocks.items()}
     return save_psnr_ssim_metrics_npz(
         shard_path,
         psnr_blocks=[psnr_block],
@@ -183,7 +200,17 @@ def save_single_token_metrics_npz(
         trial_split_blocks=[trial_split],
         source_file_rows=list(source_files),
         view_names=view_names,
+        temporal_blocks=temporal_block_lists,
     )
+
+
+_TEMPORAL_METRIC_KEYS: tuple[str, ...] = (
+    'temporal_delta_l1',
+    'pred_motion_energy',
+    'target_motion_energy',
+    'motion_energy_ratio',
+    'motion_energy_corr',
+)
 
 
 def _load_one_metrics_shard(
@@ -213,11 +240,14 @@ def gather_metrics_shard_blocks(
     list[str],
     tuple[str, ...] | None,
     list[int],
+    dict[str, list[np.ndarray]],
 ]:
     """Load per-file shards in `npz_paths` order.
 
     Returns:
-        Block lists, `view_names`, and missing indices (see the tuple layout above).
+        Block lists, `view_names`, missing indices, and a dict of per-metric-name temporal
+        blocks (see `_TEMPORAL_METRIC_KEYS`). Shards written by older code that pre-dates
+        the temporal metrics will simply contribute empty entries for those keys.
     """
     out_dir = Path(out_dir).resolve()
     psnr_blocks: list[np.ndarray] = []
@@ -228,6 +258,7 @@ def gather_metrics_shard_blocks(
     source_file_rows: list[str] = []
     view_names: tuple[str, ...] | None = None
     missing: list[int] = []
+    temporal_blocks: dict[str, list[np.ndarray]] = {k: [] for k in _TEMPORAL_METRIC_KEYS}
 
     for i, src in enumerate(npz_paths):
         shard = metrics_shard_path(out_dir, src)
@@ -253,6 +284,10 @@ def gather_metrics_shard_blocks(
         neural_bin_blocks.append(nb)
         trial_split_blocks.append(ts)
         source_file_rows.extend(sf)
+        with np.load(shard, allow_pickle=True) as d:
+            for key in _TEMPORAL_METRIC_KEYS:
+                if key in d.files:
+                    temporal_blocks[key].append(np.asarray(d[key], dtype=np.float32))
 
     return (
         psnr_blocks,
@@ -263,6 +298,7 @@ def gather_metrics_shard_blocks(
         source_file_rows,
         view_names if view_names is not None else ('left', 'right'),
         missing,
+        temporal_blocks,
     )
 
 
@@ -290,6 +326,7 @@ def combine_metrics_shards_to_combined_npz(
         source_file_rows,
         view_names,
         missing,
+        temporal_blocks,
     ) = gather_metrics_shard_blocks(out_dir, npz_paths)
 
     if missing and not allow_missing:
@@ -301,6 +338,7 @@ def combine_metrics_shards_to_combined_npz(
     if not psnr_blocks:
         return None, missing
 
+    temporal_to_write = {k: v for k, v in temporal_blocks.items() if v}
     merged = save_psnr_ssim_metrics_npz(
         metrics_npz,
         psnr_blocks=psnr_blocks,
@@ -310,6 +348,7 @@ def combine_metrics_shards_to_combined_npz(
         trial_split_blocks=trial_split_blocks,
         source_file_rows=source_file_rows,
         view_names=view_names,
+        temporal_blocks=temporal_to_write if temporal_to_write else None,
     )
     return merged, missing
 

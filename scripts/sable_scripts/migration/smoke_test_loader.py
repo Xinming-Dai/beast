@@ -23,9 +23,9 @@ import sys
 from pathlib import Path
 
 EID = "4b00df29-3769-43be-bb40-128b1cba6d35"
-DATASET_PATH_DEFAULT = "/data/jqh/Datasets/beast3d-data/sable_ibl_4b00"
+DATASET_PATH_DEFAULT = "/cephfs/jinqihang/SABLE/datasets/beast3d-data/sable_ibl_4b00"
 CORR_ROOT_DEFAULT = f"{DATASET_PATH_DEFAULT}/litpose_correspondences/processed_correspondences"
-META_SRC_DEFAULT = "/data/jqh/Datasets/E-RayZer-private/data/repro_mia_4b00"
+META_SRC_DEFAULT = "/cephfs/jinqihang/SABLE/datasets/E-RayZer-private/data/repro_mia_4b00"
 EXPECTED_NUM_PAIRS = 1642
 
 
@@ -51,7 +51,7 @@ def main() -> int:
     # Defer heavy imports until after arg parsing so --help is fast.
     import torch
 
-    sys.path.insert(0, "/home/jqh/NeuralWorkshops/beast")
+    sys.path.insert(0, "/cephfs/jinqihang/SABLE/beast")
     from beast.data.sable_dataset import IBLTwoViewDataset  # noqa: E402
 
     config = {
@@ -64,10 +64,10 @@ def main() -> int:
                 "encoder": "vitb",
                 "metric": False,
                 "checkpoint_path": (
-                    "/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/"
+                    "/cephfs/jinqihang/SABLE/third_party/VDA/checkpoints/"
                     "video_depth_anything_vitb.pth"
                 ),
-                "repo_root": "/home/jqh/NeuralWorkshops/third_party/VDA",
+                "repo_root": "/cephfs/jinqihang/SABLE/third_party/VDA",
             },
             "merge_pcd": {"correspondence_cache_root": args.corr_root},
         },

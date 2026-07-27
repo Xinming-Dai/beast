@@ -36,6 +36,7 @@ from beast.sable_encoding_decoding.render.decode_utils import (
 )
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
+    collect_temporal_metrics_block,
     resolve_metrics_npz_path,
 )
 from beast.train_sable import _resolve_dataset_class
@@ -690,7 +691,7 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.metrics_only:
             log_step(
-                f'[{file_i + 1}/{n_npz}] metrics: computing PSNR/SSIM '
+                f'[{file_i + 1}/{n_npz}] metrics: computing PSNR/SSIM/temporal '
                 f'render={tuple(result.render.shape)} target={tuple(result.target_image.shape)}',
                 level='info',
             )
@@ -708,6 +709,13 @@ def main(argv: list[str] | None = None) -> None:
                 k_trials=k,
                 t_bins=t_bins,
             )
+            temporal_blocks = collect_temporal_metrics_block(
+                result.render,
+                result.target_image,
+                npz_path,
+                k_trials=k,
+                t_bins=t_bins,
+            )
             save_single_token_metrics_npz(
                 metrics_shard_path(out_dir, npz_path),
                 psnr_block=psnr_block,
@@ -716,10 +724,12 @@ def main(argv: list[str] | None = None) -> None:
                 neural_bin_idx=neural_bin_idx,
                 trial_split=trial_split,
                 source_files=source_files,
+                temporal_blocks=temporal_blocks,
             )
             log_step(
                 f'[{file_i + 1}/{n_npz}] Metrics collected: {npz_path.name}  '
-                f'psnr_shape={psnr_block.shape}  ssim_shape={ssim_block.shape}',
+                f'psnr_shape={psnr_block.shape}  ssim_shape={ssim_block.shape}  '
+                f'temporal_metrics={list(temporal_blocks)}',
                 level='info',
             )
             continue

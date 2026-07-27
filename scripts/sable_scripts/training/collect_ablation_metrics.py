@@ -33,16 +33,16 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = "/home/jqh/NeuralWorkshops/beast"
-PROJECT_ROOT = "/home/jqh/NeuralWorkshops"
+REPO_ROOT = "/cephfs/jinqihang/SABLE/beast"
+PROJECT_ROOT = "/cephfs/jinqihang/SABLE"
 
 # Frozen contract (same as run_one_cell.sh)
 EID = "4b00df29-3769-43be-bb40-128b1cba6d35"
-DATASET_PATH = "/data/jqh/Datasets/beast3d-data/sable_ibl_4b00"
+DATASET_PATH = "/cephfs/jinqihang/SABLE/datasets/beast3d-data/sable_ibl_4b00"
 CORR_ROOT = f"{DATASET_PATH}/litpose_correspondences/processed_correspondences"
-VDA_CKPT = "/home/jqh/NeuralWorkshops/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
-VDA_REPO_ROOT = "/home/jqh/NeuralWorkshops/third_party/VDA"
-VGG_SRC = "/data/jqh/pretrained_checkpoints/beast/metric_checkpoint/imagenet-vgg-verydeep-19.mat"
+VDA_CKPT = "/cephfs/jinqihang/SABLE/third_party/VDA/checkpoints/video_depth_anything_vitb.pth"
+VDA_REPO_ROOT = "/cephfs/jinqihang/SABLE/third_party/VDA"
+VGG_SRC = "/cephfs/jinqihang/SABLE/ckpt/imagenet-vgg-verydeep-19.mat"
 BASE_CONFIG = f"{REPO_ROOT}/configs/sable/sable_ibl3d.yaml"
 
 # 8 cells (name, train_weights)
@@ -65,10 +65,10 @@ EVAL_PAIR_IDX = [1, 501, 1064, 1599]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--root", type=Path, default=Path("/data/jqh/Outputs/beast/rebuttal/loss_weighting")
+        "--root", type=Path, default=Path("/cephfs/jinqihang/SABLE/outputs/loss_weighting")
     )
     parser.add_argument(
-        "--out", type=Path, default=Path("/data/jqh/Outputs/beast/rebuttal/loss_weighting/eval")
+        "--out", type=Path, default=Path("/cephfs/jinqihang/SABLE/outputs/loss_weighting/eval")
     )
     parser.add_argument(
         "--split-manifest", type=Path, default=Path(f"{DATASET_PATH}/loader_split_manifest.json")
@@ -397,7 +397,7 @@ def main() -> int:
         os.environ.setdefault("CXX", "/usr/bin/g++")
     if "10.0" in os.environ.get("TORCH_CUDA_ARCH_LIST", ""):
         os.environ.pop("TORCH_CUDA_ARCH_LIST", None)
-    os.environ.setdefault("HF_HOME", "/home/jqh/.cache/huggingface")
+    os.environ.setdefault("HF_HOME", "/root/.cache/huggingface")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 

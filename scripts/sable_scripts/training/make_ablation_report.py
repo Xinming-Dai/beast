@@ -23,7 +23,7 @@ import argparse
 import csv
 from pathlib import Path
 
-REPO_ROOT = "/home/jqh/NeuralWorkshops/beast"
+REPO_ROOT = "/cephfs/jinqihang/SABLE/beast"
 
 # 8 cells (name, train_weights)
 CELLS = [
@@ -51,7 +51,7 @@ PROVENANCE = """\
 > Controlled loss-weight sensitivity study with fixed online VDA initialization.
 > Single eid (4b00df29-...). Online VDA, encoder=vitb, metric=false, checkpoint
 > pinned at SHA256 775e578e8f9431ec0496514aa466bd0a1f67c28d0f518267809f35a43c04329b.
-> Batch 12 x grad_accum 2 = 24 effective batch. 10000 steps, warmup 1000.
+> Batch 24 (= 24 x 1), 10000 steps, warmup 1000.
 > Quantitative metrics use all 164 pairs in the frozen validation split; four
 > manifest-pinned pairs are used only for the qualitative grid.
 > Deviation from Mia's reference run: this study uses online VDA on a single

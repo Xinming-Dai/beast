@@ -13,11 +13,11 @@
 
 set -euo pipefail
 
-ROOT=${ROOT:-/data/jqh/Outputs/beast/rebuttal/loss_weighting/_smoke/8cells}
+ROOT=${ROOT:-/cephfs/jinqihang/SABLE/outputs/loss_weighting/_smoke/8cells}
 ABLATION_STEPS=${ABLATION_STEPS:-200}
 ABLATION_WARMUP=${ABLATION_WARMUP:-20}
-BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-12}
-GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-2}
+BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-24}
+GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-1}
 
 mkdir -p "${ROOT}"
 
@@ -27,4 +27,4 @@ ABLATION_STEPS="${ABLATION_STEPS}" \
 ABLATION_WARMUP="${ABLATION_WARMUP}" \
 BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU}" \
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS}" \
-bash /home/jqh/NeuralWorkshops/beast/scripts/sable_scripts/training/ablation_l2_percept_geom.sh
+bash /cephfs/jinqihang/SABLE/beast/scripts/sable_scripts/training/ablation_l2_percept_geom.sh
