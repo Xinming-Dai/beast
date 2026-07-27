@@ -15,7 +15,9 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
-REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
+REPO_ROOT="/u/xdai3/project3d/SABLE_repo_2/beast"
+cd "$REPO_ROOT"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_ibl3d_fixed_1to2.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
