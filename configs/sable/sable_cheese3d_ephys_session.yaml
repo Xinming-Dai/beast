@@ -1,0 +1,167 @@
+inference: false
+evaluation: false
+
+model:
+  model_class: sable
+  seed: 0
+  gaussians:
+    init_gs: true
+    n_gaussians: 1
+    range_setting:
+      type: linear_depth
+      near: 0
+      far: 8
+    sh_degree: 3
+    upsampler:
+      upsample_factor: 1
+  gs_per_pixel_sqrt: 1
+  hard_pixelalign: true
+  image_tokenizer:
+    image_size: 320
+    in_channels: 3
+    patch_size: 16
+  input_with_pe: true
+  near_plane: 0.2
+  pose_latent:
+    canonical: middle
+    length: 1
+    mode: pairwise
+  scaling_bias: -3.0
+  scaling_max: -2.0
+  target_image:
+    height: 320
+    width: 320
+  transformer:
+    d: 768
+    d_head: 64
+    decoder_n_layer: 8
+    depth_init: true
+    encoder_geom_n_layer: 16
+    encoder_n_layer: 16
+    fix_decoder: false
+    neck_n_layer: 1
+    special_init: true
+    use_qk_norm: true
+  vda:
+    enabled: true
+    mode: online
+    cache_root: null
+    repo_root: /u/xdai3/project3d/E-RayZer-private/third_party/VDA
+    checkpoint_path: /work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/vda/checkpoints/video_depth_anything_vitb.pth
+    encoder: vitb  # vitl | vitb | vits
+    metric: false
+    debug_save: false
+    debug_dir: null
+    mask_depth: true   # after depth normalisation, push background pixels to Z=-0.5 (far end)
+  use_deferred_rendering: false
+  use_gsplat: true
+  patch_masking:
+    ratio: 0.75
+    pixel_mask: true
+    gaussian_mask: false
+  merge_pcd:
+    num_points: 3
+    debug_merged_pcd: true
+    debug_merged_pcd_num_batches: 16
+    correspondence_cache_root: null
+    affine_transformation:
+      - [ 0.4414802,   0.15673411, -0.88347589, -0.05953322]
+      - [-0.06357379,  0.98761488,  0.14344067,  0.05882564]
+      - [ 0.89501598, -0.0071603,   0.4459766,  -0.01130054]
+      - [ 0.,          0.,          0.,          1.        ]
+
+optimizer:
+  type: AdamW
+  lr: 0.00002
+  wd: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 3000
+  div_factor: 1.0
+  final_div_factor: 1.0
+  scheduler: cosine
+
+training:
+  dataset_name: beast.data.sable_dataset.Cheese3DDataset
+  dataset_path: /work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam
+  session_names:
+    - 20250523_B1_ephys-record_awake_000
+  cheese3d_left_camera: TL
+  cheese3d_right_camera: TR
+  use_camera_params: false
+  load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
+  use_segmentation:
+    enabled: true
+    cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
+  mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
+  mask_l2_loss: true    # restrict L2 photometric loss to foreground (mouse) pixels only
+
+  # Validation
+  val_split_ratio: 0.1
+  val_every: 100
+
+  # Combined validation metric
+  val_score_frame_weight: 1.0
+  val_score_perceptual_weight: 1.0
+  val_score_depth_weight: 1.0
+  save_val_best_checkpoint: true
+
+  batch_size_per_gpu: 16
+  grad_accum_steps: 1
+  num_workers: 8
+  prefetch_factor: 4
+  num_threads: 1
+
+  amp_dtype: bf16
+  use_amp: true
+  use_tf32: true
+
+  checkpoint_dir: path/to/ckpt_folder
+  checkpoint_every: 10000
+  checkpoint_steps: [20000]
+
+  resume_ckpt: path/to/eryzer_dl3dv.pt
+  reset_training_state: true
+  max_fwdbwd_passes: 20000
+  print_every: 10
+  save_visuals: true
+  save_pointclouds: true
+  save_camera_pointcloud_scene: true
+  vis_num_samples: 1
+  vis_max_views: 3
+  render_video: false
+
+  grad_checkpoint_every: 1
+  grad_clip_norm: 1.0
+  allowed_gradnorm_factor: 5.0
+  no_pass_steps: 50
+
+  l2_loss_weight: 1.0
+  lpips_loss_weight: 0.0
+  perceptual_loss_weight: 0.3
+  gs_reg_loss_weight: 1.0
+
+  scene_scale_factor: 1.35
+  image_preprocess: stretch  # stretch | square_crop | stereo_square_crop_anchor
+  random_split: false
+  random_shuffle: false
+
+  training_regime: all_views_reconstruction
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
+
+  view_selector:
+    type: all
+    fallback_type: all
+    overlap_path_template: null
+    use_curriculum: false
+    curriculum_iter: 0
+    curriculum_start_min_overlap: 1.0
+    curriculum_start_max_overlap: 1.0
+    min_overlap: 0.0
+    max_overlap: 1.0
+    min_frame_dist: 1
+    max_frame_dist: 1
+    curriculum_start_min_frame_dist: 1
+    curriculum_start_max_frame_dist: 1
