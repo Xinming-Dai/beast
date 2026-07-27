@@ -42,6 +42,7 @@ _LATENT_KIND_LAYOUT = {
     'dino': ('dino_z', 'dino_z_trials.npz'),
     'combined': ('combined_z', 'combined_z_trials.npz'),
     'mu_u': ('psae_z', 'psae_z_trials.npz'),
+    'behavior': ('behavior_z', 'behavior_z_trials.npz'),
 }
 
 
@@ -69,6 +70,7 @@ _SUBDIR_TO_RESULT_SUFFIX = {
     'dino_z': 'dino',
     'psae_z': 'psae',
     'combined_z': 'combined',
+    'behavior_z': 'behavior',
 }
 
 
