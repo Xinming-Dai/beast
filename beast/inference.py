@@ -543,6 +543,63 @@ def predict_images(
     return results
 
 
+def combine_view_latents(
+    latents_dir: str | Path,
+    output_path: str | Path,
+    views: tuple[str, str] = ('left', 'right'),
+) -> Path:
+    """Pair per-view latents saved by `predict_images` into a single (n_frames, 2, dim) array.
+
+    `predict_images` has no notion of view and saves one `.npy` latent file per image, under
+    `latents_dir/<view>/<frame_stem>.npy` (view is the image's parent directory name, e.g.
+    'left' or 'right'). This function matches files across the two view subdirectories by
+    frame stem and stacks each matched pair into a single per-view latent vector, so that
+    ViT/ResNet latents can be consumed the same way as SABLE's (batch, 2, dim) latents.
+
+    Parameters
+    ----------
+    latents_dir: directory containing one subdirectory per view (as written by
+        `ImagePredictionHandler.save_latents`)
+    output_path: path to the output .npz file
+    views: names of the two view subdirectories to pair, in output order
+
+    Returns
+    -------
+    path to the saved .npz file, containing 'z' (n_frames, 2, dim) and 'frame_ids' (n_frames,)
+
+    """
+    latents_dir = Path(latents_dir)
+    output_path = Path(output_path)
+
+    view_a_dir = latents_dir / views[0]
+    view_b_dir = latents_dir / views[1]
+    if not view_a_dir.is_dir() or not view_b_dir.is_dir():
+        raise ValueError(f'expected latent subdirectories {view_a_dir} and {view_b_dir}')
+
+    stems_a = {p.stem for p in view_a_dir.glob('*.npy')}
+    stems_b = {p.stem for p in view_b_dir.glob('*.npy')}
+    frame_ids = sorted(stems_a & stems_b)
+    if not frame_ids:
+        raise ValueError(f'no matching frame stems found between {view_a_dir} and {view_b_dir}')
+    missing = (stems_a | stems_b) - set(frame_ids)
+    if missing:
+        _logger.warning(f'{len(missing)} frames missing a matching pair and will be skipped')
+
+    paired_latents = np.stack([
+        np.stack([
+            np.load(view_a_dir / f'{frame_id}.npy'),
+            np.load(view_b_dir / f'{frame_id}.npy'),
+        ])
+        for frame_id in frame_ids
+    ])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(output_path, z=paired_latents, frame_ids=np.array(frame_ids))
+    _logger.info(f'Saved paired latents {paired_latents.shape} to: {output_path}')
+
+    return output_path
+
+
 def predict_video(
     model: BaseLightningModel,
     output_dir: str | Path,

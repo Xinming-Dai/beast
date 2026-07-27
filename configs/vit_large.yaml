@@ -26,10 +26,10 @@ model:
     pretrained_model: facebook/vit-mae-large # ~300M encoder, for size-ablation comparison to SABLE
     pretrained_revision: refs/pr/1 # main has no safetensors; PR#1 adds them (torch.load blocked below torch 2.6)
 
-    embed_size: 1024 # projected embedding size, used for contrastive learning
+    embed_size: 768 # projected embedding size, matched to SABLE's per-view latent dim
     temp_scale: False # temperature scaling for contrastive loss
     random_init: False # keep pretrained weights, same training regime as the base config
-    use_infoNCE: False # use InfoNCE loss
+    use_infoNCE: True # use InfoNCE loss
     infoNCE_weight: 0.03 # weight for InfoNCE loss
     use_perceptual_loss: False # use perceptual loss (AlexNet features)
     lambda_perceptual: 10.0 # weight for perceptual loss
