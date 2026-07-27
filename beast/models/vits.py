@@ -232,10 +232,13 @@ class VisionTransformer(BaseLightningModel):
         )
         # reset mask_ratio to the original value
         self.vit_mae.config.mask_ratio = self.mask_ratio
-        # just extract CLS tokens
-        cls_tokens = results_dict['latents'][:, 0, :].clone()
+        # use the projected embedding when available, otherwise fall back to the raw CLS token
+        if self.config['model']['model_params'].get('use_infoNCE', False):
+            latents = results_dict['z'].clone()
+        else:
+            latents = results_dict['latents'][:, 0, :].clone()
         del results_dict['latents']
-        results_dict['latents'] = cls_tokens
+        results_dict['latents'] = latents
         # save metadata
         results_dict['metadata'] = {
             'video': batch_dict['video'],

@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:10:00
+#SBATCH -t 0-04:00:00
 #SBATCH -J beast_large_ibl
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/training/train_beast_large_ibl3d_%j.log
 #SBATCH --export=ALL
@@ -15,7 +15,9 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
-REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
+REPO_ROOT="/u/xdai3/project3d/SABLE_repo_3/beast"
+cd "$REPO_ROOT"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 CONFIG="${CONFIG:-$REPO_ROOT/configs/vit_large.yaml}"
 
 # Data paths (override by exporting before sbatch, e.g.:
@@ -62,8 +64,6 @@ echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
 
 [ -f "$CONFIG" ] || { echo "ERROR: Config not found: $CONFIG"; exit 1; }
 [ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
-
-cd "$REPO_ROOT"
 
 OVERRIDES=(
     "data.data_dir=$DATASET_PATH"
