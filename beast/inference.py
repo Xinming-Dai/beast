@@ -136,10 +136,11 @@ class ImagePredictionHandler:
         save_latents: bool = False
     ) -> dict[str, list]:
         """Process a batch of predictions and save them."""
-        reconstructions = predictions['reconstructions']
         latents = predictions['latents']
+        # only present when the model was run with return_reconstructions=True
+        reconstructions = predictions['reconstructions'] if save_reconstructions else None
 
-        batch_size = reconstructions.shape[0]
+        batch_size = latents.shape[0]
 
         saved_files = {
             'reconstructions': [],
@@ -596,6 +597,194 @@ def combine_view_latents(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(output_path, z=paired_latents, frame_ids=np.array(frame_ids))
     _logger.info(f'Saved paired latents {paired_latents.shape} to: {output_path}')
+
+    return output_path
+
+
+def _load_eval_layout_split_rows(
+    input_dir: Path,
+    latents_dir: Path,
+    other_latents_dir: Path,
+    split: str,
+) -> dict[str, dict[str, Any]]:
+    """Read one view's `frame_index_mapping.json` for `split` and attach its latent array.
+
+    Args:
+        input_dir: eval-layout camera directory passed as `beast predict --input`.
+        latents_dir: this view's `<output>/latents` directory from `beast predict`.
+        other_latents_dir: the other view's `<output>/latents` directory, used only to
+            validate that both views saved the same frame stems for this split.
+        split: split name (`train`, `val`, or `test`).
+
+    Returns:
+        Mapping from frame stem (e.g. `interval0timebin0`) to its
+        `frame_index_mapping.json` record plus a `latent` key holding the loaded `.npy` array.
+        Empty if `split` wasn't extracted for this session (no `frame_index_mapping.json`).
+
+    Raises:
+        ValueError: if the two views saved different frame stems for this split.
+    """
+    mapping_path = input_dir / split / 'frame_index_mapping.json'
+    if not mapping_path.is_file():
+        return {}
+    with mapping_path.open(encoding='utf-8') as f:
+        mapping = json.load(f)
+
+    latent_stems = {p.stem for p in (latents_dir / split).glob('*.npy')}
+    other_latent_stems = {p.stem for p in (other_latents_dir / split).glob('*.npy')}
+    if latent_stems != other_latent_stems:
+        raise ValueError(
+            f'left/right frame stem mismatch for split {split!r}: '
+            f'only in this view: {latent_stems - other_latent_stems}; '
+            f'only in the other view: {other_latent_stems - latent_stems}',
+        )
+
+    rows = {}
+    for filename, record in mapping.items():
+        stem = Path(filename).stem
+        rows[stem] = {**record, 'latent': np.load(latents_dir / split / f'{stem}.npy')}
+    return rows
+
+
+def _stack_eval_layout_split(
+    left_rows: dict[str, dict[str, Any]],
+    right_rows: dict[str, dict[str, Any]],
+    split: str,
+) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray]:
+    """Group one split's per-frame rows into per-trial `[T, 2, D]` tensors.
+
+    Args:
+        left_rows: left view's rows for `split`, from `_load_eval_layout_split_rows`.
+        right_rows: right view's rows for `split`, from `_load_eval_layout_split_rows`.
+        split: split name, used only for error messages.
+
+    Returns:
+        Tuple `(z_trials_time, trial_split_labels, per_trial_iv, neural_trial_idx)` for this
+        split, with trials sorted by `neural_trial_idx`.
+
+    Raises:
+        ValueError: if a trial's timebin count is inconsistent, or trials in this split don't
+            share a common timebin count.
+    """
+    by_trial: dict[int, list[str]] = {}
+    for stem, record in left_rows.items():
+        by_trial.setdefault(record['neural_trial_idx'], []).append(stem)
+
+    trial_ids = sorted(by_trial)
+    trials = []
+    intervals = []
+    for trial_id in trial_ids:
+        stems = sorted(by_trial[trial_id], key=lambda s: left_rows[s]['neural_bin_idx'])
+        bin_idxs = [left_rows[s]['neural_bin_idx'] for s in stems]
+        if bin_idxs != list(range(len(stems))):
+            raise ValueError(
+                f'split {split!r} trial {trial_id}: non-contiguous neural_bin_idx values '
+                f'{bin_idxs}',
+            )
+        trials.append(np.stack([
+            np.stack([left_rows[s]['latent'], right_rows[s]['latent']])
+            for s in stems
+        ]))
+        intervals.append(left_rows[stems[0]]['neural_interval_sec'])
+
+    timebin_counts = {t.shape[0] for t in trials}
+    if len(timebin_counts) > 1:
+        raise ValueError(
+            f'split {split!r}: inconsistent timebin counts across trials: {timebin_counts}',
+        )
+
+    z_trials_time = np.stack(trials) if trials else np.empty((0, 0, 2, 0), dtype=np.float32)
+    trial_split_labels = [split] * len(trial_ids)
+    if intervals:
+        per_trial_iv = np.asarray(intervals, dtype=np.float64)
+    else:
+        per_trial_iv = np.empty((0, 2), dtype=np.float64)
+    neural_trial_idx = np.asarray(trial_ids, dtype=np.int64)
+
+    return z_trials_time, trial_split_labels, per_trial_iv, neural_trial_idx
+
+
+def combine_eval_layout_latents(
+    left_input_dir: str | Path,
+    right_input_dir: str | Path,
+    left_latents_dir: str | Path,
+    right_latents_dir: str | Path,
+    output_path: str | Path,
+    splits: tuple[str, ...] = ('train', 'val', 'test'),
+) -> Path:
+    """Pair eval-layout per-frame latents into the neural-aligned trials `.npz` schema.
+
+    Eval-layout frames (see `docs/sable/neural_extraction.md`) are extracted per camera as
+    `<camera_dir>/<split>/interval<N>timebin<M>.png`, with a sidecar
+    `<camera_dir>/<split>/frame_index_mapping.json` mapping each frame to its
+    `neural_trial_idx`, `neural_bin_idx`, and `neural_interval_sec`. `predict_images` has no
+    notion of trial/timebin structure, so `beast predict` must be run once per camera (see
+    `combine_view_latents` for the flat left/right case); this function re-groups the resulting
+    per-frame `.npy` latents from both cameras into per-trial `[T, 2, D]` tensors, keyed by
+    split, matching what `run_encoding_decoding.py` requires (`train_z_trials_time`,
+    `val_z_trials_time`, `test_z_trials_time`, plus `neural_trial_idx` and per-split
+    `*_intervals`).
+
+    Parameters
+    ----------
+    left_input_dir: eval-layout left-camera directory passed as `beast predict --input`
+    right_input_dir: eval-layout right-camera directory passed as `beast predict --input`
+    left_latents_dir: left camera's `<output>/latents` directory from `beast predict`
+    right_latents_dir: right camera's `<output>/latents` directory from `beast predict`
+    output_path: path to the output .npz file
+    splits: split names to assemble, in row order (default: train, val, test)
+
+    Returns
+    -------
+    path to the saved .npz file
+
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import (
+        _per_split_z_trials_kw,
+        _stack_split_intervals_from_rows,
+    )
+
+    left_input_dir = Path(left_input_dir)
+    right_input_dir = Path(right_input_dir)
+    left_latents_dir = Path(left_latents_dir)
+    right_latents_dir = Path(right_latents_dir)
+    output_path = Path(output_path)
+
+    all_z, all_split_labels, all_iv, all_neural_trial_idx = [], [], [], []
+    for split in splits:
+        left_rows = _load_eval_layout_split_rows(
+            left_input_dir, left_latents_dir, right_latents_dir, split,
+        )
+        right_rows = _load_eval_layout_split_rows(
+            right_input_dir, right_latents_dir, left_latents_dir, split,
+        )
+        z, split_labels, iv, neural_trial_idx = _stack_eval_layout_split(
+            left_rows, right_rows, split,
+        )
+        if z.shape[0] == 0:
+            continue
+        all_z.append(z)
+        all_split_labels.extend(split_labels)
+        all_iv.append(iv)
+        all_neural_trial_idx.append(neural_trial_idx)
+
+    if not all_z:
+        raise ValueError(f'no trials found for splits {splits} under {left_input_dir}')
+
+    z_trials_time = np.concatenate(all_z, axis=0)
+    per_trial_iv = np.concatenate(all_iv, axis=0)
+    neural_trial_idx = np.concatenate(all_neural_trial_idx, axis=0)
+
+    save_kw = _per_split_z_trials_kw(z_trials_time, all_split_labels, ','.join(splits))
+    train_iv, val_iv, test_iv = _stack_split_intervals_from_rows(all_split_labels, per_trial_iv)
+    save_kw['train_intervals'] = train_iv
+    save_kw['val_intervals'] = val_iv
+    save_kw['test_intervals'] = test_iv
+    save_kw['neural_trial_idx'] = neural_trial_idx
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **save_kw)
+    _logger.info(f'Saved eval-layout trials {z_trials_time.shape} to: {output_path}')
 
     return output_path
 
