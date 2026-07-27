@@ -21,16 +21,25 @@ CONFIG="${CONFIG:-$REPO_ROOT/configs/sable/sable_cheese3d_center_camera_holdout.
 # Data paths (override by exporting before sbatch, e.g.:
 #   sbatch --export=ALL,DATASET_PATH=/path/to/cheese3d_cam scripts/train_sable_cheese3d.sh)
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
+
 RESUME_CKPT="${RESUME_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
+RESET_TRAINING_STATE="${RESET_TRAINING_STATE:-True}"
+RESUME_CKPT_JOB_ID="${RESUME_CKPT_JOB_ID:-}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d}"
 
-if [ -n "${SLURM_JOB_ID:-}" ]; then
+if [ "$RESET_TRAINING_STATE" = "False" ]; then
+    if [ -z "$RESUME_CKPT_JOB_ID" ]; then
+        echo "ERROR: RESET_TRAINING_STATE=False requires RESUME_CKPT_JOB_ID set to the original job's directory name under $CHECKPOINT_BASE"
+        exit 1
+    fi
+    CHECKPOINT_DIR="${CHECKPOINT_BASE}/${RESUME_CKPT_JOB_ID}"
+elif [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
-    mkdir -p "$CHECKPOINT_DIR"
 else
     CHECKPOINT_DIR="$CHECKPOINT_BASE"
 fi
+mkdir -p "$CHECKPOINT_DIR"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
@@ -55,6 +64,7 @@ Running on node(s): ${SLURM_NODELIST:-$(hostname)}
 Config: $CONFIG
 Dataset path: $DATASET_PATH
 Resume ckpt: ${RESUME_CKPT:-(none)}
+Reset training state: $RESET_TRAINING_STATE
 Checkpoint dir (output): $CHECKPOINT_DIR
 TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
@@ -82,7 +92,7 @@ cd "$REPO_ROOT"
 OVERRIDES=(
     "training.dataset_path=$DATASET_PATH"
     "training.checkpoint_dir=$CHECKPOINT_DIR"
-    "training.reset_training_state=True"
+    "training.reset_training_state=$RESET_TRAINING_STATE"
 )
 [ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
 
