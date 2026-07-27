@@ -101,6 +101,64 @@ directly, without re-deriving trial windows from the trigger CSV.
 
 ---
 
+## Cheese3D: Behavior-Trace Extraction
+
+`beast.preprocess.cheese3d.extract_cheese3d_behavior_traces` builds a raw-behavior baseline for
+encoding — Cheese3D's analog of IBL's `DYNAMIC_VARS` continuous behavior traces (wheel speed,
+whisker motion, etc., see `extract_neural_data.py` in the E-RayZer repo) — from Lightning Pose
+(LP) keypoint tracking on the `TL`/`TR` cameras the Cheese3D SABLE model trains on.
+
+Rather than re-deriving trial windows from the trigger CSV, it reads `frame_manifest.json`
+(written by step 0 above) directly: for every trial in every split, it looks up that trial's
+already-recorded `TL`/`TR` frame index — the exact frame SABLE's own latent extraction uses for
+that trial — and pulls that frame's LP keypoints from the corresponding DLC-style CSV (`{scorer,
+bodyparts, coords}` 3-row header, one data row per raw video frame). This guarantees the behavior
+trials line up 1:1 with `<eid>_aligned.npz` via `neural_trial_idx`, with no separate windowing
+logic to keep in sync.
+
+Bodyparts whose mean likelihood across the sampled trial frames, in *either* view, falls below
+`--min-likelihood` (default `0.0`, i.e. no filtering) are dropped from the feature vector — this
+only shrinks the feature dimension `D`, never the trial count `K`, since trial/split membership
+comes entirely from the manifest. Unlike IBL's `bin_behaviors`/`align_data` (which tolerate
+per-trial NaNs and threshold the NaN-trial fraction, since continuous physiological signals can
+have real per-interval gaps), LP keypoints always carry *some* value plus a confidence score —
+so unreliable bodyparts are simply excluded session-wide up front, keeping every output feature
+dense and finite (the RRR/CNN encoder/decoder here aren't written to handle NaN inputs).
+
+```bash
+python -m beast.preprocess.cheese3d.extract_cheese3d_behavior_traces \
+  --frame-manifest /path/to/neural_data/<eid>/frame_manifest.json \
+  --lp-csv-tl /path/to/<eid>_TL_<timestamp>.csv \
+  --lp-csv-tr /path/to/<eid>_TR_<timestamp>.csv \
+  --eid <eid> \
+  --behavior-output-dir /path/to/behavior_root \
+  [--min-likelihood 0.0]
+```
+
+SLURM wrapper: `scripts/sable_scripts/encoding_decoding/cheese3d/
+step0b_extract_behavior_traces.sh` (CPU-only; run after step 0).
+
+### `behavior_z_trials.npz` keys
+
+Written to `<behavior-output-dir>/behavior_z/<eid>/behavior_z_trials.npz` — the same
+`--latent_kind` contract any other latent uses (see
+[`neural_encoding_decoding.md`](neural_encoding_decoding.md)):
+
+| Key pattern | Content |
+|---|---|
+| `train_z_trials_time`, `val_z_trials_time`, `test_z_trials_time` | `[K, 1, 2, D]` float32 — one timestep (`T=1`) per trial, `V=2` views (`TL`, `TR`), `D` = `2 × n_bodyparts_kept` (`x, y` per kept bodypart) |
+| `train_intervals`, `val_intervals`, `test_intervals` | `[K, 2]` float64 — copied from `frame_manifest.json`, same values as the neural `<eid>_aligned.npz` |
+| `neural_trial_idx` | row index into the matching split's neural `*_intervals`, for `run_encoding_decoding.py`'s built-in interval cross-check |
+
+`params.json` (written alongside) records `min_likelihood`, the kept bodypart names, and CSV
+paths.
+
+Run `--latent_kind behavior` with `beast.sable_encoding_decoding.neural.run_encoding_decoding`
+to fit spikes-from-keypoints encoding, directly comparable to `--latent_kind frame/dino/
+combined`.
+
+---
+
 ## Cheese3D: Eval-Frame Extraction
 
 `extract_cheese3d_eval_frames.py` reads `frame_manifest.json` and, for each camera (all six by

@@ -16,7 +16,7 @@ import torch
 from scipy.special import gammaln
 from torcheval.metrics import R2Score
 
-_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined'))
+_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined', 'behavior'))
 
 
 def _parse_latent_kind(value: str) -> str:

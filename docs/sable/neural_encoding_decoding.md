@@ -119,6 +119,7 @@ Key flags (see `neural/utils.py::get_encoding_decoding_args` for the full list):
 | `mu_u` | `psae_z` | `psae_z_trials.npz`, sliced to the unsupervised tail (requires `--model_config`) |
 | `dino` | `dino_z` | `dino_z_trials.npz` |
 | `cat` | `cat_z` | `cat_z_trials.npz` |
+| `behavior` | `behavior_z` | `behavior_z_trials.npz` (Cheese3D raw TL/TR keypoint traces; see [`neural_extraction.md`](neural_extraction.md)) |
 | `img_tokens_compressed*` (e.g. `img_tokens_compressed_3_comp`) | `<latent_kind>` | `img_tokens_compressed_trials.npz` (PCA-compressed image tokens from stage 2; CNN/TCN only, no RRR) |
 | (omitted) | `<latent_input_dir>` directly | `z_trials.npz` |
 
