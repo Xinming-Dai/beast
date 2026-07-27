@@ -375,6 +375,15 @@ def train_sable(config: dict, model, output_dir: str | Path):
             # load model weights only so optimizer/scheduler start fresh
             log_step('Training state will be reset', level='warning')
             state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
+            model_state = model.state_dict()
+            for key in list(state_dict.keys()):
+                if key in model_state and state_dict[key].shape != model_state[key].shape:
+                    log_step(
+                        f'Skipping {key}: checkpoint shape {tuple(state_dict[key].shape)} '
+                        f'!= model shape {tuple(model_state[key].shape)}',
+                        level='warning',
+                    )
+                    del state_dict[key]
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             if missing:
                 log_step(f'Missing keys when loading checkpoint: {missing}', level='warning')
