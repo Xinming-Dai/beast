@@ -141,7 +141,7 @@ class ValVisualizationCallback(pl.Callback):
                 self._vis_dir,
                 result=result,
                 batch=batch,
-                step=0,
+                step=trainer.global_step,
                 max_samples=self._max_samples,
                 max_views=self._max_views,
             )
@@ -151,7 +151,7 @@ class ValVisualizationCallback(pl.Callback):
                 ply_paths = save_gaussian_pointclouds(
                     vars(result),
                     self._vis_dir,
-                    batch_idx=0,
+                    batch_idx=trainer.global_step,
                     max_samples=self._max_samples,
                 )
                 if ply_paths:
@@ -160,7 +160,7 @@ class ValVisualizationCallback(pl.Callback):
                 glb_paths = save_camera_pointcloud_scene(
                     vars(result),
                     self._vis_dir,
-                    batch_idx=0,
+                    batch_idx=trainer.global_step,
                     max_samples=self._max_samples,
                 )
                 if glb_paths:
