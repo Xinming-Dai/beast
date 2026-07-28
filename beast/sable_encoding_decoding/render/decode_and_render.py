@@ -23,7 +23,9 @@ from beast.sable_encoding_decoding.img_token.saved_tokens_io import (
     sorted_img_tokens_npz_paths,
 )
 from beast.sable_encoding_decoding.render.decode_utils import (
+    _print_combined_metrics_summary,
     combine_metrics_shards_to_combined_npz,
+    delete_decoded_token_sources,
     delete_metrics_shards_for_sources,
     filter_img_tokens_npz_paths_by_neural_trial,
     is_render_complete,
@@ -288,8 +290,6 @@ def _apply_dataloader_overrides(config: dict, args: argparse.Namespace) -> None:
         config['model']['merge_pcd']['use_correspondences']['cache_root'] = (
             args.correspondence_cache_root
         )
-    if getattr(args, 'ibl_precache_valid_index', None) is not None:
-        training['ibl_precache_valid_index'] = args.ibl_precache_valid_index
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -364,12 +364,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument('--batch-size', type=int, default=None)
     p.add_argument('--num-workers', type=int, default=None)
-    p.add_argument('--ibl-precache-valid-index', action='store_true', default=None)
-    p.add_argument(
-        '--no-ibl-precache-valid-index',
-        action='store_false',
-        dest='ibl_precache_valid_index',
-    )
     p.add_argument(
         '--sync-batch-index',
         type=int,
@@ -407,7 +401,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument('--max-render-views', type=int, default=2)
     p.add_argument(
         '--metrics-only',
-        '--save-metrics-only',
         action='store_true',
         help=(
             'Decode all rows and save only PSNR/SSIM metrics to an .npz; skips pointclouds '
@@ -489,8 +482,15 @@ def main(argv: list[str] | None = None) -> None:
         log_step(
             f'[combine-metrics-only] Wrote {metrics_npz}  '
             f"psnr_shape={merged['psnr'].shape}  ssim_shape={merged['ssim'].shape}  "
-            f"avg_psnr={float(merged['average_psnr']):.4f}  "
-            f"avg_ssim={float(merged['average_ssim']):.4f}",
+            f"avg_psnr={float(merged['average_psnr']):.4f} (SE={float(merged['se_psnr']):.4f})  "
+            f"avg_ssim={float(merged['average_ssim']):.4f} (SE={float(merged['se_ssim']):.4f})",
+            level='info',
+        )
+        _print_combined_metrics_summary(metrics_npz, merged)
+        n_deleted = delete_decoded_token_sources(npz_paths, skip_indices=set(missing))
+        log_step(
+            f'Deleted {n_deleted} decoded token .npz file(s) under --z-source after saving '
+            'metrics.',
             level='info',
         )
         return
@@ -579,6 +579,7 @@ def main(argv: list[str] | None = None) -> None:
             continue
 
         log_step(f'[{file_i + 1}/{n_npz}] Loading and decoding: {npz_path}', level='info')
+        log_step(f'[{file_i + 1}/{n_npz}] load_z: reading {npz_path.name}', level='info')
         z = load_z_from_npz_file(npz_path)
         log_step(
             f'[{file_i + 1}/{n_npz}] load_z: done shape={tuple(z.shape)} dtype={z.dtype}',
@@ -587,6 +588,9 @@ def main(argv: list[str] | None = None) -> None:
         k, t_bins, l_tok, d_feat = z.shape
         flat = k * t_bins
 
+        log_step(
+            f'[{file_i + 1}/{n_npz}] dataloader: next batch_idx={batch_idx} ...', level='info',
+        )
         try:
             batch = next(dataloader_iter)
         except StopIteration as exc:
@@ -777,8 +781,15 @@ def main(argv: list[str] | None = None) -> None:
         log_step(
             f'Saved PSNR/SSIM metrics to {metrics_npz}  '
             f"psnr_shape={metrics['psnr'].shape}  ssim_shape={metrics['ssim'].shape}  "
-            f"avg_psnr={float(metrics['average_psnr']):.4f}  "
-            f"avg_ssim={float(metrics['average_ssim']):.4f}",
+            f"avg_psnr={float(metrics['average_psnr']):.4f} (SE={float(metrics['se_psnr']):.4f})  "
+            f"avg_ssim={float(metrics['average_ssim']):.4f} (SE={float(metrics['se_ssim']):.4f})",
+            level='info',
+        )
+        _print_combined_metrics_summary(metrics_npz, metrics)
+        n_deleted = delete_decoded_token_sources(npz_paths, skip_indices=set(missing))
+        log_step(
+            f'Deleted {n_deleted} decoded token .npz file(s) under --z-source after saving '
+            'metrics.',
             level='info',
         )
         return
