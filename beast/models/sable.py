@@ -1178,10 +1178,29 @@ class Sable(BaseLightningModel):
 
         return result
 
-    def predict_frame_from_all_tokens(self, all_tokens, c2w_input, fxfycxcy_input, c2w_target, fxfycxcy_target, data):
+    def predict_frame_from_all_tokens(
+        self, all_tokens, c2w_input, fxfycxcy_input, c2w_target, fxfycxcy_target, data, v_real=None,
+    ):
+        """Decode saved image tokens into rendered Gaussian-splat frames.
 
+        Mirrors the decoder tail of `forward()` (from `image_token_decoder` through
+        `self.renderer`) for tokens that were exported separately (e.g. via
+        `img_tokens*.npz`), so they can be re-decoded/rendered without re-running the encoder.
+        `fxfycxcy_input`/`fxfycxcy_target` must already be in pixel units (not [0, 1]-normalized)
+        — matching what `forward()` writes into its result after its own internal rescale.
+        Does not support `debug_merged_pcd` (no depth/VDA point-cloud merge is performed).
+
+        Args:
+            v_real: number of real (non-padded) views in `all_tokens`. Defaults to
+                `all_tokens.shape[1]` (no cropping) when the tokens contain no padded views;
+                pass explicitly if the padded-view scheme (`forward()`'s `v_real < 10` branch)
+                was in effect when the tokens were produced.
+        """
         b, v_input, n, d = all_tokens.shape
+        if v_real is None:
+            v_real = v_input
         h = w = int(self.config['model']['image_tokenizer']['image_size'])
+        device = all_tokens.device
 
         all_tokens = rearrange(all_tokens, 'b v n d -> b (v n) d', v=v_input)
 
@@ -1191,18 +1210,13 @@ class Sable(BaseLightningModel):
             img_aligned_gaussians,
             'b (v n) d -> b v n d',
             v=v_input,
-        )
+        )[:, :v_real]
         img_aligned_gaussians = rearrange(
             img_aligned_gaussians,
-            'b v n (ph pw c) -> b (v n ph pw) c',  
+            'b v n (ph pw c) -> b (v n ph pw) c',
             ph=self.ph,
             pw=self.pw,
         )
-
-        if img_aligned_gaussians.shape[0] != b:
-            img_aligned_gaussians = rearrange(
-                img_aligned_gaussians, '(b v) n c -> b (v n) c', b=b, v=v_input
-            )
 
         xyz, features, scaling, rotation, opacity = self.upsampler.to_gs(img_aligned_gaussians)
 
@@ -1250,6 +1264,21 @@ class Sable(BaseLightningModel):
             (xyz, features, scaling, rotation, opacity),
         )
 
+        _, target_idx, _, target_pos = self.prepare_view_indices(data, v_real, device)
+        v_target = int(target_idx.shape[1])
+        if self.full_context_partial_target:
+            assert target_pos is not None
+            xyz, features, scaling, rotation, opacity = self._select_target_gaussians(
+                xyz=xyz,
+                features=features,
+                scaling=scaling,
+                rotation=rotation,
+                opacity=opacity,
+                target_pos=target_pos,
+                v_input=v_input,
+                v_target=v_target,
+            )
+
         gaussian_attrs = SimpleNamespace(
             xyz=xyz,
             features=features,
@@ -1265,11 +1294,6 @@ class Sable(BaseLightningModel):
                 f'Invalid image dimensions from batch: h={h}, w={w}. '
                 'Check dataset preprocessing and target_image config.'
             )
-        normalized = False
-        if normalized:
-            intrinsics_scale = fxfycxcy_target.new_tensor([width, height, width, height])
-            fxfycxcy_target = fxfycxcy_target * intrinsics_scale
-
         render = self.renderer(
             xyz,
             features,
@@ -1323,7 +1347,7 @@ class Sable(BaseLightningModel):
             img_aligned_xyz = rearrange(
                 img_aligned_xyz,
                 '(v hh ww ph pw) c -> v c (hh ph) (ww pw)',
-                v=v_input,
+                v=v_target,
                 hh=self.hh,
                 ww=self.ww,
                 ph=self.ph,
@@ -1339,6 +1363,10 @@ class Sable(BaseLightningModel):
             'image': data['image'],
             'pixelalign_xyz': pixelalign_xyz,
             'render': render_results.rendered_images,
+            'c2w_input': c2w_input,
+            'c2w_target': c2w_target,
+            'fxfycxcy_input': fxfycxcy_input,
+            'fxfycxcy_target': fxfycxcy_target,
         })
         return result
 

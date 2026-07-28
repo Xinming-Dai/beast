@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsx-delta-cpu
+#SBATCH -A bfsr-delta-cpu
 #SBATCH --job-name="pca_decompress"
 #SBATCH --partition=cpu
 #SBATCH -c 1
@@ -19,15 +19,15 @@ cd "$REPO_ROOT"
 # Requires step1's PCA bundle (PCA_NPZ) and step2's decoded output (DECODING_NPY); 
 # produces per-trial img_tokens_estimated*.npz, consumed by step4_decode_and_render.sh as --z-source.
 # Fill these in (or export before sbatch, e.g.:
-#   sbatch --export=ALL,EID=...,MODEL_ROOT=... \
+#   sbatch --export=ALL,EID=...,LATENT_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step3_unproject.sh
-EID="${EID:-<SESSION_ID>}"
-MODEL_ROOT="${MODEL_ROOT:-<MODEL_ROOT>}"
-LATENT_ROOT="${LATENT_ROOT:-<LATENT_ROOT>}"
-DECODING_NPY="${DECODING_NPY:-$LATENT_ROOT/img_tokens_compressed/$EID/decoding_results_img_tokens_compressed.npy}"
-PCA_NPZ="${PCA_NPZ:-$MODEL_ROOT/img_tokens_compressed/img_tokens_pca_joint.npz}"
-COMPRESSED_TRIALS_NPZ="${COMPRESSED_TRIALS_NPZ:-$MODEL_ROOT/img_tokens_compressed/img_tokens_compressed_trials.npz}"
-OUT_ROOT="${OUT_ROOT:-$MODEL_ROOT/img_tokens_compressed_estimated}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+MODEL_ROOT=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553/latents
+LATENT_ROOT=$MODEL_ROOT/img_tokens_compressed/$EID
+DECODING_NPY=$LATENT_ROOT/decoding_results_img_tokens_compressed.npy
+PCA_NPZ=$LATENT_ROOT/img_tokens_pca_joint.npz
+COMPRESSED_TRIALS_NPZ=$LATENT_ROOT/img_tokens_compressed_trials.npz
+OUT_ROOT=$LATENT_ROOT/img_tokens_compressed_estimated
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Unprojecting decoded img tokens for eid=$EID"
 
@@ -37,5 +37,7 @@ python -m beast.sable_encoding_decoding.img_token.unproject \
     --pca-npz "$PCA_NPZ" \
     --compressed-trials-npz "$COMPRESSED_TRIALS_NPZ" \
     --out-root "$OUT_ROOT"
+
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done unprojecting decoded img tokens for eid=$EID"
 
 conda deactivate

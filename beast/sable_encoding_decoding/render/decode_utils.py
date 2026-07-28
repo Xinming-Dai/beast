@@ -351,3 +351,43 @@ def write_render_done_marker(marker_path: Path, source_npz: Path) -> None:
     marker_path = Path(marker_path)
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(f'{Path(source_npz).resolve()}\n', encoding='utf-8')
+
+
+def _print_combined_metrics_summary(metrics_npz: Path, merged: dict[str, np.ndarray]) -> None:
+    """Emit one plain stdout line with the scalars written to the combined metrics `.npz`."""
+    ap = float(np.asarray(merged['average_psnr'], dtype=np.float64))
+    asim = float(np.asarray(merged['average_ssim'], dtype=np.float64))
+    se_p = float(np.asarray(merged['se_psnr'], dtype=np.float64))
+    se_s = float(np.asarray(merged['se_ssim'], dtype=np.float64))
+    print(
+        f'{metrics_npz}  average_psnr={ap:.6f} (SE={se_p:.6f})  '
+        f'average_ssim={asim:.6f} (SE={se_s:.6f})',
+        flush=True,
+    )
+
+
+def delete_decoded_token_sources(
+    npz_paths: list[Path],
+    *,
+    skip_indices: set[int] | None = None,
+) -> int:
+    """Delete decoded token `.npz` files under `--z-source` after metrics are saved.
+
+    Args:
+        npz_paths: source token `.npz` paths that were decoded and scored.
+        skip_indices: indices into `npz_paths` to leave alone (e.g. sources whose metrics
+            shard was never produced).
+
+    Returns:
+        Count of files actually removed.
+    """
+    skip = skip_indices or set()
+    removed = 0
+    for i, p in enumerate(npz_paths):
+        if i in skip:
+            continue
+        path = Path(p)
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    return removed

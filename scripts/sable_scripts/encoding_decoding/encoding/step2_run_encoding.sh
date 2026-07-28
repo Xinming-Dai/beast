@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A beez-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,10 +22,10 @@ cd "$REPO_ROOT"
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data   # root dir of neural (spike) data
 
 
-JOB_ID="20434515"                                         
-LATENT_INPUT_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID/latents
+JOB_ID="20014553"                                         
+LATENT_INPUT_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/$JOB_ID/latents
 LATENT_KIND="${1:-${LATENT_KIND:-frame}}"                  # frame | dino | combined
-EID="${2:-${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}}"
+EID="${2:-${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural encoding for eid=$EID with latent_kind=$LATENT_KIND"
 echo "LATENT_INPUT_DIR=$LATENT_INPUT_DIR"

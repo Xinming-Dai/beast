@@ -20,7 +20,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
-JOB_ID="20014553"
+JOB_ID="20503395"
 EIDS="${EIDS:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"                                           # space-separated session IDs (eids); default: use training config's session_names
 
 MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/$EIDS/$JOB_ID}"

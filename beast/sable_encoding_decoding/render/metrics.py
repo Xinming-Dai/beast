@@ -12,6 +12,10 @@ Metrics `.npz` schema (`K` trials, `T` time bins, `V` views):
 
 - `psnr`: `[K, T, V]`
 - `ssim`: `[K, T, V]`
+- `average_psnr`: scalar mean of `psnr`
+- `average_ssim`: scalar mean of `ssim`
+- `se_psnr`: scalar standard error of `psnr` (`nanstd / sqrt(n)`)
+- `se_ssim`: scalar standard error of `ssim` (`nanstd / sqrt(n)`)
 - `neural_trial_idx`: `[K]`
 - `neural_bin_idx`: `[K, T]`
 - `trial_split`: `[K]`
@@ -214,11 +218,17 @@ def save_psnr_ssim_metrics_npz(
     neural_trial_idx = np.concatenate(neural_trial_blocks, axis=0).astype(np.int64)
     neural_bin_idx = np.concatenate(neural_bin_blocks, axis=0).astype(np.int64)
     trial_split = np.concatenate(trial_split_blocks, axis=0).astype(str)
+    n_psnr = np.sum(~np.isnan(psnr))
+    n_ssim = np.sum(~np.isnan(ssim))
+    se_psnr = np.nanstd(psnr) / np.sqrt(n_psnr) if n_psnr > 0 else np.nan
+    se_ssim = np.nanstd(ssim) / np.sqrt(n_ssim) if n_ssim > 0 else np.nan
     arrays = {
         'psnr': psnr,
         'ssim': ssim,
         'average_psnr': np.asarray(np.nanmean(psnr), dtype=np.float32),
         'average_ssim': np.asarray(np.nanmean(ssim), dtype=np.float32),
+        'se_psnr': np.asarray(se_psnr, dtype=np.float32),
+        'se_ssim': np.asarray(se_ssim, dtype=np.float32),
         'neural_trial_idx': neural_trial_idx,
         'neural_bin_idx': neural_bin_idx,
         'trial_split': trial_split,
