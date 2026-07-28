@@ -1,5 +1,6 @@
 #!/bin/bash
-# Loss-weighting ablation — GPU 1 half (4 cells: reconstruction + gs_reg sweeps).
+# Loss-weighting ablation — GPU 1 half (3 cells: reconstruction + gs_reg sweeps).
+# cell_low-recon (10000 steps) completed separately.
 #
 # Pinned CUDA_VISIBLE_DEVICES=1; run in parallel with ablation_l2_percept_geom_gpu0_localssd.sh.
 # Dataset pinned to local NVMe (/localssd/jinqihang/...) — set DATASET_ROOT to override.
@@ -8,17 +9,16 @@ set -euo pipefail
 
 ROOT=${ROOT:-/cephfs/jinqihang/SABLE/outputs/loss_weighting}
 DATASET_ROOT=${DATASET_ROOT:-/localssd/jinqihang/datasets/beast3d-data/sable_ibl_4b00}
-ABLATION_STEPS=${ABLATION_STEPS:-10000}
+ABLATION_STEPS=${ABLATION_STEPS:-6000}
 # Warmup scaled to match plan v4 §6.3 pct_start = 0.15 (Mia's reference ratio):
-#   20000 steps -> 3000 warmup; 10000 steps -> 1500 warmup.
-ABLATION_WARMUP=${ABLATION_WARMUP:-1500}
+#   20000 steps -> 3000 warmup; 6000 steps -> 900 warmup.
+ABLATION_WARMUP=${ABLATION_WARMUP:-900}
 BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-24}     # effective batch 24
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-1}
 GPU_ID=${GPU_ID:-1}
 
-# This half's 4 cells: l2 + gs_reg sweeps.
+# This half's 3 cells (cell_low-recon completed at 10000 steps): l2 + gs_reg sweeps.
 CELLS=(
-  "low-recon  l2=0.5 p=0.3 g=1.0"
   "high-recon l2=2.0 p=0.3 g=1.0"
   "no-geom    l2=1.0 p=0.3 g=0.0"
   "high-geom  l2=1.0 p=0.3 g=2.0"
