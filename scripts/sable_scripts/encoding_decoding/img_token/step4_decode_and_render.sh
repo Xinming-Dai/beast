@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-01:00:00
+#SBATCH -t 0-00:40:00
 #SBATCH -J decode_and_render
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step4_decode_and_render_%j.log
 #SBATCH --export=ALL
@@ -21,8 +21,6 @@ cd "$REPO_ROOT"
 # Stage 4 feeds (real or decoded) img tokens through SABLE's decoder to reconstruct images, save point clouds, and/or compute PSNR/SSIM.
 # Requires step3's unprojected tokens (or raw step0 img tokens) as Z_SOURCE; produces
 # rendered frames under OUT_DIR, consumed by step5_generate_video.sh.
-# With --metrics-only, the Z_SOURCE token .npz files are deleted once psnr_ssim_metrics.npz
-# has been written, since they are large intermediates no longer needed after scoring.
 MODEL_ROOT=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553                   # dir with config.yaml + *best.ckpt
 EID=781b35fd-e1f0-4d14-b2bb-95b7263082bb
 

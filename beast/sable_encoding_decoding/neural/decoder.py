@@ -341,7 +341,7 @@ def train_cnn_decoder_with_tune(
     data_dict: dict[str, Any],
     num_samples: int = 10,
     tune_storage_path: str | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, dict[str, Any]]:
     """Ray-Tune hyperparameter search over `lr`/`wd` for `train_cnn_decoder`.
 
     Args:
@@ -350,8 +350,9 @@ def train_cnn_decoder_with_tune(
         tune_storage_path: Ray Tune experiment root directory; `None` uses Ray's default.
 
     Returns:
-        Final `train_cnn_decoder` result evaluated with the best config on the held-out
-        (last) split.
+        `{'test': test_result, 'val': val_result}`, each a `train_cnn_decoder` result
+        (mapping `eid -> result dict`) fit on `train` with the tuned best config and
+        evaluated on `test` or `val` respectively.
     """
     train_val_dict = {}
     for eid in data_dict:
@@ -377,6 +378,11 @@ def train_cnn_decoder_with_tune(
         train_test_dict[eid] = copy.deepcopy(data_dict[eid])
         train_test_dict[eid]['X'].pop(-2)
         train_test_dict[eid]['y'].pop(-2)
-    return train_cnn_decoder(
+    cnn_test_result = train_cnn_decoder(
         config=best_config, data_dict=train_test_dict, report_to_tune=False, verbose=True,
     )
+    # reuse train_val_dict (still [train, val]) for a second fit evaluated on val
+    cnn_val_result = train_cnn_decoder(
+        config=best_config, data_dict=train_val_dict, report_to_tune=False, verbose=True,
+    )
+    return {'test': cnn_test_result, 'val': cnn_val_result}

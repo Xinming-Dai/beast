@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from beast.api.model import Model
 from beast.data.sable_dataset import collate_with_correspondence_padding
@@ -413,6 +414,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help='Output .npz for --metrics-only (default: <out-dir>/psnr_ssim_metrics.npz).',
     )
+    p.add_argument(
+        '--finetune-ckpt-out',
+        type=Path,
+        default=None,
+        help=(
+            'If set, run one finetuning pass over all (npz, batch) pairs with gradients: '
+            "MSE(render, target), then save {'state_dict': model.state_dict()} once at the end."
+        ),
+    )
+    p.add_argument(
+        '--finetune-lr',
+        type=float,
+        default=1e-4,
+        help='AdamW learning rate when --finetune-ckpt-out is set.',
+    )
+    p.add_argument(
+        '--finetune-full-model',
+        action='store_true',
+        help=(
+            'Finetune all model parameters when --finetune-ckpt-out is set (default: only '
+            'image_token_decoder, upsampler, and renderer).'
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -509,9 +533,32 @@ def main(argv: list[str] | None = None) -> None:
 
     device = torch.device(args.device)
     model = wrapped.model.to(device)
-    model.eval()
-    p0 = next(model.parameters())
     log_step(f'Loaded model from {args.model_dir}', level='info')
+
+    do_finetune = args.finetune_ckpt_out is not None
+    optimizer = None
+    if do_finetune:
+        if args.finetune_full_model:
+            params = list(model.parameters())
+        else:
+            params = (
+                list(model.image_token_decoder.parameters())
+                + list(model.upsampler.parameters())
+                + list(model.renderer.parameters())
+            )
+        optimizer = torch.optim.AdamW(
+            params, lr=float(args.finetune_lr), weight_decay=0.05, betas=(0.9, 0.95),
+        )
+        model.train()
+        log_step(
+            f'Finetune: AdamW lr={args.finetune_lr} '
+            f"({'full model' if args.finetune_full_model else 'decoder+upsampler+renderer'}); "
+            f'checkpoint after loop -> {args.finetune_ckpt_out}',
+            level='info',
+        )
+    else:
+        model.eval()
+    p0 = next(model.parameters())
 
     training = config['training']
     dataset_cls = _resolve_dataset_class(
@@ -610,7 +657,7 @@ def main(argv: list[str] | None = None) -> None:
                 'may not match this .npz file, or --batch-size is inconsistent.',
             )
 
-        m = flat if args.metrics_only else min(int(args.max_render_samples), flat)
+        m = flat if (args.metrics_only or do_finetune) else min(int(args.max_render_samples), flat)
         log_step(
             f'  batch_idx={batch_idx}  K*T={flat}  render m={m}  ({npz_path.name})',
             level='info',
@@ -670,7 +717,7 @@ def main(argv: list[str] | None = None) -> None:
             f'n_tokens_per_view={n_tokens_per_view}',
             level='info',
         )
-        with torch.no_grad():
+        if do_finetune:
             result = model.predict_frame_from_all_tokens(
                 all_tokens,
                 c2w_input,
@@ -679,6 +726,16 @@ def main(argv: list[str] | None = None) -> None:
                 fxfycxcy_target,
                 data,
             )
+        else:
+            with torch.no_grad():
+                result = model.predict_frame_from_all_tokens(
+                    all_tokens,
+                    c2w_input,
+                    fxfycxcy_input,
+                    c2w_target,
+                    fxfycxcy_target,
+                    data,
+                )
         log_step(
             f'[{file_i + 1}/{n_npz}] predict_frame: done '
             f'render.shape={tuple(result.render.shape)}',
@@ -691,6 +748,17 @@ def main(argv: list[str] | None = None) -> None:
             result.target_image = torch.stack([imgs[i, tidx[i]] for i in range(m)], dim=0)
         else:
             result.target_image = data['image'][:m]
+
+        if do_finetune:
+            assert optimizer is not None
+            loss = F.mse_loss(result.render, result.target_image)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            log_step(
+                f'[{file_i + 1}/{n_npz}] finetune: L2_loss={float(loss.detach()):.6f}',
+                level='info',
+            )
 
         if args.metrics_only:
             log_step(
@@ -728,6 +796,14 @@ def main(argv: list[str] | None = None) -> None:
             )
             continue
 
+        if do_finetune:
+            log_step(
+                f'[{file_i + 1}/{n_npz}] Finetune mode: skip gaussian point clouds and render '
+                'visuals.',
+                level='info',
+            )
+            continue
+
         batch_out_dir = out_dir / f'batch_{batch_idx:04d}'
         vis_dir = batch_out_dir / 'render_visuals'
         batch_out_dir.mkdir(parents=True, exist_ok=True)
@@ -753,6 +829,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         write_render_done_marker(render_done_marker_path(out_dir, batch_idx), npz_path)
         log_step(f'[{file_i + 1}/{n_npz}] Done: {npz_path.name}', level='info')
+
+    if do_finetune:
+        ckpt_out = Path(args.finetune_ckpt_out).resolve()
+        ckpt_out.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({'state_dict': model.state_dict()}, ckpt_out)
+        log_step(f'Saved finetuned checkpoint to {ckpt_out}', level='info')
 
     if args.metrics_only:
         metrics_npz = resolve_metrics_npz_path(args.metrics_npz, out_dir)
