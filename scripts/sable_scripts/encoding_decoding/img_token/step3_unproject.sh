@@ -28,15 +28,17 @@ DECODING_NPY=$LATENT_ROOT/decoding_results_img_tokens_compressed.npy
 PCA_NPZ=$LATENT_ROOT/img_tokens_pca_joint.npz
 COMPRESSED_TRIALS_NPZ=$LATENT_ROOT/img_tokens_compressed_trials.npz
 OUT_ROOT=$LATENT_ROOT/img_tokens_compressed_estimated
+INCLUDE_SPLITS="${INCLUDE_SPLITS:-val,test}"
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Unprojecting decoded img tokens for eid=$EID"
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Unprojecting decoded img tokens for eid=$EID splits=$INCLUDE_SPLITS"
 
 python -m beast.sable_encoding_decoding.img_token.unproject \
     --eid "$EID" \
     --decoding-npy "$DECODING_NPY" \
     --pca-npz "$PCA_NPZ" \
     --compressed-trials-npz "$COMPRESSED_TRIALS_NPZ" \
-    --out-root "$OUT_ROOT"
+    --out-root "$OUT_ROOT" \
+    --include-splits "$INCLUDE_SPLITS"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done unprojecting decoded img tokens for eid=$EID"
 

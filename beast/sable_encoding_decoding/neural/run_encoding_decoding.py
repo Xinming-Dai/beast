@@ -453,13 +453,16 @@ def main() -> None:
                 f"CNN Encoding {eid} Test BPS: {cnn_result[eid]['bps']} "
                 f"Test R2: {cnn_result[eid]['r2']}",
             )
+            result_dict[eid] = {'cnn': cnn_result[eid]}
         elif eval_task == 'decoding':
             cnn_result = train_cnn_decoder_with_tune(
                 train_data, num_samples=30, tune_storage_path=tune_storage_path,
             )
-            print(f"CNN Decoding {eid} Test R2: {cnn_result[eid]['r2']}")
-
-        result_dict[eid] = {'cnn': cnn_result[eid]}
+            print(f"CNN Decoding {eid} Test R2: {cnn_result['test'][eid]['r2']}")
+            print(f"CNN Decoding {eid} Val R2: {cnn_result['val'][eid]['r2']}")
+            result_dict[eid] = {
+                'cnn': {'test': cnn_result['test'][eid], 'val': cnn_result['val'][eid]},
+            }
 
         save_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(save_path, result_dict)
@@ -576,9 +579,16 @@ def main() -> None:
         )
     elif eval_task == 'decoding':
         print(f"RRR Decoding {eid} Test R2: {rrr_result[eid]['r2']}")
-        print(f"CNN Decoding {eid} Test R2: {cnn_result[eid]['r2']}")
+        print(f"CNN Decoding {eid} Test R2: {cnn_result['test'][eid]['r2']}")
+        print(f"CNN Decoding {eid} Val R2: {cnn_result['val'][eid]['r2']}")
 
-    result_dict[eid] = {'rrr': rrr_result[eid], 'cnn': cnn_result[eid]}
+    if eval_task == 'encoding':
+        result_dict[eid] = {'rrr': rrr_result[eid], 'cnn': cnn_result[eid]}
+    else:
+        result_dict[eid] = {
+            'rrr': rrr_result[eid],
+            'cnn': {'test': cnn_result['test'][eid], 'val': cnn_result['val'][eid]},
+        }
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(save_path, result_dict)
