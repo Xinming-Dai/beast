@@ -171,6 +171,7 @@ class Model:
         load_gt_camera_params_for_vis: bool = False,
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
+        max_files_per_session: int | None = None,
     ) -> dict[str, Any]:
         """Run Sable inference over a scene dataset and save PLY point clouds.
 
@@ -196,6 +197,9 @@ class Model:
             max_batches: stop after this many batches; None runs the full dataset.
             session_names: session IDs to load. Accepts a list or a single string.
                 When ``None``, the value from the saved training config is used.
+            max_files_per_session: cap on the number of PLY/GLB files saved per
+                session; when set, outputs are grouped into per-session subfolders.
+                ``None`` (default) saves every item into the flat, unlimited layout.
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files',
@@ -235,6 +239,7 @@ class Model:
             save_camera_pointcloud_scene=save_camera_pointcloud_scene,
             max_batches=max_batches,
             include_splits=splits,
+            max_files_per_session=max_files_per_session,
         )
 
     def extract_sable_latents(

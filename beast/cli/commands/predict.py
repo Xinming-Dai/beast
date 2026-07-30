@@ -126,6 +126,12 @@ def register_parser(subparsers: Any) -> None:
         metavar='SESSION',
         help='session IDs to load (default: use value from saved training config)',
     )
+    sable_group.add_argument(
+        '--max-files-per-session',
+        type=int,
+        default=None,
+        help='Cap saved PLY/GLB files per session and group outputs into per-session subfolders',
+    )
 
     # Sable latent extraction options
     latent_group = parser.add_argument_group('Sable latent extraction options')
@@ -223,6 +229,7 @@ def _handle_sable(args, model):
         load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
         max_batches=args.max_batches,
         session_names=args.session_names,
+        max_files_per_session=args.max_files_per_session,
     )
 
 

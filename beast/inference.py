@@ -6,6 +6,7 @@ import os
 import pickle
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import cv2
@@ -843,6 +844,8 @@ def save_gaussian_pointclouds(
     output_dir: str | Path,
     batch_idx: int,
     max_samples: int | None = None,
+    session_ids: list[str] | None = None,
+    sample_indices: list[int] | None = None,
 ) -> list[Path]:
     """Save Gaussian centers from one Sable batch output as PLY point clouds.
 
@@ -856,10 +859,15 @@ def save_gaussian_pointclouds(
             ([B, V, 3, H, W] in [0, 1]), ``'target_mask'`` ([B, V, 1, H, W]), and
             ``'target_gaussian_mask'`` ([B, V, hh*ww*ph*pw]).
         output_dir: root output directory; PLY files are written under
-            ``output_dir / 'ply'``.
+            ``output_dir / 'ply'``, or ``output_dir / 'ply' / session_ids[sample_idx]``
+            when ``session_ids`` is given.
         batch_idx: used in the output filename
             ``pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply``.
         max_samples: cap on the number of batch items to save.  ``None`` saves all.
+        session_ids: one session ID per batch item; when given, files are grouped into
+            a per-session subfolder instead of a flat ``ply`` directory.
+        sample_indices: batch item indices to save; when given, all other items are
+            skipped. ``None`` saves every item (subject to ``max_samples``).
 
     Returns:
         list of Path objects for the PLY files that were written.
@@ -870,7 +878,6 @@ def save_gaussian_pointclouds(
 
     output_dir = Path(output_dir)
     ply_dir = output_dir / 'ply'
-    ply_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         import open3d as o3d
@@ -882,12 +889,16 @@ def save_gaussian_pointclouds(
     for sample_idx, gs in enumerate(gaussians_list):
         if max_samples is not None and sample_idx >= max_samples:
             break
+        if sample_indices is not None and sample_idx not in sample_indices:
+            continue
 
         xyz, rgb01, used_pixel_colors = _extract_pointcloud_xyz_rgb(result, sample_idx, gs)
         if xyz.size == 0:
             continue
 
-        out_ply = ply_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
+        sample_dir = ply_dir / session_ids[sample_idx] if session_ids is not None else ply_dir
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        out_ply = sample_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
 
         if has_o3d:
             pcd = o3d.geometry.PointCloud()
@@ -940,6 +951,8 @@ def save_camera_pointcloud_scene(
     batch_idx: int,
     max_samples: int | None = None,
     screen_width: float | None = None,
+    session_ids: list[str] | None = None,
+    sample_indices: list[int] | None = None,
 ) -> list[Path]:
     """Save the predicted point cloud together with camera frustums as a .glb scene.
 
@@ -980,6 +993,10 @@ def save_camera_pointcloud_scene(
             regardless of the scene's absolute coordinate scale (Cheese3D point clouds
             span ~100s of units, unlike the ~1-2 unit scale a fixed absolute default
             was originally tuned for).
+        session_ids: one session ID per batch item; when given, files are grouped into
+            a per-session subfolder instead of a flat ``glb`` directory.
+        sample_indices: batch item indices to save; when given, all other items are
+            skipped. ``None`` saves every item (subject to ``max_samples``).
 
     Returns:
         list of Path objects for the .glb files that were written.
@@ -1003,7 +1020,6 @@ def save_camera_pointcloud_scene(
 
     output_dir = Path(output_dir)
     glb_dir = output_dir / 'glb'
-    glb_dir.mkdir(parents=True, exist_ok=True)
 
     cmap = matplotlib.colormaps['hsv']
     gt_color = np.array([0, 0, 0], dtype=np.uint8)
@@ -1012,6 +1028,8 @@ def save_camera_pointcloud_scene(
     for sample_idx, gs in enumerate(gaussians_list):
         if max_samples is not None and sample_idx >= max_samples:
             break
+        if sample_indices is not None and sample_idx not in sample_indices:
+            continue
         if sample_idx >= c2w_input.shape[0] or sample_idx >= c2w_target.shape[0]:
             continue
 
@@ -1082,7 +1100,9 @@ def save_camera_pointcloud_scene(
                     screen_width=sample_screen_width,
                 )
 
-        out_glb = glb_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
+        sample_dir = glb_dir / session_ids[sample_idx] if session_ids is not None else glb_dir
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        out_glb = sample_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
         scene.export(out_glb)
 
         log_step(
@@ -1186,6 +1206,31 @@ def _build_sable_inference_loader(
     return dataset, loader
 
 
+def _select_samples_within_session_quota(
+    session_ids: list[str],
+    session_counts: dict[str, int],
+    max_per_session: int,
+) -> list[int]:
+    """Pick batch-item indices whose session hasn't yet reached its output quota.
+
+    Args:
+        session_ids: one session ID per batch item.
+        session_counts: running count of items already selected per session; updated
+            in place for every index this call selects.
+        max_per_session: max number of items allowed per session.
+
+    Returns:
+        list of batch-item indices whose session was still under quota.
+    """
+    selected = []
+    for idx, session_id in enumerate(session_ids):
+        if session_counts.get(session_id, 0) >= max_per_session:
+            continue
+        session_counts[session_id] = session_counts.get(session_id, 0) + 1
+        selected.append(idx)
+    return selected
+
+
 def infer_sable(
     config: dict,
     model,
@@ -1195,6 +1240,7 @@ def infer_sable(
     save_visuals: bool = False,
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
+    max_files_per_session: int | None = None,
 ) -> dict:
     """Run Sable inference over an IBL dataset and optionally save PLY point clouds.
 
@@ -1211,6 +1257,11 @@ def infer_sable(
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
             ``'train'``, ``'val'``, and ``'test'``.
+        max_files_per_session: cap on the number of PLY/GLB files saved per session.
+            When set, PLY/GLB outputs are grouped into per-session subfolders
+            (``output_dir/ply/{session_id}/`` and ``output_dir/glb/{session_id}/``) and
+            batches whose items are all past quota skip the forward pass entirely.
+            ``None`` (default) saves every item into the flat, unlimited layout.
 
     Returns:
         dict with keys:
@@ -1235,11 +1286,43 @@ def infer_sable(
     all_glb: list[Path] = []
     all_vis: list[Path] = []
     num_batches = 0
+    session_counts: dict[str, int] = {}
+
+    target_sessions: set[str] | None = None
+    if max_files_per_session is not None:
+        configured_sessions = config.get('training', {}).get('session_names')
+        if isinstance(configured_sessions, str):
+            configured_sessions = [configured_sessions]
+        if configured_sessions:
+            target_sessions = set(configured_sessions)
+
+    def _all_target_sessions_satisfied() -> bool:
+        if target_sessions is None:
+            return False
+        satisfied = {
+            sid for sid, count in session_counts.items() if count >= max_files_per_session
+        }
+        return target_sessions <= satisfied
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(loader):
             if max_batches is not None and batch_idx >= max_batches:
                 break
+
+            session_ids = None
+            sample_indices = None
+            if max_files_per_session is not None:
+                session_ids = [
+                    session_id for session_id, _ in
+                    (_parse_scene_name(scene_name) for scene_name in batch['scene_name'])
+                ]
+                sample_indices = _select_samples_within_session_quota(
+                    session_ids, session_counts, max_files_per_session,
+                )
+                if not sample_indices:
+                    if _all_target_sessions_satisfied():
+                        break
+                    continue
 
             batch = {
                 k: v.to(device) if torch.is_tensor(v) else v
@@ -1249,23 +1332,34 @@ def infer_sable(
             result = model.get_model_outputs(batch)
 
             if save_pointclouds:
-                ply_paths = save_gaussian_pointclouds(result, output_dir, batch_idx)
+                ply_paths = save_gaussian_pointclouds(
+                    result, output_dir, batch_idx,
+                    session_ids=session_ids, sample_indices=sample_indices,
+                )
                 all_ply.extend(ply_paths)
 
             if save_camera_pointcloud_scene:
-                glb_paths = _save_camera_pointcloud_scene_fn(result, output_dir, batch_idx)
+                glb_paths = _save_camera_pointcloud_scene_fn(
+                    result, output_dir, batch_idx,
+                    session_ids=session_ids, sample_indices=sample_indices,
+                )
                 all_glb.extend(glb_paths)
 
             if save_visuals:
                 vis_paths = save_training_visuals(
                     output_dir / 'png',
-                    result=result,
+                    result=SimpleNamespace(**result),
                     batch=batch,
                     step=batch_idx,
+                    session_ids=session_ids,
+                    sample_indices=sample_indices,
                 )
                 all_vis.extend(vis_paths or [])
 
             num_batches += 1
+
+            if max_files_per_session is not None and _all_target_sessions_satisfied():
+                break
 
     log_step(
         f'infer_sable: processed {num_batches} batches, '

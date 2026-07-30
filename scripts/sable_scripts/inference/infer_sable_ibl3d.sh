@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH -t 0-00:10:00
-#SBATCH -J erz_infer
-#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_%j.log
+#SBATCH -J erz_infer_multisession
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_multisession_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -16,20 +16,28 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID="${JOB_ID:-19575256}"
+JOB_ID="${JOB_ID:-20434515}"
 
 STAGE=finetune
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/$EID/$JOB_ID}"
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID}"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
 
-SPLITS="${SPLITS:-train val}"
-SAVE_VISUALS="${SAVE_VISUALS:-0}"
+SPLITS="${SPLITS:-val}"
+SAVE_VISUALS="${SAVE_VISUALS:-1}"
+SAVE_GLB="${SAVE_GLB:-1}"
 MAX_BATCHES="${MAX_BATCHES:-}"
+
+# Space-separated override of the sessions to run inference on. Leave unset to use
+# every session the model was trained on (training.session_names from config.yaml).
+SESSION_NAMES="${SESSION_NAMES:-}"
+
+# Max PLY + GLB files saved per session; outputs are grouped under ply/<session>/ and
+# glb/<session>/ so it's clear which session each file came from.
+MAX_FILES_PER_SESSION="${MAX_FILES_PER_SESSION:-10}"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
@@ -55,8 +63,11 @@ Model dir:             $MODEL_DIR
 Dataset path:          $DATASET_PATH
 Output dir:            $OUTPUT_DIR
 Splits:                $SPLITS
-Save visuals:          $SAVE_VISUALS
-Max batches:           ${MAX_BATCHES:-(all)}
+Session names:         ${SESSION_NAMES:-(all sessions from saved training config)}
+Max files per session: $MAX_FILES_PER_SESSION
+Save visuals:           $SAVE_VISUALS
+Save GLB scenes:        $SAVE_GLB
+Max batches:            ${MAX_BATCHES:-(all)}
 TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
 EOF
@@ -82,11 +93,13 @@ cd "$REPO_ROOT"
 PREDICT_ARGS=(
     --model "$MODEL_DIR"
     --input "$DATASET_PATH"
-    --session-names "$EID"
     --output "$OUTPUT_DIR"
     --splits $SPLITS
+    --max-files-per-session "$MAX_FILES_PER_SESSION"
 )
+[ -n "$SESSION_NAMES" ]  && PREDICT_ARGS+=(--session-names $SESSION_NAMES)
 [ "$SAVE_VISUALS" = "1" ] && PREDICT_ARGS+=(--save-visuals)
+[ "$SAVE_GLB" = "1" ]     && PREDICT_ARGS+=(--save-camera-pointcloud-scene)
 [ -n "$MAX_BATCHES" ]     && PREDICT_ARGS+=(--max-batches "$MAX_BATCHES")
 
 beast predict "${PREDICT_ARGS[@]}"
