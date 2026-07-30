@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -24,6 +25,8 @@ from beast.inference import (
     _parse_scene_name,
     _resume_batch_start,
     _save_latent_batch_npz,
+    combine_eval_layout_img_tokens,
+    extract_eval_layout_img_token_batches,
     extract_sable_latents,
     predict_images,
     predict_video,
@@ -165,6 +168,29 @@ class TestImagePredictionHandler:
         loaded_latents = np.load(saved_path)
         np.testing.assert_array_almost_equal(loaded_latents, latents.detach().cpu().numpy())
 
+    def test_save_img_tokens(self, handler, temp_dirs):
+        """Test saving the per-patch token grid and its matching ids_restore."""
+        source_dir, output_dir = temp_dirs
+        original_path = source_dir / 'video1' / 'frame001.png'
+        img_tokens = torch.rand(196, 768)
+        ids_restore = torch.arange(196)
+
+        tokens_path, restore_path = handler.save_img_tokens(
+            img_tokens, ids_restore, 'video1', 0, original_path,
+        )
+
+        expected_tokens_path = output_dir / 'img_tokens' / 'video1' / 'frame001.npy'
+        expected_restore_path = output_dir / 'ids_restore' / 'video1' / 'frame001.npy'
+        assert tokens_path == expected_tokens_path
+        assert restore_path == expected_restore_path
+        assert tokens_path.exists()
+        assert restore_path.exists()
+
+        np.testing.assert_array_almost_equal(
+            np.load(tokens_path), img_tokens.detach().cpu().numpy(),
+        )
+        np.testing.assert_array_equal(np.load(restore_path), ids_restore.detach().cpu().numpy())
+
     def test_process_batch_predictions_reconstructions_only(
         self, handler, sample_batch_tensor, sample_latents, sample_metadata,
     ):
@@ -250,6 +276,30 @@ class TestImagePredictionHandler:
         for metadata in result['metadata']:
             assert 'reconstruction_path' in metadata
             assert 'latents_path' in metadata
+
+    def test_process_batch_predictions_img_tokens(
+        self, handler, sample_latents, sample_metadata,
+    ):
+        """Test processing batch with img_tokens + ids_restore requested."""
+        predictions = {
+            'latents': sample_latents,
+            'img_tokens': torch.rand(2, 196, 768),
+            'ids_restore': torch.arange(196).unsqueeze(0).repeat(2, 1),
+        }
+
+        result = handler.process_batch_predictions(
+            predictions,
+            sample_metadata,
+            save_reconstructions=False,
+            save_latents=False,
+            save_img_tokens=True,
+        )
+
+        assert len(result['img_tokens']) == 2
+        assert len(result['ids_restore']) == 2
+        for metadata in result['metadata']:
+            assert 'img_tokens_path' in metadata
+            assert 'ids_restore_path' in metadata
 
     def test_save_metadata_summary(self, handler, temp_dirs):
         """Test saving metadata summary to YAML."""
@@ -1359,3 +1409,281 @@ class TestExtractSableLatents:
         ]
         # img_tokens batch file untouched
         assert _batch_output_path(temp_output_dir, 'img_tokens', 'sess0', 'train', 0).is_file()
+
+
+class TestCombineEvalLayoutImgTokens:
+    """Test suite for `combine_eval_layout_img_tokens`."""
+
+    def _write_eval_layout_view(
+        self,
+        tmp_path: Path,
+        view: str,
+        *,
+        num_frames: int,
+        num_patches: int = 4,
+        hidden_size: int = 8,
+    ) -> tuple[Path, Path, Path]:
+        """Write one view's eval-layout input dir + img_tokens/ids_restore output dirs.
+
+        Two trials (neural_trial_idx 0 and 1) of `num_frames` timebins each, all in the
+        'train' split.
+        """
+        input_dir = tmp_path / f'{view}_input'
+        img_tokens_dir = tmp_path / f'{view}_output' / 'img_tokens'
+        ids_restore_dir = tmp_path / f'{view}_output' / 'ids_restore'
+        (input_dir / 'train').mkdir(parents=True)
+        (img_tokens_dir / 'train').mkdir(parents=True)
+        (ids_restore_dir / 'train').mkdir(parents=True)
+
+        mapping = {}
+        rng = np.random.default_rng(0 if view == 'left' else 1)
+        for trial_idx in range(2):
+            for bin_idx in range(num_frames):
+                stem = f'interval{trial_idx}timebin{bin_idx}'
+                mapping[f'{stem}.png'] = {
+                    'neural_trial_idx': trial_idx,
+                    'neural_bin_idx': bin_idx,
+                    'neural_interval_sec': [0.0, 1.0],
+                }
+                np.save(
+                    img_tokens_dir / 'train' / f'{stem}.npy',
+                    rng.random((num_patches, hidden_size)).astype(np.float32),
+                )
+                np.save(
+                    ids_restore_dir / 'train' / f'{stem}.npy',
+                    np.arange(num_patches, dtype=np.int64),
+                )
+
+        with (input_dir / 'train' / 'frame_index_mapping.json').open('w') as f:
+            json.dump(mapping, f)
+
+        return input_dir, img_tokens_dir, ids_restore_dir
+
+    def test_combine_eval_layout_img_tokens_writes_trials_and_sidecar(
+        self, tmp_path,
+    ) -> None:
+        left_input, left_tokens, left_restore = self._write_eval_layout_view(
+            tmp_path, 'left', num_frames=3,
+        )
+        right_input, right_tokens, right_restore = self._write_eval_layout_view(
+            tmp_path, 'right', num_frames=3,
+        )
+        output_path = tmp_path / 'img_tokens_trials.npz'
+
+        result_path, restore_path = combine_eval_layout_img_tokens(
+            left_input_dir=left_input,
+            right_input_dir=right_input,
+            left_img_tokens_dir=left_tokens,
+            right_img_tokens_dir=right_tokens,
+            left_ids_restore_dir=left_restore,
+            right_ids_restore_dir=right_restore,
+            output_path=output_path,
+            splits=('train',),
+        )
+
+        assert result_path == output_path
+        assert result_path.is_file()
+        assert restore_path.is_file()
+        assert restore_path.name == 'ids_restore_img_tokens_trials.npz'
+
+        with np.load(result_path) as d:
+            # 2 trials, 3 timebins, 2 views, 4 patches, 8-dim; only 'train' was requested, so
+            # val/test keys (which _per_split_kw_for_aux only emits for requested splits) are
+            # absent rather than empty placeholders
+            assert d['train_z_trials_time'].shape == (2, 3, 2, 4, 8)
+            assert 'val_z_trials_time' not in d.files
+            assert 'test_z_trials_time' not in d.files
+            assert sorted(d['neural_trial_idx'].tolist()) == [0, 1]
+
+        with np.load(restore_path) as d:
+            assert d['train_ids_restore'].shape == (2, 3, 2, 4)
+            restored = d['train_ids_restore'].astype(np.int64)
+            np.testing.assert_array_equal(restored[0, 0, 0], np.arange(4))
+
+    def test_combine_eval_layout_img_tokens_raises_when_no_trials_found(
+        self, tmp_path,
+    ) -> None:
+        left_input, left_tokens, left_restore = self._write_eval_layout_view(
+            tmp_path, 'left', num_frames=0,
+        )
+        right_input, right_tokens, right_restore = self._write_eval_layout_view(
+            tmp_path, 'right', num_frames=0,
+        )
+        # remove the (empty) frame_index_mapping.json so no split is found at all
+        (left_input / 'train' / 'frame_index_mapping.json').unlink()
+        (right_input / 'train' / 'frame_index_mapping.json').unlink()
+
+        with pytest.raises(ValueError, match='no trials found'):
+            combine_eval_layout_img_tokens(
+                left_input_dir=left_input,
+                right_input_dir=right_input,
+                left_img_tokens_dir=left_tokens,
+                right_img_tokens_dir=right_tokens,
+                left_ids_restore_dir=left_restore,
+                right_ids_restore_dir=right_restore,
+                output_path=tmp_path / 'out.npz',
+                splits=('train',),
+            )
+
+
+class TestExtractEvalLayoutImgTokenBatches:
+    """Test suite for `extract_eval_layout_img_token_batches`."""
+
+    def _write_eval_layout_view(
+        self,
+        tmp_path: Path,
+        view: str,
+        *,
+        num_frames: int,
+        num_patches: int = 4,
+        hidden_size: int = 8,
+    ) -> tuple[Path, Path, Path, Path]:
+        """Write one view's eval-layout input dir + img_tokens/ids_restore output dirs.
+
+        Two trials (neural_trial_idx 0 and 1) of `num_frames` timebins each, all in the
+        'train' split.
+        """
+        input_dir = tmp_path / f'{view}_input'
+        img_tokens_dir = tmp_path / f'{view}_output' / 'img_tokens'
+        ids_restore_dir = tmp_path / f'{view}_output' / 'ids_restore'
+        (input_dir / 'train').mkdir(parents=True)
+        (img_tokens_dir / 'train').mkdir(parents=True)
+        (ids_restore_dir / 'train').mkdir(parents=True)
+
+        mapping = {}
+        rng = np.random.default_rng(0 if view == 'left' else 1)
+        for trial_idx in range(2):
+            for bin_idx in range(num_frames):
+                stem = f'interval{trial_idx}timebin{bin_idx}'
+                mapping[f'{stem}.png'] = {
+                    'neural_trial_idx': trial_idx,
+                    'neural_bin_idx': bin_idx,
+                    'neural_interval_sec': [0.0, 1.0],
+                }
+                np.save(
+                    img_tokens_dir / 'train' / f'{stem}.npy',
+                    rng.random((num_patches, hidden_size)).astype(np.float32),
+                )
+                np.save(
+                    ids_restore_dir / 'train' / f'{stem}.npy',
+                    np.arange(num_patches, dtype=np.int64),
+                )
+
+        with (input_dir / 'train' / 'frame_index_mapping.json').open('w') as f:
+            json.dump(mapping, f)
+
+        return input_dir, img_tokens_dir, ids_restore_dir, tmp_path / f'{view}_output' / 'raw'
+
+    def test_extract_eval_layout_img_token_batches_writes_shards(self, tmp_path) -> None:
+        left_input, left_tokens, left_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'left', num_frames=3, num_patches=4, hidden_size=8,
+        )
+        right_input, right_tokens, right_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'right', num_frames=3, num_patches=4, hidden_size=8,
+        )
+        output_dir = tmp_path / 'sharded'
+
+        # 6 rows total (2 trials x 3 timebins), batch_size=4 -> 2 shards
+        written = extract_eval_layout_img_token_batches(
+            left_input_dir=left_input,
+            right_input_dir=right_input,
+            left_img_tokens_dir=left_tokens,
+            right_img_tokens_dir=right_tokens,
+            left_ids_restore_dir=left_restore,
+            right_ids_restore_dir=right_restore,
+            output_dir=output_dir,
+            session_id='sess1',
+            batch_size=4,
+            splits=('train',),
+        )
+
+        assert len(written) == 2
+        for path in written:
+            assert path.is_file()
+            assert path.parent == output_dir / 'img_tokens' / 'sess1' / 'train'
+
+        shard0 = np.load(written[0], allow_pickle=True)
+        assert shard0['z'].shape == (4, 8, 8)  # 4 rows, 2*num_patches=8 merged tokens, D=8
+        assert shard0['ids_restore'].shape == (4, 8)
+        assert set(shard0['trial_split'].tolist()) == {'train'}
+        assert shard0['session_id'].tolist() == ['sess1'] * 4
+
+        shard1 = np.load(written[1], allow_pickle=True)
+        assert shard1['z'].shape[0] == 2  # remaining 2 rows
+
+    def test_extract_eval_layout_img_token_batches_merges_camera_axis(self, tmp_path) -> None:
+        left_input, left_tokens, left_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'left', num_frames=1, num_patches=3, hidden_size=5,
+        )
+        right_input, right_tokens, right_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'right', num_frames=1, num_patches=3, hidden_size=5,
+        )
+        output_dir = tmp_path / 'sharded'
+
+        extract_eval_layout_img_token_batches(
+            left_input_dir=left_input,
+            right_input_dir=right_input,
+            left_img_tokens_dir=left_tokens,
+            right_img_tokens_dir=right_tokens,
+            left_ids_restore_dir=left_restore,
+            right_ids_restore_dir=right_restore,
+            output_dir=output_dir,
+            session_id='sess1',
+            batch_size=8,
+            splits=('train',),
+        )
+
+        [shard_path] = list((output_dir / 'img_tokens' / 'sess1' / 'train').glob('*.npz'))
+        shard = np.load(shard_path, allow_pickle=True)
+        left_tok = np.load(left_tokens / 'train' / 'interval0timebin0.npy')
+        right_tok = np.load(right_tokens / 'train' / 'interval0timebin0.npy')
+        row = next(
+            i for i, (t, b) in enumerate(
+                zip(shard['neural_trial_idx'], shard['neural_bin_idx'], strict=True),
+            )
+            if (t, b) == (0, 0)
+        )
+        merged = shard['z'][row]
+        np.testing.assert_array_equal(merged[:3], left_tok)
+        np.testing.assert_array_equal(merged[3:], right_tok)
+
+    def test_extract_eval_layout_img_token_batches_round_trips_through_assembler(
+        self, tmp_path,
+    ) -> None:
+        from beast.sable_encoding_decoding.img_token.trials_assembly import (
+            assemble_z_trials_time_from_inference_batches,
+        )
+
+        left_input, left_tokens, left_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'left', num_frames=3, num_patches=4, hidden_size=8,
+        )
+        right_input, right_tokens, right_restore, _ = self._write_eval_layout_view(
+            tmp_path, 'right', num_frames=3, num_patches=4, hidden_size=8,
+        )
+        output_dir = tmp_path / 'sharded'
+
+        extract_eval_layout_img_token_batches(
+            left_input_dir=left_input,
+            right_input_dir=right_input,
+            left_img_tokens_dir=left_tokens,
+            right_img_tokens_dir=right_tokens,
+            left_ids_restore_dir=left_restore,
+            right_ids_restore_dir=right_restore,
+            output_dir=output_dir,
+            session_id='sess1',
+            batch_size=4,
+            splits=('train',),
+        )
+
+        assembly = assemble_z_trials_time_from_inference_batches(
+            input_dir=output_dir / 'img_tokens' / 'sess1',
+            include_splits='train',
+            time_bins=3,
+            file_prefix='img_tokens',
+            extra_aux_keys=frozenset({'ids_restore'}),
+        )
+
+        # 2 trials, 3 timebins, 2*4=8 merged tokens, D=8
+        assert assembly.z_trials_time.shape == (2, 3, 8, 8)
+        assert assembly.aux_trials is not None
+        assert assembly.aux_trials['ids_restore'].shape == (2, 3, 8)
