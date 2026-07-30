@@ -533,6 +533,7 @@ def assemble_from_inference_batch_npz(
     batch_npz_files: list[tuple[int, Path]],
     include_splits: set[str],
     default_n_bins: int,
+    extra_aux_keys: frozenset[str] = frozenset(),
 ) -> tuple[
     np.ndarray,
     list[str],
@@ -557,9 +558,14 @@ def assemble_from_inference_batch_npz(
       bin directly into the pre-allocated array.
 
     Peak RSS is approximately 1x the final array plus the `z` array of one batch file at a time.
+
+    `extra_aux_keys` extends the recognized set of per-row aux arrays beyond
+    `IMG_TOKEN_CAM_BATCH_KEYS` (e.g. `'ids_restore'`) — any key in this set found in a batch
+    file's `.npz` payload is merged into `z_trials_time`'s shape alongside the camera arrays.
     """
     n_bins = int(default_n_bins)
     n_files_total = len(batch_npz_files)
+    recognized_aux_keys = frozenset(IMG_TOKEN_CAM_BATCH_KEYS) | extra_aux_keys
 
     # ------------------------------------------------------------------ #
     # pass 1 - metadata only; no z arrays loaded                          #
@@ -597,13 +603,13 @@ def assemble_from_inference_batch_npz(
         ts = np.asarray(data['trial_split'], dtype=object)
         sid = np.asarray(data['session_id'], dtype=object)
 
-        aux_keys_f = frozenset(k for k in IMG_TOKEN_CAM_BATCH_KEYS if k in data.files)
+        aux_keys_f = frozenset(k for k in recognized_aux_keys if k in data.files)
         if batch_aux_ref is None:
             batch_aux_ref = aux_keys_f
         elif aux_keys_f != batch_aux_ref:
             data.close()
             raise ValueError(
-                f'{path}: img_token camera keys {sorted(aux_keys_f)} != '
+                f'{path}: img_token aux keys {sorted(aux_keys_f)} != '
                 f'{sorted(batch_aux_ref)} in other batch npz files',
             )
 
@@ -843,6 +849,7 @@ def assemble_from_inference_batch_npz_split_roots(
     include_splits: set[str],
     default_n_bins: int,
     file_prefix: str,
+    extra_aux_keys: frozenset[str] = frozenset(),
 ) -> tuple[
     np.ndarray,
     list[str],
@@ -879,6 +886,7 @@ def assemble_from_inference_batch_npz_split_roots(
             batch_npz_files=batch_files,
             include_splits={sp},
             default_n_bins=default_n_bins,
+            extra_aux_keys=extra_aux_keys,
         )
         assembled[sp] = tup
         st = tup[2]
@@ -1272,6 +1280,7 @@ def assemble_z_trials_time_from_inference_batches(
     time_bins: int = 60,
     file_prefix: str = 'depth_fused_z',
     split_subdirs: bool | None = None,
+    extra_aux_keys: frozenset[str] = frozenset(),
 ) -> ZTrialsAssembly:
     """Merge inference intermediates under `input_dir` into a `ZTrialsAssembly`.
 
@@ -1290,6 +1299,9 @@ def assemble_z_trials_time_from_inference_batches(
             `'img_tokens'`).
         split_subdirs: `True`/`False` to force split-subdirectory batch discovery on/off, or `None`
             for the auto heuristic (see `resolve_use_split_subdirs_batch`).
+        extra_aux_keys: additional per-row aux array names to recognize in batch `.npz` files,
+            beyond `IMG_TOKEN_CAM_BATCH_KEYS` (e.g. `'ids_restore'`). Only used by the
+            split-subdirectory and tree-wide batch-npz assembly modes.
 
     Returns:
         A `ZTrialsAssembly` with the merged latents and associated per-trial metadata.
@@ -1351,6 +1363,7 @@ def assemble_z_trials_time_from_inference_batches(
             include_splits=include_set,
             default_n_bins=time_bins,
             file_prefix=file_prefix,
+            extra_aux_keys=extra_aux_keys,
         )
         meta = {
             'source_dir': str(input_dir),
@@ -1381,6 +1394,7 @@ def assemble_z_trials_time_from_inference_batches(
             batch_npz_files=batch_npz_files,
             include_splits=include_set,
             default_n_bins=time_bins,
+            extra_aux_keys=extra_aux_keys,
         )
         meta = {
             'source_dir': str(input_dir),

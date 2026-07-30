@@ -101,6 +101,7 @@ class VisionTransformer(BaseLightningModel):
         self,
         x: Float[torch.Tensor, 'batch channels img_height img_width'],
         return_recon: bool = True,
+        return_img_tokens: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Run ViT-MAE forward pass with optional reconstruction and contrastive projection.
 
@@ -108,14 +109,18 @@ class VisionTransformer(BaseLightningModel):
         ----------
         x: input image batch of shape (batch, channels, height, width)
         return_recon: whether to compute and return reconstructed images
+        return_img_tokens: whether to also return the full per-patch token grid
+            ('img_tokens') and its matching 'ids_restore', for later decoding
 
         Returns
         -------
         dict with 'latents' and 'loss', plus optional 'reconstructions',
-        'perceptual_loss', 'z', and 'cls_token'
+        'perceptual_loss', 'z', 'cls_token', 'img_tokens', and 'ids_restore'
 
         """
-        results_dict = self.vit_mae(pixel_values=x, return_recon=return_recon)
+        results_dict = self.vit_mae(
+            pixel_values=x, return_recon=return_recon, return_img_tokens=return_img_tokens,
+        )
         if (
             self.config['model']['model_params'].get('use_perceptual_loss', False)
             and 'reconstructions' in results_dict
@@ -138,6 +143,7 @@ class VisionTransformer(BaseLightningModel):
         batch_dict: dict,
         return_images: bool = True,
         return_reconstructions: bool = True,
+        return_img_tokens: bool = False,
     ) -> dict:
         """Run forward pass and return results dict.
 
@@ -146,6 +152,7 @@ class VisionTransformer(BaseLightningModel):
         batch_dict: dict containing 'image' tensor
         return_images: whether to include input images in results
         return_reconstructions: whether to compute and return reconstructed images
+        return_img_tokens: whether to also return 'img_tokens' and 'ids_restore'
 
         Returns
         -------
@@ -153,7 +160,9 @@ class VisionTransformer(BaseLightningModel):
 
         """
         x = batch_dict['image']
-        results_dict = self.forward(x, return_recon=return_reconstructions)
+        results_dict = self.forward(
+            x, return_recon=return_reconstructions, return_img_tokens=return_img_tokens,
+        )
         if return_images:
             results_dict['images'] = x
         return results_dict
@@ -219,9 +228,11 @@ class VisionTransformer(BaseLightningModel):
 
         Returns
         -------
-        dict with 'latents' (CLS tokens), optional 'reconstructions', and 'metadata'
+        dict with 'latents' (CLS tokens), optional 'reconstructions', 'img_tokens',
+        'ids_restore', and 'metadata'
 
         """
+        return_img_tokens = self.config['model']['model_params'].get('return_img_tokens', False)
         # set mask_ratio to 0 for inference
         self.vit_mae.config.mask_ratio = 0.0
         # get model outputs
@@ -229,7 +240,11 @@ class VisionTransformer(BaseLightningModel):
             batch_dict,
             return_images=False,
             return_reconstructions=self.return_reconstructions,
+            return_img_tokens=return_img_tokens,
         )
+        if return_img_tokens:
+            results_dict['img_tokens'] = results_dict['img_tokens'].clone()
+            results_dict['ids_restore'] = results_dict['ids_restore'].clone()
         # reset mask_ratio to the original value
         self.vit_mae.config.mask_ratio = self.mask_ratio
         # use the projected embedding when available, otherwise fall back to the raw CLS token
@@ -261,6 +276,7 @@ class ViTMAE(ViTMAEForPreTraining):
         return_dict: bool | None = None,
         return_latent: bool = False,
         return_recon: bool = False,
+        return_img_tokens: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Run masked autoencoder forward pass.
 
@@ -274,15 +290,19 @@ class ViTMAE(ViTMAEForPreTraining):
         return_dict: whether to use return dict (defaults to config setting)
         return_latent: if True, return only the raw latent tensor
         return_recon: if True, run full decode and return reconstructions
+        return_img_tokens: if True, also return the full encoder output sequence (CLS token
+            plus patches, 'img_tokens') and its matching 'ids_restore', so a frame can later
+            be decoded from saved tokens via ``self.decoder(img_tokens, ids_restore)``
 
         Returns
         -------
-        dict with 'latents' and 'loss', plus 'reconstructions' if return_recon is True
+        dict with 'latents' and 'loss', plus 'reconstructions' if return_recon is True,
+        and 'img_tokens'/'ids_restore' if return_img_tokens is True
 
         """
         # Setting default for return_dict based on the configuration
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        if (self.training or self.config.mask_ratio > 0) or return_recon:
+        if (self.training or self.config.mask_ratio > 0) or return_recon or return_img_tokens:
             outputs = self.vit(
                 pixel_values,
                 noise=noise,
@@ -319,23 +339,39 @@ class ViTMAE(ViTMAEForPreTraining):
         ids_restore = outputs.ids_restore
         mask = outputs.mask
 
+        if return_img_tokens and not return_recon:
+            # tokens-only path: skip the decode + loss computation entirely.
+            # `img_tokens` is the full encoder sequence (CLS + patches), matching what
+            # `self.decoder(img_tokens, ids_restore)` expects at decode time below.
+            return {
+                'latents': latent,
+                'loss': torch.zeros(1, device=latent.device),
+                'img_tokens': latent,
+                'ids_restore': ids_restore,
+            }
+
         decoder_outputs = self.decoder(latent, ids_restore)
         logits = decoder_outputs.logits
         # shape (batch_size, num_patches, patch_size*patch_size*num_channels)
         loss = self.forward_loss(pixel_values, logits, mask)  # pyright: ignore[reportCallIssue]
 
         if return_recon:
-            return {
+            result = {
                 'latents': latent,
                 'loss': loss,
                 'mse_loss': loss,
                 'reconstructions': self.unpatchify(logits),
             }
-        return {
-            'latents': cls_latent,
-            'loss': loss,
-            'logits': logits,
-        }
+        else:
+            result = {
+                'latents': cls_latent,
+                'loss': loss,
+                'logits': logits,
+            }
+        if return_img_tokens:
+            result['img_tokens'] = latent
+            result['ids_restore'] = ids_restore
+        return result
 
 
 def topk(similarities: torch.Tensor, labels: torch.Tensor, k: int = 5) -> torch.Tensor:
