@@ -336,4 +336,5 @@ def _handle_video_or_images(args, model):
                 batch_size=args.batch_size,
                 save_latents=args.save_latents,
                 save_reconstructions=args.save_reconstructions,
+                save_img_tokens=args.return_img_tokens,
             )

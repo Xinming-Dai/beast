@@ -128,23 +128,57 @@ class ImagePredictionHandler:
 
         return latents_path
 
+    def save_img_tokens(
+        self,
+        img_tokens: torch.Tensor,
+        ids_restore: torch.Tensor,
+        video: str,
+        idx: int,
+        original_path: Path,
+    ) -> tuple[Path, Path]:
+        """Save the per-patch token grid and its matching ids_restore as numpy arrays.
+
+        Mirrors `save_latents`'s per-image layout, so `img_tokens` and `ids_restore` can later
+        be re-paired by frame stem the same way `latents` are (see `combine_view_latents` /
+        `combine_eval_layout_latents`) for decoding back into a frame.
+        """
+        img_tokens_dir = self.output_dir / 'img_tokens' / video
+        img_tokens_dir.mkdir(parents=True, exist_ok=True)
+        ids_restore_dir = self.output_dir / 'ids_restore' / video
+        ids_restore_dir.mkdir(parents=True, exist_ok=True)
+
+        original_stem = original_path.stem
+        img_tokens_path = img_tokens_dir / f'{original_stem}.npy'
+        ids_restore_path = ids_restore_dir / f'{original_stem}.npy'
+
+        np.save(img_tokens_path, img_tokens.detach().cpu().numpy())
+        np.save(ids_restore_path, ids_restore.detach().cpu().numpy())
+
+        return img_tokens_path, ids_restore_path
+
     def process_batch_predictions(
         self,
         predictions: dict,
         batch_metadata: dict,
         save_reconstructions: bool = True,
-        save_latents: bool = False
+        save_latents: bool = False,
+        save_img_tokens: bool = False,
     ) -> dict[str, list]:
         """Process a batch of predictions and save them."""
         latents = predictions['latents']
         # only present when the model was run with return_reconstructions=True
         reconstructions = predictions['reconstructions'] if save_reconstructions else None
+        # only present when the model was run with return_img_tokens=True
+        img_tokens = predictions['img_tokens'] if save_img_tokens else None
+        ids_restore = predictions['ids_restore'] if save_img_tokens else None
 
         batch_size = latents.shape[0]
 
         saved_files = {
             'reconstructions': [],
             'latents': [],
+            'img_tokens': [],
+            'ids_restore': [],
             'metadata': []
         }
 
@@ -176,6 +210,16 @@ class ImagePredictionHandler:
                 saved_files['latents'].append(str(latents_path))
                 metadata_entry['latents_path'] = str(latents_path)
 
+            # Save img_tokens + ids_restore if requested
+            if save_img_tokens:
+                img_tokens_path, ids_restore_path = self.save_img_tokens(
+                    img_tokens[i], ids_restore[i], video, idx, Path(original_path),
+                )
+                saved_files['img_tokens'].append(str(img_tokens_path))
+                saved_files['ids_restore'].append(str(ids_restore_path))
+                metadata_entry['img_tokens_path'] = str(img_tokens_path)
+                metadata_entry['ids_restore_path'] = str(ids_restore_path)
+
             saved_files['metadata'].append(metadata_entry)
             self.metadata.append(metadata_entry)
 
@@ -186,6 +230,7 @@ class ImagePredictionHandler:
         predictions: list,
         save_reconstructions: bool = True,
         save_latents: bool = False,
+        save_img_tokens: bool = False,
     ) -> dict[str, Any]:
         """Process all predictions from trainer.predict() and save results.
 
@@ -194,6 +239,7 @@ class ImagePredictionHandler:
         predictions: List of prediction dictionaries from trainer.predict()
         save_reconstructions: Whether to save reconstruction images
         save_latents: Whether to save latent representations
+        save_img_tokens: Whether to save the per-patch token grid and its ids_restore
 
         Returns
         -------
@@ -203,6 +249,8 @@ class ImagePredictionHandler:
         all_saved_files = {
             'reconstructions': [],
             'latents': [],
+            'img_tokens': [],
+            'ids_restore': [],
             'metadata': []
         }
 
@@ -215,12 +263,15 @@ class ImagePredictionHandler:
                 batch_predictions,
                 batch_metadata,
                 save_reconstructions=save_reconstructions,
-                save_latents=save_latents
+                save_latents=save_latents,
+                save_img_tokens=save_img_tokens,
             )
 
             # Accumulate results
             all_saved_files['reconstructions'].extend(saved_files['reconstructions'])
             all_saved_files['latents'].extend(saved_files['latents'])
+            all_saved_files['img_tokens'].extend(saved_files['img_tokens'])
+            all_saved_files['ids_restore'].extend(saved_files['ids_restore'])
             all_saved_files['metadata'].extend(saved_files['metadata'])
 
         # Save metadata summary
@@ -241,11 +292,18 @@ class ImagePredictionHandler:
             results['latents_saved'] = len(all_saved_files['latents'])
             results['latents_dir'] = str(self.output_dir / "latents")
 
+        if save_img_tokens:
+            results['img_tokens_saved'] = len(all_saved_files['img_tokens'])
+            results['img_tokens_dir'] = str(self.output_dir / 'img_tokens')
+            results['ids_restore_dir'] = str(self.output_dir / 'ids_restore')
+
         _logger.info(f"Processed {results['num_images_processed']} images")
         if save_reconstructions:
             _logger.info(f"Saved {results['reconstructions_saved']} reconstructions")
         if save_latents:
             _logger.info(f"Saved {results['latents_saved']} latent representations")
+        if save_img_tokens:
+            _logger.info(f"Saved {results['img_tokens_saved']} img_tokens + ids_restore pairs")
         _logger.info(f'Results saved to: {self.output_dir}')
         _logger.info(f'Metadata saved to: {metadata_path}')
 
@@ -471,6 +529,7 @@ def predict_images(
     batch_size: int = 32,
     save_latents: bool = True,
     save_reconstructions: bool = True,
+    save_img_tokens: bool = False,
     num_channels: int = 3,
 ) -> dict[str, Any]:
     """Run inference on images using a trained model and save results.
@@ -488,6 +547,10 @@ def predict_images(
     batch_size: number of images to process in each batch
     save_latents: whether to save latent representations as .npy files in a 'latents/' subdirectory
     save_reconstructions: whether to save reconstructed images as PNG files
+    save_img_tokens: whether to save the per-patch token grid and its matching ids_restore, as
+        .npy files under 'img_tokens/' and 'ids_restore/' subdirectories; required for later
+        decoding a frame from saved tokens (only supported by models exposing 'img_tokens' and
+        'ids_restore' from `predict_step`, e.g. `beast.models.vits.VisionTransformer`)
     num_channels: number of image channels; 1 loads as grayscale then converts to RGB, 3 loads
         as RGB
 
@@ -501,6 +564,9 @@ def predict_images(
         - 'latents_saved': Number of latent files saved (if enabled)
         - 'reconstructions_dir': Path to reconstructions directory (if enabled)
         - 'latents_dir': Path to latents directory (if enabled)
+        - 'img_tokens_saved': Number of img_tokens/ids_restore pairs saved (if enabled)
+        - 'img_tokens_dir': Path to img_tokens directory (if enabled)
+        - 'ids_restore_dir': Path to ids_restore directory (if enabled)
 
     """
 
@@ -527,6 +593,8 @@ def predict_images(
 
     # configure model predict behavior before handing off to trainer
     model.return_reconstructions = save_reconstructions
+    if save_img_tokens:
+        model.config['model']['model_params']['return_img_tokens'] = True
 
     # run inference
     trainer = pl.Trainer(accelerator='gpu', devices=1, logger=False)
@@ -539,6 +607,7 @@ def predict_images(
         predictions,
         save_reconstructions=save_reconstructions,
         save_latents=save_latents,
+        save_img_tokens=save_img_tokens,
     )
 
     return results
@@ -704,6 +773,137 @@ def _stack_eval_layout_split(
     return z_trials_time, trial_split_labels, per_trial_iv, neural_trial_idx
 
 
+def _load_eval_layout_split_img_token_rows(
+    input_dir: Path,
+    img_tokens_dir: Path,
+    ids_restore_dir: Path,
+    other_img_tokens_dir: Path,
+    split: str,
+) -> dict[str, dict[str, Any]]:
+    """Read one view's `frame_index_mapping.json` for `split`, attaching img_tokens/ids_restore.
+
+    Mirrors `_load_eval_layout_split_rows`, but for the (img_tokens, ids_restore) pair saved by
+    `predict_images(..., save_img_tokens=True)` instead of a single `latent` array.
+
+    Args:
+        input_dir: eval-layout camera directory passed as `beast predict --input`.
+        img_tokens_dir: this view's `<output>/img_tokens` directory from `beast predict`.
+        ids_restore_dir: this view's `<output>/ids_restore` directory from `beast predict`.
+        other_img_tokens_dir: the other view's `<output>/img_tokens` directory, used only to
+            validate that both views saved the same frame stems for this split.
+        split: split name (`train`, `val`, or `test`).
+
+    Returns:
+        Mapping from frame stem to its `frame_index_mapping.json` record plus `img_tokens` and
+        `ids_restore` keys holding the loaded `.npy` arrays. Empty if `split` wasn't extracted.
+
+    Raises:
+        ValueError: if the two views saved different frame stems for this split.
+    """
+    mapping_path = input_dir / split / 'frame_index_mapping.json'
+    if not mapping_path.is_file():
+        return {}
+    with mapping_path.open(encoding='utf-8') as f:
+        mapping = json.load(f)
+
+    token_stems = {p.stem for p in (img_tokens_dir / split).glob('*.npy')}
+    other_token_stems = {p.stem for p in (other_img_tokens_dir / split).glob('*.npy')}
+    if token_stems != other_token_stems:
+        raise ValueError(
+            f'left/right frame stem mismatch for split {split!r}: '
+            f'only in this view: {token_stems - other_token_stems}; '
+            f'only in the other view: {other_token_stems - token_stems}',
+        )
+
+    rows = {}
+    for filename, record in mapping.items():
+        stem = Path(filename).stem
+        rows[stem] = {
+            **record,
+            'img_tokens': np.load(img_tokens_dir / split / f'{stem}.npy'),
+            'ids_restore': np.load(ids_restore_dir / split / f'{stem}.npy'),
+        }
+    return rows
+
+
+def _stack_eval_layout_split_img_tokens(
+    left_rows: dict[str, dict[str, Any]],
+    right_rows: dict[str, dict[str, Any]],
+    split: str,
+) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray, np.ndarray]:
+    """Group one split's per-frame img_tokens/ids_restore rows into per-trial `[T, 2, ...]`.
+
+    Mirrors `_stack_eval_layout_split`, but stacks both `img_tokens` (`[T, 2, L, D]`) and
+    `ids_restore` (`[T, 2, L]`) in lockstep, since the two must stay row-aligned for decoding.
+
+    Args:
+        left_rows: left view's rows for `split`, from `_load_eval_layout_split_img_token_rows`.
+        right_rows: right view's rows for `split`, from `_load_eval_layout_split_img_token_rows`.
+        split: split name, used only for error messages.
+
+    Returns:
+        Tuple `(img_tokens_trials_time, ids_restore_trials_time, trial_split_labels,
+        per_trial_iv, neural_trial_idx)` for this split, with trials sorted by
+        `neural_trial_idx`.
+
+    Raises:
+        ValueError: if a trial's timebin count is inconsistent, or trials in this split don't
+            share a common timebin count.
+    """
+    by_trial: dict[int, list[str]] = {}
+    for stem, record in left_rows.items():
+        by_trial.setdefault(record['neural_trial_idx'], []).append(stem)
+
+    trial_ids = sorted(by_trial)
+    token_trials = []
+    restore_trials = []
+    intervals = []
+    for trial_id in trial_ids:
+        stems = sorted(by_trial[trial_id], key=lambda s: left_rows[s]['neural_bin_idx'])
+        bin_idxs = [left_rows[s]['neural_bin_idx'] for s in stems]
+        if bin_idxs != list(range(len(stems))):
+            raise ValueError(
+                f'split {split!r} trial {trial_id}: non-contiguous neural_bin_idx values '
+                f'{bin_idxs}',
+            )
+        token_trials.append(np.stack([
+            np.stack([left_rows[s]['img_tokens'], right_rows[s]['img_tokens']])
+            for s in stems
+        ]))
+        restore_trials.append(np.stack([
+            np.stack([left_rows[s]['ids_restore'], right_rows[s]['ids_restore']])
+            for s in stems
+        ]))
+        intervals.append(left_rows[stems[0]]['neural_interval_sec'])
+
+    timebin_counts = {t.shape[0] for t in token_trials}
+    if len(timebin_counts) > 1:
+        raise ValueError(
+            f'split {split!r}: inconsistent timebin counts across trials: {timebin_counts}',
+        )
+
+    if token_trials:
+        img_tokens_trials_time = np.stack(token_trials)
+        ids_restore_trials_time = np.stack(restore_trials)
+    else:
+        img_tokens_trials_time = np.empty((0, 0, 2, 0, 0), dtype=np.float32)
+        ids_restore_trials_time = np.empty((0, 0, 2, 0), dtype=np.int64)
+    trial_split_labels = [split] * len(trial_ids)
+    if intervals:
+        per_trial_iv = np.asarray(intervals, dtype=np.float64)
+    else:
+        per_trial_iv = np.empty((0, 2), dtype=np.float64)
+    neural_trial_idx = np.asarray(trial_ids, dtype=np.int64)
+
+    return (
+        img_tokens_trials_time,
+        ids_restore_trials_time,
+        trial_split_labels,
+        per_trial_iv,
+        neural_trial_idx,
+    )
+
+
 def combine_eval_layout_latents(
     left_input_dir: str | Path,
     right_input_dir: str | Path,
@@ -787,6 +987,293 @@ def combine_eval_layout_latents(
     _logger.info(f'Saved eval-layout trials {z_trials_time.shape} to: {output_path}')
 
     return output_path
+
+
+def combine_eval_layout_img_tokens(
+    left_input_dir: str | Path,
+    right_input_dir: str | Path,
+    left_img_tokens_dir: str | Path,
+    right_img_tokens_dir: str | Path,
+    left_ids_restore_dir: str | Path,
+    right_ids_restore_dir: str | Path,
+    output_path: str | Path,
+    ids_restore_output_path: str | Path | None = None,
+    splits: tuple[str, ...] = ('train', 'val', 'test'),
+) -> tuple[Path, Path]:
+    """Pair eval-layout per-frame img_tokens + ids_restore into the neural-aligned trials schema.
+
+    Mirrors `combine_eval_layout_latents`, but for the per-patch token grid saved by
+    `predict_images(..., save_img_tokens=True)` instead of the pooled CLS latent. `ids_restore`
+    is written to a separate sidecar `.npz` next to the main img_tokens trials file (not
+    embedded in the same tensor) — the same precedent
+    `beast.sable_encoding_decoding.img_token.trials_assembly` follows for Sable's camera
+    parameters (`_write_camera_parameters_npz_sidecar`), and that the original E-RayZer
+    `ids_restore` sidecar (`combined_img_tokens_aux.npz`) follows too.
+
+    Parameters
+    ----------
+    left_input_dir: eval-layout left-camera directory passed as `beast predict --input`
+    right_input_dir: eval-layout right-camera directory passed as `beast predict --input`
+    left_img_tokens_dir: left camera's `<output>/img_tokens` directory from `beast predict`
+    right_img_tokens_dir: right camera's `<output>/img_tokens` directory from `beast predict`
+    left_ids_restore_dir: left camera's `<output>/ids_restore` directory from `beast predict`
+    right_ids_restore_dir: right camera's `<output>/ids_restore` directory from `beast predict`
+    output_path: path to the output img_tokens trials `.npz`
+    ids_restore_output_path: path to the output ids_restore sidecar `.npz`; defaults to
+        `ids_restore_<output_path's name>` next to `output_path`
+    splits: split names to assemble, in row order (default: train, val, test)
+
+    Returns
+    -------
+    tuple of (img_tokens trials `.npz` path, ids_restore sidecar `.npz` path)
+
+    """
+    from beast.sable_encoding_decoding.img_token.trials_assembly import (
+        _per_split_kw_for_aux,
+        _stack_split_intervals_from_rows,
+    )
+
+    left_input_dir = Path(left_input_dir)
+    right_input_dir = Path(right_input_dir)
+    left_img_tokens_dir = Path(left_img_tokens_dir)
+    right_img_tokens_dir = Path(right_img_tokens_dir)
+    left_ids_restore_dir = Path(left_ids_restore_dir)
+    right_ids_restore_dir = Path(right_ids_restore_dir)
+    output_path = Path(output_path)
+    ids_restore_output_path = (
+        Path(ids_restore_output_path)
+        if ids_restore_output_path is not None
+        else output_path.parent / f'ids_restore_{output_path.name}'
+    )
+
+    all_tokens, all_restore, all_split_labels, all_iv, all_neural_trial_idx = (
+        [], [], [], [], [],
+    )
+    for split in splits:
+        left_rows = _load_eval_layout_split_img_token_rows(
+            left_input_dir,
+            left_img_tokens_dir,
+            left_ids_restore_dir,
+            right_img_tokens_dir,
+            split,
+        )
+        right_rows = _load_eval_layout_split_img_token_rows(
+            right_input_dir,
+            right_img_tokens_dir,
+            right_ids_restore_dir,
+            left_img_tokens_dir,
+            split,
+        )
+        tokens, restore, split_labels, iv, neural_trial_idx = _stack_eval_layout_split_img_tokens(
+            left_rows, right_rows, split,
+        )
+        if tokens.shape[0] == 0:
+            continue
+        all_tokens.append(tokens)
+        all_restore.append(restore)
+        all_split_labels.extend(split_labels)
+        all_iv.append(iv)
+        all_neural_trial_idx.append(neural_trial_idx)
+
+    if not all_tokens:
+        raise ValueError(f'no trials found for splits {splits} under {left_input_dir}')
+
+    img_tokens_trials_time = np.concatenate(all_tokens, axis=0)
+    ids_restore_trials_time = np.concatenate(all_restore, axis=0)
+    per_trial_iv = np.concatenate(all_iv, axis=0)
+    neural_trial_idx = np.concatenate(all_neural_trial_idx, axis=0)
+
+    save_kw = _per_split_kw_for_aux(
+        img_tokens_trials_time, all_split_labels, ','.join(splits), 'z_trials_time',
+    )
+    train_iv, val_iv, test_iv = _stack_split_intervals_from_rows(all_split_labels, per_trial_iv)
+    save_kw['train_intervals'] = train_iv
+    save_kw['val_intervals'] = val_iv
+    save_kw['test_intervals'] = test_iv
+    save_kw['neural_trial_idx'] = neural_trial_idx
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **save_kw)
+    _logger.info(
+        f'Saved eval-layout img_tokens trials {img_tokens_trials_time.shape} to: {output_path}'
+    )
+
+    # ids_restore is index data forced to float32 by `_per_split_kw_for_aux`; round-trip through
+    # `.astype(np.int64)` at load time before using it for gather/decode
+    restore_kw = _per_split_kw_for_aux(
+        ids_restore_trials_time, all_split_labels, ','.join(splits), 'ids_restore',
+    )
+    restore_kw['neural_trial_idx'] = neural_trial_idx
+    ids_restore_output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(ids_restore_output_path, **restore_kw)
+    _logger.info(
+        f'Saved eval-layout ids_restore sidecar {ids_restore_trials_time.shape} to: '
+        f'{ids_restore_output_path}'
+    )
+
+    return output_path, ids_restore_output_path
+
+
+def _list_eval_layout_split_stems(
+    input_dir: Path,
+    img_tokens_dir: Path,
+    other_img_tokens_dir: Path,
+    split: str,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Read one view's `frame_index_mapping.json` for `split` without loading any `.npy` arrays.
+
+    Metadata-only counterpart to `_load_eval_layout_split_img_token_rows`, used so
+    `extract_eval_layout_img_token_batches` can page through a split `batch_size` rows at a time
+    instead of loading every frame's tokens into memory up front.
+
+    Args:
+        input_dir: eval-layout camera directory passed as `beast predict --input`.
+        img_tokens_dir: this view's `<output>/img_tokens` directory from `beast predict`.
+        other_img_tokens_dir: the other view's `<output>/img_tokens` directory, used only to
+            validate that both views saved the same frame stems for this split.
+        split: split name (`train`, `val`, or `test`).
+
+    Returns:
+        Tuple `(records, stems)`: `records` maps frame stem to its `frame_index_mapping.json`
+        record; `stems` lists those keys sorted by `(neural_trial_idx, neural_bin_idx)`. Both
+        empty if `split` wasn't extracted.
+
+    Raises:
+        ValueError: if the two views saved different frame stems for this split.
+    """
+    mapping_path = input_dir / split / 'frame_index_mapping.json'
+    if not mapping_path.is_file():
+        return {}, []
+    with mapping_path.open(encoding='utf-8') as f:
+        mapping = json.load(f)
+
+    token_stems = {p.stem for p in (img_tokens_dir / split).glob('*.npy')}
+    other_token_stems = {p.stem for p in (other_img_tokens_dir / split).glob('*.npy')}
+    if token_stems != other_token_stems:
+        raise ValueError(
+            f'left/right frame stem mismatch for split {split!r}: '
+            f'only in this view: {token_stems - other_token_stems}; '
+            f'only in the other view: {other_token_stems - token_stems}',
+        )
+
+    records = {Path(filename).stem: record for filename, record in mapping.items()}
+    stems = sorted(
+        records, key=lambda s: (records[s]['neural_trial_idx'], records[s]['neural_bin_idx']),
+    )
+    return records, stems
+
+
+def extract_eval_layout_img_token_batches(
+    left_input_dir: str | Path,
+    right_input_dir: str | Path,
+    left_img_tokens_dir: str | Path,
+    right_img_tokens_dir: str | Path,
+    left_ids_restore_dir: str | Path,
+    right_ids_restore_dir: str | Path,
+    output_dir: str | Path,
+    session_id: str,
+    batch_size: int = 64,
+    splits: tuple[str, ...] = ('train', 'val', 'test'),
+) -> list[Path]:
+    """Write eval-layout img_tokens + ids_restore as `img_tokens_batch*.npz` shards.
+
+    Unlike `combine_eval_layout_img_tokens` (which builds one big in-memory 5D array and writes a
+    single combined trials `.npz` — ~36 GiB for a full ViT-large session), this streams
+    `batch_size` (trial, timebin) rows at a time: each row's left/right camera tokens are merged
+    into one `2*L` token axis (`np.concatenate`, trivially reversible via `reshape(2, L, ...)`),
+    then written via `_save_latent_batch_npz` under
+    `output_dir/img_tokens/<session_id>/<split>/img_tokens_batch{idx:04d}.npz` — the exact shard
+    layout/schema `assemble_from_inference_batch_npz`
+    (`beast.sable_encoding_decoding.img_token.trials_assembly`) reads. `run_pca_and_save.py
+    --input-dir` and `decode_beast_tokens.py`'s shard-assembly path (via
+    `extra_aux_keys={'ids_restore'}`) both consume this output directly, with no combined file
+    ever materialized.
+
+    `ids_restore` rides along as an aux array (key `'ids_restore'`) in the same shard files.
+
+    Args:
+        left_input_dir: eval-layout left-camera directory passed as `beast predict --input`.
+        right_input_dir: eval-layout right-camera directory passed as `beast predict --input`.
+        left_img_tokens_dir: left camera's `<output>/img_tokens` directory from `beast predict`.
+        right_img_tokens_dir: right camera's `<output>/img_tokens` directory from `beast predict`.
+        left_ids_restore_dir: left camera's `<output>/ids_restore` directory from `beast predict`.
+        right_ids_restore_dir: right camera's `<output>/ids_restore` directory from `beast
+            predict`.
+        output_dir: root directory for the `img_tokens/` shard tree.
+        session_id: session/EID name, used for the shard path and `session_id` row metadata.
+        batch_size: rows (trial-timebin pairs) per shard file.
+        splits: split names to process.
+
+    Returns:
+        Paths of every shard file for this session/splits (including already-valid ones skipped
+        via resume).
+
+    Raises:
+        ValueError: if left/right saved different frame stems for a split.
+    """
+    left_input_dir = Path(left_input_dir)
+    right_input_dir = Path(right_input_dir)
+    left_img_tokens_dir = Path(left_img_tokens_dir)
+    right_img_tokens_dir = Path(right_img_tokens_dir)
+    left_ids_restore_dir = Path(left_ids_restore_dir)
+    right_ids_restore_dir = Path(right_ids_restore_dir)
+    output_dir = Path(output_dir)
+
+    written: list[Path] = []
+    for split in splits:
+        left_records, stems = _list_eval_layout_split_stems(
+            left_input_dir, left_img_tokens_dir, right_img_tokens_dir, split,
+        )
+        if not stems:
+            continue
+        _list_eval_layout_split_stems(
+            right_input_dir, right_img_tokens_dir, left_img_tokens_dir, split,
+        )
+
+        num_batches = _num_batches_for(len(stems), batch_size)
+        split_dir = _batch_output_path(output_dir, 'img_tokens', session_id, split, 0).parent
+        existing = _existing_batch_indices(split_dir, 'img_tokens')
+
+        for batch_idx in range(num_batches):
+            out_path = _batch_output_path(output_dir, 'img_tokens', session_id, split, batch_idx)
+            if batch_idx in existing and _is_valid_batch_npz(out_path):
+                written.append(out_path)
+                continue
+
+            start = batch_idx * batch_size
+            batch_stems = stems[start:start + batch_size]
+            z_rows, restore_rows = [], []
+            trial_idx_rows, bin_idx_rows, interval_rows = [], [], []
+            for stem in batch_stems:
+                left_tok = np.load(left_img_tokens_dir / split / f'{stem}.npy')
+                right_tok = np.load(right_img_tokens_dir / split / f'{stem}.npy')
+                left_restore = np.load(left_ids_restore_dir / split / f'{stem}.npy')
+                right_restore = np.load(right_ids_restore_dir / split / f'{stem}.npy')
+                z_rows.append(np.concatenate([left_tok, right_tok], axis=0))
+                restore_rows.append(np.concatenate([left_restore, right_restore], axis=0))
+                record = left_records[stem]
+                trial_idx_rows.append(int(record['neural_trial_idx']))
+                bin_idx_rows.append(int(record['neural_bin_idx']))
+                interval_rows.append(record['neural_interval_sec'])
+
+            _save_latent_batch_npz(
+                out_path,
+                z=np.stack(z_rows, axis=0),
+                session_ids=[session_id] * len(batch_stems),
+                pair_idxs=list(range(start, start + len(batch_stems))),
+                splits=[split] * len(batch_stems),
+                neural_trial_idx=trial_idx_rows,
+                neural_bin_idx=bin_idx_rows,
+                neural_interval_sec=np.asarray(interval_rows, dtype=np.float64),
+                aux={'ids_restore': np.stack(restore_rows, axis=0)},
+            )
+            written.append(out_path)
+            _logger.info(
+                f'[img_tokens shard] wrote {out_path}  '
+                f'z={tuple(z_rows[0].shape)}  rows={len(batch_stems)}',
+            )
+
+    return written
 
 
 def predict_video(

@@ -323,6 +323,7 @@ class Model:
         batch_size: int = 32,
         save_latents: bool = True,
         save_reconstructions: bool = True,
+        save_img_tokens: bool = False,
     ) -> dict[str, Any]:
         """Run inference on a possibly nested directory of images.
 
@@ -333,6 +334,8 @@ class Model:
         batch_size: batch size for inference
         save_latents: save latents for each image as a numpy file
         save_reconstructions: save reconstructed images
+        save_img_tokens: save the per-patch token grid and its matching ids_restore, for later
+            decoding a frame from saved tokens
 
         Returns
         -------
@@ -349,6 +352,7 @@ class Model:
             batch_size=batch_size,
             save_latents=save_latents,
             save_reconstructions=save_reconstructions,
+            save_img_tokens=save_img_tokens,
         )
         return outputs
 
