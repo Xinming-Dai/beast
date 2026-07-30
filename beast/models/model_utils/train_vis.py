@@ -15,6 +15,8 @@ def save_training_visuals(
     step: int,
     max_samples: int = 1,
     max_views: int = 2,
+    session_ids: list[str] | None = None,
+    sample_indices: list[int] | None = None,
 ) -> list[Path]:
     """Save a side-by-side render/target PNG for each sample in the batch.
 
@@ -23,8 +25,13 @@ def save_training_visuals(
         result: model forward output with ``render`` and ``target_image`` attributes.
         batch: dataloader batch dict; ``scene_name`` key used for filenames.
         step: training step, used in filenames.
-        max_samples: how many batch samples to save.
+        max_samples: how many batch samples to save. Ignored when ``sample_indices``
+            is given.
         max_views: how many target views to include per sample.
+        session_ids: one session ID per batch item; when given, files are grouped
+            into a per-session subfolder instead of a flat ``output_dir``.
+        sample_indices: batch item indices to save; when given, exactly these
+            samples are saved instead of the first ``max_samples``.
 
     Returns:
         list of saved file paths.
@@ -38,15 +45,19 @@ def save_training_visuals(
     depth_num_real_views = getattr(result, 'depth_num_real_views', None)
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     scene_names = batch.get('scene_name', [])
     if isinstance(scene_names, str):
         scene_names = [scene_names]
 
-    sample_count = min(int(max_samples), int(renders.shape[0]), int(targets.shape[0]))
+    if sample_indices is not None:
+        indices = sample_indices
+    else:
+        sample_count = min(int(max_samples), int(renders.shape[0]), int(targets.shape[0]))
+        indices = list(range(sample_count))
+
     saved_paths = []
-    for sample_idx in range(sample_count):
+    for sample_idx in indices:
         scene_name = (
             scene_names[sample_idx]
             if sample_idx < len(scene_names)
@@ -60,8 +71,10 @@ def save_training_visuals(
             depth_target_views=depth_target_views,
             depth_num_real_views=depth_num_real_views,
         )
+        sample_dir = output_dir / session_ids[sample_idx] if session_ids is not None else output_dir
+        sample_dir.mkdir(parents=True, exist_ok=True)
         filename = f'step_{step:06d}_{_sanitize_filename(scene_name)}_sample{sample_idx:02d}.png'
-        path = output_dir / filename
+        path = sample_dir / filename
         image.save(path)
         saved_paths.append(path)
     return saved_paths
