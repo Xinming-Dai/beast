@@ -39,7 +39,7 @@ IDS_RESTORE_SIDECAR="${IDS_RESTORE_SIDECAR:-$MODEL_ROOT/img_tokens_camera_parame
 DATASET_BASE="${DATASET_BASE:-/work/hdd/bfsr/xdai3/IBL_data/synchronized}"
 TARGET_LEFT="${TARGET_LEFT:-$DATASET_BASE/extracted_frames/eval/leftCamera.video/_iblrig_leftCamera.downsampled.$EID}"
 TARGET_RIGHT="${TARGET_RIGHT:-$DATASET_BASE/extracted_frames/eval/rightCamera.video/_iblrig_rightCamera.downsampled.$EID}"
-OUT_DIR="${OUT_DIR:-$MODEL_DIR/decode_out}"
+OUT_DIR="${OUT_DIR:-$MODEL_ROOT/img_tokens_compressed_estimated/$EID/decode_saved_latents}"
 
 mkdir -p "$OUT_DIR"
 
