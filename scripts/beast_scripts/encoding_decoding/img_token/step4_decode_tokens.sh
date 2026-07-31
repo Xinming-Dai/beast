@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -A beez-delta-gpu
+#SBATCH -A bfsr-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-01:00:00
+#SBATCH -t 0-00:59:00
 #SBATCH -J beast_decode_tokens
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/encoding_decoding/img_token/step4_decode_tokens_%j.log
 #SBATCH --export=ALL
@@ -20,34 +20,38 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 
-# Stage 4: decode (real or PCA-round-tripped) beast img_tokens back into reconstructed frames,
-# via beast.sable_encoding_decoding.img_token.decode_beast_tokens (the beast analog of Sable's
+# Stage 4: decode step3's neurally-estimated beast img_tokens back into reconstructed frames, via
+# beast.sable_encoding_decoding.img_token.decode_beast_tokens (the beast analog of Sable's
 # camera/Gaussian-splat decode_and_render.py — beast has no camera geometry, so this just runs
-# the model's own ViT-MAE decoder + unpatchify). Produces rendered frames under OUT_DIR,
-# consumed by step5_generate_video.sh.
+# the model's own ViT-MAE decoder + unpatchify). Produces rendered frames under OUT_DIR, consumed
+# by step5_generate_video.sh.
 #
-# Decodes step0's img_tokens_batch*.npz shards directly (a sanity-check round trip: encode then
-# immediately decode the same tokens) via --input-dir/--session-id. To decode step3's
-# neurally-estimated tokens instead, switch to combined-npz mode (--img-tokens-npz pointed at an
-# img_tokens_estimated*.npz + --ids-restore-npz) and note that IDS_RESTORE_NPZ still needs to
-# resolve to the *original* per-trial ids_restore rows for those trials (trial-indexed lookup
-# into step0's shards) — this indexed lookup is not yet implemented in decode_beast_tokens.py
-# (see its module docstring), so estimated-token decoding is a known follow-up.
+# Uses "estimated mode" (--estimated-dir): decodes step3's img_tokens_estimated_neuraltrial*.npz
+# directly. Those files carry no ids_restore of their own, so --ids-restore-sidecar points at the
+# img_tokens_camera_parameters.npz sidecar step1_run_pca_and_save.sh already writes
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 JOB_ID=20505751
+SPLIT="${SPLIT:-test}"
 MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/beast_vit_large/$EID/$JOB_ID}"
-INPUT_DIR="${INPUT_DIR:-$MODEL_DIR/latents/img_tokens}"     # root of img_tokens_batch*.npz shards
+MODEL_ROOT="${MODEL_ROOT:-$MODEL_DIR/latents/img_tokens_compressed/$EID}"
+ESTIMATED_DIR="${ESTIMATED_DIR:-$MODEL_ROOT/img_tokens_compressed_estimated/$EID/$SPLIT}"
+IDS_RESTORE_SIDECAR="${IDS_RESTORE_SIDECAR:-$MODEL_ROOT/img_tokens_camera_parameters.npz}"
+DATASET_BASE="${DATASET_BASE:-/work/hdd/bfsr/xdai3/IBL_data/synchronized}"
+TARGET_LEFT="${TARGET_LEFT:-$DATASET_BASE/extracted_frames/eval/leftCamera.video/_iblrig_leftCamera.downsampled.$EID}"
+TARGET_RIGHT="${TARGET_RIGHT:-$DATASET_BASE/extracted_frames/eval/rightCamera.video/_iblrig_rightCamera.downsampled.$EID}"
 OUT_DIR="${OUT_DIR:-$MODEL_DIR/decode_out}"
 
 mkdir -p "$OUT_DIR"
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Decoding beast img_tokens from $INPUT_DIR/$EID"
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Decoding beast estimated img_tokens from $ESTIMATED_DIR"
 
 python -m beast.sable_encoding_decoding.img_token.decode_beast_tokens \
     --model-dir "$MODEL_DIR" \
-    --input-dir "$INPUT_DIR" \
-    --session-id "$EID" \
+    --estimated-dir "$ESTIMATED_DIR" \
+    --ids-restore-sidecar "$IDS_RESTORE_SIDECAR" \
+    --target-frame-mapping-left "$TARGET_LEFT" \
+    --target-frame-mapping-right "$TARGET_RIGHT" \
     --out-dir "$OUT_DIR"
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done"
 conda deactivate
