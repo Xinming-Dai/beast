@@ -59,6 +59,7 @@ from beast.sable_encoding_decoding.img_token.target_frames import (
 from beast.sable_encoding_decoding.img_token.trials_assembly import (
     assemble_z_trials_time_from_inference_batches,
 )
+from beast.sable_encoding_decoding.render.decode_utils import _print_combined_metrics_summary
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
     resolve_metrics_npz_path,
@@ -646,7 +647,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if psnr_blocks:
         metrics_path = resolve_metrics_npz_path(None, args.out_dir)
-        save_psnr_ssim_metrics_npz(
+        saved_metrics = save_psnr_ssim_metrics_npz(
             metrics_path,
             psnr_blocks=psnr_blocks,
             ssim_blocks=ssim_blocks,
@@ -656,6 +657,7 @@ def main(argv: list[str] | None = None) -> None:
             source_file_rows=[str(metrics_source)] * sum(b.shape[0] for b in trial_blocks),
         )
         log_step(f'Saved PSNR/SSIM metrics to: {metrics_path}', level='info')
+        _print_combined_metrics_summary(metrics_path, saved_metrics)
 
 
 if __name__ == '__main__':
