@@ -923,7 +923,9 @@ def combine_eval_layout_latents(
     per-frame `.npy` latents from both cameras into per-trial `[T, 2, D]` tensors, keyed by
     split, matching what `run_encoding_decoding.py` requires (`train_z_trials_time`,
     `val_z_trials_time`, `test_z_trials_time`, plus `neural_trial_idx` and per-split
-    `*_intervals`).
+    `*_intervals`), plus a `trial_split` label array so the output is also a valid
+    `--combined-trials-{train,val,test}-npz` input to
+    `beast.sable_encoding_decoding.img_token.run_pca_and_save`.
 
     Parameters
     ----------
@@ -981,6 +983,7 @@ def combine_eval_layout_latents(
     save_kw['val_intervals'] = val_iv
     save_kw['test_intervals'] = test_iv
     save_kw['neural_trial_idx'] = neural_trial_idx
+    save_kw['trial_split'] = np.asarray(all_split_labels, dtype=object)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **save_kw)
