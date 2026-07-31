@@ -291,6 +291,11 @@ def _apply_dataloader_overrides(config: dict, args: argparse.Namespace) -> None:
         config['model']['merge_pcd']['use_correspondences']['cache_root'] = (
             args.correspondence_cache_root
         )
+    if getattr(args, 'use_segmentation_mask', False):
+        seg_cfg = training.setdefault('use_segmentation', {})
+        seg_cfg['enabled'] = True
+        if getattr(args, 'segmentation_root', None):
+            seg_cfg['cache_root'] = args.segmentation_root
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -355,6 +360,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument('--dataset-path', type=str, default=None)
     p.add_argument('--correspondence-cache-root', type=str, default=None)
     p.add_argument('--vda-cache-root', type=str, default=None)
+    p.add_argument(
+        '--use-segmentation-mask',
+        action='store_true',
+        help=(
+            'Zero out the background (via precomputed SAM3 masks) in both target and '
+            'predicted frames right after they are computed, so PSNR/SSIM, saved render '
+            'visuals, and saved gaussian pointclouds all reflect only the foreground. '
+            'Requires segmentation masks for this dataset/split, e.g. from '
+            'beast/preprocess/sable/precompute_sam3_masks_eval.py. Masks are resized '
+            "(nearest-neighbor) to the model's image_size, matching the ground-truth "
+            'frame stretch.'
+        ),
+    )
+    p.add_argument(
+        '--segmentation-root',
+        type=str,
+        default=None,
+        help=(
+            'Overrides training.use_segmentation.cache_root: root directory containing '
+            'segmentation_masks/{session_id}/{left,right}/mask{frame_idx:08d}.png (the '
+            '--output-root passed to precompute_sam3_masks_eval.py). Only used with '
+            '--use-segmentation-mask.'
+        ),
+    )
     p.add_argument('--ibl-session-eids', type=str, default=None)
     p.add_argument(
         '--include-splits',
@@ -749,6 +778,24 @@ def main(argv: list[str] | None = None) -> None:
         else:
             result.target_image = data['image'][:m]
 
+        if args.use_segmentation_mask:
+            if 'mask' not in data:
+                raise RuntimeError(
+                    "--use-segmentation-mask is set but the dataloader batch has no 'mask' "
+                    'key. Pass --segmentation-root (or set training.use_segmentation.cache_root '
+                    'in the model config) and check that masks exist for this session/split, '
+                    'e.g. via beast/preprocess/sable/precompute_sam3_masks_eval.py.',
+                )
+            masks_all = data['mask']
+            if 'target_indices' in data:
+                tidx = data['target_indices']
+                target_mask = torch.stack([masks_all[i, tidx[i]] for i in range(m)], dim=0)
+            else:
+                target_mask = masks_all[:m]
+            target_mask = target_mask.to(device=result.render.device, dtype=result.render.dtype)
+            result.render = result.render * target_mask
+            result.target_image = result.target_image * target_mask
+
         if do_finetune:
             assert optimizer is not None
             loss = F.mse_loss(result.render, result.target_image)
@@ -763,7 +810,8 @@ def main(argv: list[str] | None = None) -> None:
         if args.metrics_only:
             log_step(
                 f'[{file_i + 1}/{n_npz}] metrics: computing PSNR/SSIM '
-                f'render={tuple(result.render.shape)} target={tuple(result.target_image.shape)}',
+                f'render={tuple(result.render.shape)} target={tuple(result.target_image.shape)} '
+                f'use_mask={args.use_segmentation_mask}',
                 level='info',
             )
             (

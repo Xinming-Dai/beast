@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:40:00
+#SBATCH -t 0-00:20:00
 #SBATCH -J finetune_decoder
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step4b_finetune_decoder_%j.log
 #SBATCH --export=ALL
@@ -22,14 +22,16 @@ cd "$REPO_ROOT"
 # on the val split's neural-decoded (CNN-predicted) img tokens against real images, then scores
 # PSNR/SSIM on the test split with the finetuned weights. Mirrors the original E-RayZer
 # step5_erayzer_decoder_finetune.sh. 
-MODEL_ROOT=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553                   # dir with config.yaml + *best.ckpt
-EID=781b35fd-e1f0-4d14-b2bb-95b7263082bb
+MODEL_ROOT=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395                   # dir with config.yaml + *best.ckpt
+EID=4b00df29-3769-43be-bb40-128b1cba6d35
 LR="1e-4"
 
 SUBDIR=latents/img_tokens_compressed/$EID
 ESTIMATED_ROOT="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID"
 CAMERA_NPZ="$MODEL_ROOT/$SUBDIR/img_tokens_camera_parameters.npz"
 PRECACHED_VIDEO_ROOT="/work/hdd/bfsr/xdai3/IBL_data/synchronized"
+USE_MASK=true
+SEGMENTATION_ROOT="$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval"
 
 # finetune decoder on val split for one epoch
 FINETUNE_DIR="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID/finetuned_decoder_${LR}"
@@ -75,6 +77,7 @@ EVAL_ARGS=(
 )
 [ -n "$VDA_CACHE_ROOT" ] && EVAL_ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && EVAL_ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
+[ "$USE_MASK" = true ] && ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT")
 
 python -m beast.sable_encoding_decoding.render.decode_and_render "${EVAL_ARGS[@]}"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done finetuning decoder and scoring test for eid=$EID"

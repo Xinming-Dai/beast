@@ -427,6 +427,26 @@ class SABLEDataset(Dataset):
             arr = np.asarray(img, dtype=np.float32) / 255.0
         return torch.from_numpy(arr).permute(2, 0, 1).contiguous(), orig_w, orig_h
 
+    def _load_mask(self, path: Path) -> torch.Tensor:
+        """Load a binary segmentation mask and resize to ``image_size x image_size``.
+
+        Args:
+            path: path to a single-channel mask PNG with values in ``{0, 255}``.
+
+        Returns:
+            float32 tensor ``[1, image_size, image_size]`` with values in ``{0, 1}``.
+        """
+        with Image.open(path) as img:
+            arr = np.asarray(img.convert('L'), dtype=np.float32)
+        mask = torch.from_numpy(arr > 0).to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+        if mask.shape[-2] != self._image_size or mask.shape[-1] != self._image_size:
+            mask = F.interpolate(
+                mask,
+                size=(self._image_size, self._image_size),
+                mode='nearest',
+            )
+        return mask.squeeze(0)  # [1, S, S]
+
     def _load_vda_depth(
         self,
         session_id: str,
@@ -584,6 +604,7 @@ class SABLEDataset(Dataset):
         right_dir: Path,
         session_id: str,
         include_splits: list[str] | None,
+        segmentation_root: Path | None = None,
     ) -> list[_PrecacheRecord]:
         """Discover stereo pairs from an eval-set layout for one session.
 
@@ -623,6 +644,12 @@ class SABLEDataset(Dataset):
             session_id: session identifier.
             include_splits: on-disk split subdirectories to include (``train``,
                 ``val``, ``test``); ``None`` includes all of them.
+            segmentation_root: root directory of precomputed SAM3 masks written by
+                ``beast/preprocess/sable/precompute_sam3_masks_eval.py``, i.e.
+                ``{segmentation_root}/segmentation_masks/{session_id}/{left,right}/
+                mask{frame_idx:08d}.png``. ``None`` disables mask loading (records get
+                ``left_mask_path=right_mask_path=None``). Mask files are not required to
+                exist yet — a missing file raises ``FileNotFoundError`` when loaded.
 
         Returns:
             list of ``_PrecacheRecord`` instances, empty if none found.
@@ -649,16 +676,36 @@ class SABLEDataset(Dataset):
                 neural_trial_idx = entry.get('neural_trial_idx')
                 neural_bin_idx = entry.get('neural_bin_idx')
                 neural_interval_sec_raw = entry.get('neural_interval_sec')
+                left_source_frame_index = int(left_mapping[filename]['left_source_frame_index'])
+                right_source_frame_index = int(
+                    right_mapping[filename]['right_source_frame_index']
+                )
                 records.append(_PrecacheRecord(
                     session_id=session_id,
                     pair_idx=pair_idx,
                     left_path=left_split_dir / filename,
                     right_path=right_split_dir / filename,
-                    left_source_frame_index=int(left_mapping[filename]['left_source_frame_index']),
-                    right_source_frame_index=int(
-                        right_mapping[filename]['right_source_frame_index']
-                    ),
+                    left_source_frame_index=left_source_frame_index,
+                    right_source_frame_index=right_source_frame_index,
                     scene_name=f'{session_id}_pair_{pair_idx:06d}',
+                    left_mask_path=(
+                        segmentation_root
+                        / 'segmentation_masks'
+                        / session_id
+                        / 'left'
+                        / f'mask{left_source_frame_index:08d}.png'
+                        if segmentation_root is not None
+                        else None
+                    ),
+                    right_mask_path=(
+                        segmentation_root
+                        / 'segmentation_masks'
+                        / session_id
+                        / 'right'
+                        / f'mask{right_source_frame_index:08d}.png'
+                        if segmentation_root is not None
+                        else None
+                    ),
                     split=split_name,
                     neural_trial_idx=(
                         int(neural_trial_idx) if neural_trial_idx is not None else None
@@ -721,6 +768,9 @@ class IBLTwoViewDataset(SABLEDataset):
     * ``training.training_regime``
     * ``training.val_split_ratio``
     * ``model.seed``
+    * ``training.use_segmentation.enabled`` / ``training.use_segmentation.cache_root`` —
+      optional SAM3 mask loading for eval-layout sessions (see
+      :meth:`SABLEDataset._discover_eval_split_records`)
     """
 
     def __init__(
@@ -748,12 +798,24 @@ class IBLTwoViewDataset(SABLEDataset):
         val_split_ratio = float(training.get('val_split_ratio', 0.0))
         split_seed = int(model_cfg.get('seed', 0))
 
+        seg_cfg: dict = training.get('use_segmentation') or {}
+        segmentation_root: Path | None = None
+        if bool(seg_cfg.get('enabled', False)):
+            segmentation_root_raw = seg_cfg.get('cache_root')
+            if not segmentation_root_raw:
+                raise ValueError(
+                    'training.use_segmentation.cache_root must be set when '
+                    'training.use_segmentation.enabled is true.'
+                )
+            segmentation_root = Path(segmentation_root_raw)
+
         self._records: list[_PrecacheRecord] = self._discover_filesystem_records(
             image_root=Path(dataset_path),
             session_names=training.get('session_names'),
             include_splits=include_splits,
             val_split_ratio=val_split_ratio,
             split_seed=split_seed,
+            segmentation_root=segmentation_root,
         )
 
         vda_cfg = model_cfg.get('vda', {}) or {}
@@ -784,6 +846,7 @@ class IBLTwoViewDataset(SABLEDataset):
         include_splits: list[str] | None,
         val_split_ratio: float,
         split_seed: int,
+        segmentation_root: Path | None = None,
     ) -> list[_PrecacheRecord]:
         """Discover stereo pairs from the IBL filesystem layout without a JSON index.
 
@@ -816,6 +879,10 @@ class IBLTwoViewDataset(SABLEDataset):
             include_splits: split filter passed to :meth:`_split_records`.
             val_split_ratio: fraction of records reserved for validation.
             split_seed: RNG seed for the deterministic train/val split.
+            segmentation_root: root directory of precomputed SAM3 masks, passed through
+                to eval-layout records only (see
+                :meth:`SABLEDataset._discover_eval_split_records`); ``None`` disables
+                mask loading.
 
         Returns:
             list of ``_PrecacheRecord`` instances.
@@ -877,6 +944,7 @@ class IBLTwoViewDataset(SABLEDataset):
                 right_dir=right_dir,
                 session_id=session_id,
                 include_splits=include_splits,
+                segmentation_root=segmentation_root,
             )
             if not session_eval_records:
                 _logger.warning('skipping session %s: no common frame indices', session_id)
@@ -956,7 +1024,10 @@ class IBLTwoViewDataset(SABLEDataset):
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
             ``scene_name``, ``session_idx``, ``split``, ``neural_trial_idx``,
             ``neural_bin_idx``, ``neural_interval_sec``, and (for
-            ``pseudo_center_finetune``) ``context_full_mask``.
+            ``pseudo_center_finetune``) ``context_full_mask``. Also includes
+            ``mask`` (shape ``[2, 1, H, W]``, float32, 1 = foreground) when
+            ``training.use_segmentation.enabled`` is true and this record has mask
+            paths (eval-layout records only).
         """
         rec = self._records[idx]
 
@@ -1010,6 +1081,11 @@ class IBLTwoViewDataset(SABLEDataset):
         if self._training_regime == 'pseudo_center_finetune':
             # center view (index 2) is pseudo — zero out all its image tokens in the encoder
             result['context_full_mask'] = torch.tensor([False, False, True], dtype=torch.bool)
+
+        if rec.left_mask_path is not None and rec.right_mask_path is not None:
+            left_mask = self._load_mask(rec.left_mask_path)    # [1, H, W]
+            right_mask = self._load_mask(rec.right_mask_path)  # [1, H, W]
+            result['mask'] = torch.stack([left_mask, right_mask], dim=0)  # [2, 1, H, W]
 
         return result
 
@@ -1733,25 +1809,6 @@ class Cheese3DDataset(SABLEDataset):
             result['centercamera_xy'] = _CHEESE3D_FIXED_XY * scale_center
         return result
 
-    def _load_mask(self, path: Path) -> torch.Tensor:
-        """Load a binary segmentation mask and resize to ``image_size x image_size``.
-
-        Args:
-            path: path to a single-channel mask PNG with values in ``{0, 255}``.
-
-        Returns:
-            float32 tensor ``[1, image_size, image_size]`` with values in ``{0, 1}``.
-        """
-        with Image.open(path) as img:
-            arr = np.asarray(img.convert('L'), dtype=np.float32)
-        mask = torch.from_numpy(arr > 0).to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
-        if mask.shape[-2] != self._image_size or mask.shape[-1] != self._image_size:
-            mask = F.interpolate(
-                mask,
-                size=(self._image_size, self._image_size),
-                mode='nearest',
-            )
-        return mask.squeeze(0)  # [1, S, S]
 
 def pad_correspondence_fields_to_batch_max(batch: list[dict]) -> list[dict]:
     """Pad correspondence tensors to max length in batch so default_collate can stack.
