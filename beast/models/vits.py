@@ -303,6 +303,11 @@ class ViTMAE(ViTMAEForPreTraining):
         # Setting default for return_dict based on the configuration
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if (self.training or self.config.mask_ratio > 0) or return_recon or return_img_tokens:
+            if return_img_tokens and noise is None and not self.training:
+                num_patches = self.vit.embeddings.num_patches
+                noise = torch.arange(
+                    num_patches, device=pixel_values.device, dtype=torch.float32,
+                ).unsqueeze(0).expand(pixel_values.shape[0], -1)
             outputs = self.vit(
                 pixel_values,
                 noise=noise,
