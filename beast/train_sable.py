@@ -403,6 +403,9 @@ def train_sable(config: dict, model, output_dir: str | Path):
             f'(max_fwdbwd_passes={max_fwdbwd_passes})',
             level='info',
         )
+    trainer_max_steps = (
+        max_fwdbwd_passes if ckpt_path_for_trainer is not None else max_steps_this_run
+    )
 
     # when Lightning restores a full checkpoint it already sets its internal global_step,
     # so callbacks must not add an extra offset — only offset when Lightning starts from 0.
@@ -470,7 +473,7 @@ def train_sable(config: dict, model, output_dir: str | Path):
         accelerator='gpu',
         devices=int(training.get('num_gpus', 1)),
         num_nodes=int(training.get('num_nodes', 1)),
-        max_steps=max_steps_this_run,
+        max_steps=trainer_max_steps,
         accumulate_grad_batches=int(training.get('grad_accum_steps', 1)),
         precision=precision,
         val_check_interval=val_check_interval,
