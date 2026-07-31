@@ -36,6 +36,21 @@ class VDAConfig(BaseModel):
     fp32: bool = False
 
 
+class SegmentationConfig(BaseModel):
+    """SAM3 foreground-mask precomputation settings.
+
+    Frames are segmented independently (no video tracking), since SABLE
+    frames are non-contiguous (k-means- or trial-selected).
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = False
+    text_prompt: str = 'mouse'
+    num_objects: int | None = 1
+    threshold: float = 0.5
+
+
 class VideoNamingConfig(BaseModel):
     """Video file naming conventions for IBL-2view layout."""
 
@@ -78,6 +93,7 @@ class SABLEConfig(BaseModel):
     trim: TrimConfig = TrimConfig()
     downsample: DownsampleConfig = DownsampleConfig()
     vda: VDAConfig = VDAConfig()
+    segmentation: SegmentationConfig = SegmentationConfig()
     video_naming: VideoNamingConfig = VideoNamingConfig()
     litpose: LitPoseConfig = LitPoseConfig()
 

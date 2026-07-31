@@ -844,10 +844,23 @@ def run_pipeline(
     else:
         _logger.info('--- step 5: VDA depth (disabled) ---')
 
+    if cfg.segmentation.enabled:
+        _logger.info('--- step 6: SAM3 segmentation ---')
+        from beast.preprocess.precompute_sam3_sable import run_sam3_precompute
+        run_sam3_precompute(
+            dataset_root=dataset_dir,
+            seg_cfg=cfg.segmentation,
+            cameras=cfg.cameras,
+            sessionids=session_ids,
+            overwrite=overwrite,
+        )
+    else:
+        _logger.info('--- step 6: SAM3 segmentation (disabled) ---')
+
     if cfg.litpose.enabled:
-        _logger.info('--- step 6: litpose CSV → npy ---')
+        _logger.info('--- step 7: litpose CSV → npy ---')
         run_litpose_csv_to_npy(cfg, dataset_dir, session_ids=session_ids, overwrite=overwrite)
     else:
-        _logger.info('--- step 6: litpose CSV → npy (disabled) ---')
+        _logger.info('--- step 7: litpose CSV → npy (disabled) ---')
 
     _logger.info(f'pipeline complete → {output_dir}')

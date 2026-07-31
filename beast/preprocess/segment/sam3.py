@@ -138,6 +138,84 @@ def detect_objects_with_text_prompt(
     return input_points, input_labels, obj_ids, input_boxes
 
 
+def load_sam3_image_model(device: torch.device) -> tuple[Sam3Model, Sam3Processor]:
+    """Load the SAM3 image model and processor once for reuse across many frames.
+
+    Parameters
+    ----------
+    device: torch device to load the model onto
+
+    Returns
+    -------
+    tuple of (model, processor)
+    """
+    sam3_model = Sam3Model.from_pretrained('facebook/sam3').to(device, dtype=torch.bfloat16)
+    sam3_processor = Sam3Processor.from_pretrained('facebook/sam3')
+    return sam3_model, sam3_processor
+
+
+def segment_image_with_text_prompt(
+    frame: np.ndarray,
+    model: Sam3Model,
+    processor: Sam3Processor,
+    device: torch.device,
+    text_prompt: str,
+    num_object: int | None = 1,
+    threshold: float = 0.5,
+) -> np.ndarray:
+    """Segment a single independent frame using SAM3 text-prompt detection.
+
+    Unlike the video tracker, this treats each frame independently (no temporal
+    propagation), which is what non-contiguous frame sets (e.g. k-means- or
+    trial-selected SABLE frames) require. Keeps the top ``num_object`` scoring
+    detections and unions their masks into one binary foreground mask.
+
+    Parameters
+    ----------
+    frame: (H, W, 3) RGB frame
+    model: preloaded SAM3 image model, from `load_sam3_image_model`
+    processor: preloaded SAM3 image processor, from `load_sam3_image_model`
+    device: torch device to run inference on
+    text_prompt: text query for object detection
+    num_object: number of top-scoring detections to keep; None keeps all
+        detections above `threshold`
+    threshold: confidence threshold for filtering detections
+
+    Returns
+    -------
+    (H, W) uint8 binary mask, 0 or 255
+    """
+    frame_pil = Image.fromarray(frame) if isinstance(frame, np.ndarray) else frame
+    inputs = processor(images=frame_pil, text=text_prompt, return_tensors='pt')
+    processed_inputs = {}
+    for k, v in inputs.items():
+        if isinstance(v, torch.Tensor):
+            processed_inputs[k] = (
+                v.to(device, dtype=torch.bfloat16) if v.dtype.is_floating_point
+                else v.to(device)
+            )
+        else:
+            processed_inputs[k] = v
+    with torch.no_grad():
+        outputs = model(**processed_inputs)
+    results = processor.post_process_instance_segmentation(
+        outputs=outputs,
+        threshold=threshold,
+        mask_threshold=0.5,
+        target_sizes=[frame_pil.size[::-1]],
+    )[0]
+    masks = results['masks'].cpu().float().numpy()
+    scores = results['scores'].cpu().float().numpy()
+    height, width = frame_pil.size[1], frame_pil.size[0]
+    if len(masks) == 0:
+        return np.zeros((height, width), dtype=np.uint8)
+    if num_object is not None and len(masks) > num_object:
+        top_indices = np.argsort(scores)[::-1][:num_object]
+        masks = masks[top_indices]
+    union_mask = np.any(masks > 0.5, axis=0)
+    return (union_mask * 255).astype(np.uint8)
+
+
 def process_sam3_video_outputs(
     outputs: dict,
     frame_idx: int,

@@ -78,6 +78,17 @@ vda:
   fp32: false             # set true to disable autocast
 
 # ---------------------------------------------------------------------------
+# SAM3 segmentation (optional)
+# Runs per-frame (not per-video) text-prompt detection, since SABLE frames are
+# non-contiguous. Output: dataset/{session_id}/{cam}/mask{n_digits}.png
+# ---------------------------------------------------------------------------
+segmentation:
+  enabled: false
+  text_prompt: mouse    # SAM3 grounding prompt for foreground detection
+  num_objects: 1        # top-scoring objects to keep per frame; null = keep all above threshold
+  threshold: 0.5        # SAM3 confidence threshold for mask acceptance
+
+# ---------------------------------------------------------------------------
 # LitPose CSV → per-frame npy (optional)
 # Converts LitPose prediction CSVs to per-frame correspondence .npy files.
 # LitPose predict must be run separately first (see docs/extract_data_for_sable.md).
