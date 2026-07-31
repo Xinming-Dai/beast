@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH -A beez-delta-cpu
+#SBATCH -A bfsr-delta-cpu
 #SBATCH --job-name="beast_pca_compress"
 #SBATCH --partition=cpu
 #SBATCH -c 1
 #SBATCH --mem 120G
-#SBATCH -t 0-02:00:00
+#SBATCH -t 0-00:59:00
 #SBATCH --export=ALL
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/encoding_decoding/img_token/step1_run_pca_and_save_%j.log
 
@@ -45,5 +45,5 @@ python -m beast.sable_encoding_decoding.img_token.run_pca_and_save \
     --stage "$STAGE" \
     --n-feat-keep "$N_FEAT_KEEP"
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done"
 conda deactivate
