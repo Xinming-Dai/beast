@@ -7,26 +7,34 @@ unpatchifying the result (mirrors `predict_frame_from_all_tokens` in the origina
 `erayzer.py`). The decode logic lives here, as a standalone function taking the already-loaded
 model as a parameter, rather than as a method on `beast.models.vits.VisionTransformer`.
 
-Two input modes are supported for real (directly-extracted) tokens:
+Three input modes are supported:
 
 - **Combined npz** (`--img-tokens-npz` / `--ids-restore-npz`): the single-file output of
   `combine_eval_layout_img_tokens` (no `--batch-size`).
 - **Shards** (`--input-dir` / `--session-id`): the `img_tokens_batch*.npz` shard tree written by
   `extract_eval_layout_img_token_batches` (`combine-eval-layout-img-tokens --batch-size`), which
-  avoids ever materializing the full combined array. Left/right camera tokens are merged into one
-  `2*L` axis in each shard (see `beast.inference.extract_eval_layout_img_token_batches`); this
-  module un-merges that axis back to `(2, L)` before decoding, since beast's MAE decoder — unlike
-  Sable's cross-view renderer — runs per-view, not on a fused multi-camera token set.
+  avoids ever materializing the full combined array.
+- **Estimated** (`--estimated-dir` / `--ids-restore-sidecar`): step3 `unproject.py`'s per-trial
+  `img_tokens_estimated_neuraltrial*.npz` output (neurally decoded, PCA-unprojected tokens).
+  These files carry no `ids_restore` of their own — decoding needs the MAE decoder's un-shuffle
+  indices, which are only ever produced at the original extraction — so this mode fetches each
+  estimated trial's `ids_restore` from the `img_tokens_camera_parameters.npz` sidecar written by
+  step1 `run_pca_and_save.py` (a byproduct of that step's own CPU-only per-split assembly pass),
+  matching `(trial_split, neural_trial_idx)`, mirroring the original E-RayZer pipeline's
+  `_load_ids_restore_from_sidecar` — and Sable's own camera-sidecar consumer,
+  `decode_and_render.py`'s `_load_cameras_from_sidecar`.
 
-PSNR/SSIM metrics (`--target-images-npz`) are only supported in combined-npz mode today, since
-they're keyed off reading `neural_trial_idx` / `neural_bin_idx` / `trial_split` straight from that
-one file (`beast.sable_encoding_decoding.render.metrics`).
+In shard and estimated mode, left/right camera tokens are merged into one `2*L` axis on disk (see
+`beast.inference.extract_eval_layout_img_token_batches`); this module un-merges that axis back to
+`(2, L)` before decoding, since beast's MAE decoder — unlike Sable's cross-view renderer — runs
+per-view, not on a fused multi-camera token set. `ids_restore`'s own per-view `L` is one token
+shorter than `img_tokens`'s (it excludes the CLS token, see `_unmerge_camera_axis`), so the two
+are un-merged independently rather than assumed to share a token count.
 
-Decoding neurally-estimated tokens (after `unproject.py`'s PCA round trip) additionally needs a
-trial-indexed `ids_restore` lookup — since an estimated trial has no `ids_restore` of its own, it
-must be fetched from the original extraction's sidecar by `trial_split`/`neural_trial_idx`,
-mirroring the original E-RayZer pipeline's `_load_ids_restore_from_sidecar`. That lookup isn't
-implemented here yet.
+PSNR/SSIM metrics are supported in combined-npz mode via a precomputed `--target-images-npz`, and
+in estimated mode via `--target-frame-mapping-left` / `--target-frame-mapping-right` (raw frames
+resolved per trial/bin through the eval-layout camera input dirs' `frame_index_mapping.json`, see
+`beast.sable_encoding_decoding.img_token.target_frames`). Not supported in shard mode.
 """
 
 import argparse
@@ -40,7 +48,14 @@ from beast.api.model import Model
 from beast.inference import ImagePredictionHandler
 from beast.logging import log_step
 from beast.models.vits import VisionTransformer
-from beast.sable_encoding_decoding.img_token.saved_tokens_io import load_img_tokens_trials_npz
+from beast.sable_encoding_decoding.img_token.saved_tokens_io import (
+    load_img_tokens_trials_npz,
+    sorted_img_tokens_npz_paths,
+)
+from beast.sable_encoding_decoding.img_token.target_frames import (
+    load_frame_index_mapping,
+    load_target_images_for_trials,
+)
 from beast.sable_encoding_decoding.img_token.trials_assembly import (
     assemble_z_trials_time_from_inference_batches,
 )
@@ -104,6 +119,175 @@ def load_ids_restore_trials_npz(path: Path) -> tuple[np.ndarray, dict[str, Any]]
     return ids_restore, meta
 
 
+def _unmerge_camera_axis(
+    img_tokens: np.ndarray, ids_restore: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split a shard-layout merged `2*L` camera axis back into a leading `(2, L)` view axis.
+
+    `img_tokens` and `ids_restore` have independent per-camera token counts (`ids_restore` is
+    one token shorter — it un-shuffles patches only, while `img_tokens` also carries the CLS
+    token, see `predict_frame_from_all_tokens`), so each array's merged axis is un-merged using
+    its own trailing dimension rather than a shared token count.
+
+    Args:
+        img_tokens: shape `(N, T, 2*L_img, D)`.
+        ids_restore: shape `(N, T, 2*L_restore)` (`L_restore == L_img - 1`).
+
+    Returns:
+        Tuple `(img_tokens, ids_restore)` reshaped to `(N, T, 2, L_img, D)` /
+        `(N, T, 2, L_restore)`.
+
+    Raises:
+        ValueError: if either merged token axis isn't evenly divisible by 2 cameras.
+    """
+    n, t, merged_img, d = img_tokens.shape
+    _, _, merged_restore = ids_restore.shape
+    if merged_img % 2 != 0:
+        raise ValueError(f'img_tokens merged axis {merged_img} is not evenly divisible by 2')
+    if merged_restore % 2 != 0:
+        raise ValueError(f'ids_restore merged axis {merged_restore} is not evenly divisible by 2')
+    n_tok_img = merged_img // 2
+    n_tok_restore = merged_restore // 2
+    return (
+        img_tokens.reshape(n, t, 2, n_tok_img, d),
+        ids_restore.reshape(n, t, 2, n_tok_restore),
+    )
+
+
+def load_ids_restore_lookup_from_sidecar(
+    sidecar_path: Path,
+) -> dict[tuple[str, int], np.ndarray]:
+    """Build a `(trial_split, neural_trial_idx) -> ids_restore` lookup from a PCA-step sidecar.
+
+    Used to decode step3-estimated tokens, which carry no `ids_restore` of their own: each
+    estimated trial's restore indices must be fetched from the original extraction by matching
+    trial identity. The sidecar (`img_tokens_camera_parameters.npz`, written by
+    `run_pca_and_save.py`'s `_write_camera_sidecar`) already carries `{split}_ids_restore`
+    alongside `trial_split` / `neural_trial_idx` as a byproduct of that step's own CPU-only,
+    per-split assembly pass — so loading it directly here avoids re-running that assembly (and
+    materializing the full high-dimensional `z` token array) a second time on the GPU decode job.
+
+    Args:
+        sidecar_path: path to the `img_tokens_camera_parameters.npz` sidecar.
+
+    Returns:
+        `{(trial_split, neural_trial_idx): ids_restore}`, where each value has shape
+        `(T, 2*L_restore)` (merged camera axis; `L_restore == L - 1`, one token shorter than
+        step3's `z` layout since `ids_restore` excludes the CLS token).
+
+    Raises:
+        KeyError: if the sidecar lacks `trial_split` / `neural_trial_idx`, or no
+            `{split}_ids_restore` array is present.
+        ValueError: if two trials share the same `(split, neural_trial_idx)` key.
+    """
+    path = Path(sidecar_path).resolve()
+    with np.load(path, allow_pickle=True) as d:
+        if 'trial_split' not in d.files or 'neural_trial_idx' not in d.files:
+            raise KeyError(
+                f'{path}: sidecar needs trial_split and neural_trial_idx; got {sorted(d.files)}',
+            )
+        trial_split_labels = [
+            str(x).lower() for x in np.asarray(d['trial_split'], dtype=object).reshape(-1)
+        ]
+        neural_trial_idx = np.asarray(d['neural_trial_idx'], dtype=np.int64).reshape(-1)
+
+        restore_by_split: dict[str, np.ndarray] = {}
+        for split in ('train', 'val', 'test'):
+            key = f'{split}_ids_restore'
+            if key in d.files:
+                restore_by_split[split] = np.asarray(d[key], dtype=np.float32).astype(np.int64)
+        if not restore_by_split:
+            raise KeyError(f"{path}: no '{{split}}_ids_restore' array found; got {sorted(d.files)}")
+
+        split_row_counter: dict[str, int] = {}
+        lookup: dict[tuple[str, int], np.ndarray] = {}
+        for split, tid in zip(trial_split_labels, neural_trial_idx, strict=True):
+            row = split_row_counter.get(split, 0)
+            split_row_counter[split] = row + 1
+            if split not in restore_by_split:
+                continue
+            key = (split, int(tid))
+            if key in lookup:
+                raise ValueError(f'Duplicate trial {key} in sidecar {path}')
+            lookup[key] = restore_by_split[split][row]
+    return lookup
+
+
+def load_estimated_tokens_dir(
+    estimated_dir: Path,
+) -> tuple[np.ndarray, list[str], np.ndarray, list[Path]]:
+    """Load step3's per-trial `img_tokens_estimated_neuraltrial*.npz` files from a directory.
+
+    Args:
+        estimated_dir: step3 `unproject.py` output directory (a single split dir, or a root
+            containing several split subdirectories — searched recursively).
+
+    Returns:
+        Tuple `(img_tokens, trial_split_labels, neural_trial_idx, source_paths)`:
+        `img_tokens` is `float32` shaped `(K, T, L, D)` (merged camera axis, one row per file,
+        sorted by path); `trial_split_labels` has length `K`; `neural_trial_idx` is `int64`
+        shaped `(K,)`; `source_paths` has length `K`.
+
+    Raises:
+        FileNotFoundError: if no matching `.npz` files are found under `estimated_dir`.
+    """
+    paths = sorted_img_tokens_npz_paths(Path(estimated_dir))
+    if not paths:
+        raise FileNotFoundError(f'No img_tokens_estimated*.npz found under {estimated_dir}')
+
+    z_rows, split_labels, trial_ids = [], [], []
+    for path in paths:
+        with np.load(path, allow_pickle=True) as d:
+            z = np.asarray(d['z'], dtype=np.float32)
+            if z.ndim == 4 and z.shape[0] == 1:
+                z = z[0]
+            elif z.ndim != 3:
+                raise ValueError(
+                    f'{path}: expected z shape (1, T, L, D) or (T, L, D); got {z.shape}',
+                )
+            split_labels.append(str(np.asarray(d['trial_split']).reshape(-1)[0]).lower())
+            trial_ids.append(int(np.asarray(d['neural_trial_idx']).reshape(-1)[0]))
+        z_rows.append(z)
+
+    img_tokens = np.stack(z_rows, axis=0)
+    return img_tokens, split_labels, np.asarray(trial_ids, dtype=np.int64), paths
+
+
+def resolve_ids_restore_for_trials(
+    trial_split_labels: list[str],
+    neural_trial_idx: np.ndarray,
+    lookup: dict[tuple[str, int], np.ndarray],
+) -> np.ndarray:
+    """Fetch each trial's `ids_restore` from a lookup by `(split, neural_trial_idx)`.
+
+    Args:
+        trial_split_labels: per-trial split label, length `K`.
+        neural_trial_idx: per-trial neural trial id, shape `(K,)`.
+        lookup: `load_ids_restore_lookup_from_sidecar`'s output.
+
+    Returns:
+        `ids_restore` stacked to shape `(K, T, 2*L_restore)`, in the same order as the inputs.
+
+    Raises:
+        KeyError: if any `(split, neural_trial_idx)` pair has no match in `lookup`.
+    """
+    missing: list[tuple[str, int]] = []
+    rows = []
+    for split, tid in zip(trial_split_labels, neural_trial_idx, strict=True):
+        key = (str(split).lower(), int(tid))
+        if key not in lookup:
+            missing.append(key)
+            continue
+        rows.append(lookup[key])
+    if missing:
+        raise KeyError(
+            f'{len(missing)} trial(s) from the estimated-token directory have no matching '
+            f'ids_restore in the sidecar: {missing[:10]}'
+            + (' ...' if len(missing) > 10 else ''),
+        )
+    return np.stack(rows, axis=0)
+
+
 def load_img_tokens_and_ids_restore_from_shards(
     input_dir: Path,
     session_id: str,
@@ -114,10 +298,10 @@ def load_img_tokens_and_ids_restore_from_shards(
 
     Reads shards via `assemble_z_trials_time_from_inference_batches` (unchanged), which merges
     them into `z_trials_time` shaped `(N, T, 2*L, D)` plus an `'ids_restore'` aux array shaped
-    `(N, T, 2*L)` (recognized via `extra_aux_keys`, since it isn't one of
-    `IMG_TOKEN_CAM_BATCH_KEYS`). Both are then un-merged back to per-camera form, `(N, T, 2, L, D)`
-    / `(N, T, 2, L)`, undoing the plain concatenation `extract_eval_layout_img_token_batches`
-    applied at write time.
+    `(N, T, 2*L_restore)` (`L_restore == L - 1`, one token shorter — `ids_restore` excludes the
+    CLS token; recognized via `extra_aux_keys`, since it isn't one of `IMG_TOKEN_CAM_BATCH_KEYS`).
+    Both are then un-merged back to per-camera form, `(N, T, 2, L, D)` / `(N, T, 2, L_restore)`,
+    undoing the plain concatenation `extract_eval_layout_img_token_batches` applied at write time.
 
     Args:
         input_dir: root directory holding `<session_id>/<split>/img_tokens_batch*.npz` shards —
@@ -130,7 +314,7 @@ def load_img_tokens_and_ids_restore_from_shards(
 
     Returns:
         Tuple `(img_tokens, ids_restore)`: `img_tokens` is `float32` shaped `(N, T, 2, L, D)`;
-        `ids_restore` is `int64` shaped `(N, T, 2, L)`.
+        `ids_restore` is `int64` shaped `(N, T, 2, L_restore)` (`L_restore == L - 1`).
 
     Raises:
         RuntimeError: if no `'ids_restore'` aux array is found in the shards.
@@ -153,15 +337,7 @@ def load_img_tokens_and_ids_restore_from_shards(
 
     z = np.asarray(assembly.z_trials_time, dtype=np.float32)
     restore = np.asarray(assembly.aux_trials['ids_restore'], dtype=np.float32).astype(np.int64)
-
-    n, t, merged, d = z.shape
-    if merged % 2 != 0:
-        raise ValueError(f'merged token axis {merged} is not evenly divisible by 2 cameras')
-    n_tok = merged // 2
-
-    img_tokens = z.reshape(n, t, 2, n_tok, d)
-    ids_restore = restore.reshape(n, t, 2, n_tok)
-    return img_tokens, ids_restore
+    return _unmerge_camera_axis(z, restore)
 
 
 def predict_frame_from_all_tokens(
@@ -238,17 +414,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sharded.add_argument(
         '--session-id', type=str, default=None, help='session/EID name (shard subdirectory)',
     )
+    estimated = ap.add_argument_group('estimated mode')
+    estimated.add_argument(
+        '--estimated-dir',
+        type=Path,
+        default=None,
+        help=(
+            'step3 unproject.py output dir (a split dir, or a root of several split dirs) of '
+            'per-trial img_tokens_estimated_neuraltrial*.npz files'
+        ),
+    )
+    estimated.add_argument(
+        '--ids-restore-sidecar',
+        type=Path,
+        default=None,
+        help=(
+            'estimated mode: img_tokens_camera_parameters.npz sidecar written by step1 '
+            "run_pca_and_save.py, carrying each trial's ids_restore"
+        ),
+    )
+    estimated.add_argument(
+        '--target-frame-mapping-left',
+        type=Path,
+        default=None,
+        help=(
+            'estimated mode: left camera eval-layout input dir (the one passed as `beast '
+            'predict --input`) for PSNR/SSIM ground-truth frames; requires '
+            '--target-frame-mapping-right too'
+        ),
+    )
+    estimated.add_argument(
+        '--target-frame-mapping-right',
+        type=Path,
+        default=None,
+        help=(
+            'estimated mode: right camera eval-layout input dir, paired with '
+            '--target-frame-mapping-left'
+        ),
+    )
     ap.add_argument(
         '--splits',
         type=str,
         default='train,val,test',
-        help='shard mode only: comma-separated splits to decode',
+        help='shard/estimated mode only: comma-separated splits to decode',
     )
     ap.add_argument(
         '--time-bins',
         type=int,
         default=60,
-        help='shard mode only: timebins per trial (must match what step0 extracted)',
+        help='shard/estimated mode only: timebins per trial (must match what step0 extracted)',
     )
     ap.add_argument('--out-dir', type=Path, required=True, help='directory for decoded outputs')
     ap.add_argument(
@@ -266,10 +480,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     have_combined = args.img_tokens_npz is not None or args.ids_restore_npz is not None
     have_sharded = args.input_dir is not None or args.session_id is not None
-    if have_combined == have_sharded:
+    have_estimated = args.estimated_dir is not None or args.ids_restore_sidecar is not None
+    if sum([have_combined, have_sharded, have_estimated]) != 1:
         ap.error(
-            'pass either --img-tokens-npz + --ids-restore-npz (combined-npz mode) or '
-            '--input-dir + --session-id (shard mode), not both/neither',
+            'pass exactly one of: --img-tokens-npz + --ids-restore-npz (combined-npz mode), '
+            '--input-dir + --session-id (shard mode), or --estimated-dir + '
+            '--ids-restore-sidecar (estimated mode)',
         )
     if have_combined and (args.img_tokens_npz is None or args.ids_restore_npz is None):
         ap.error('combined-npz mode requires both --img-tokens-npz and --ids-restore-npz')
@@ -277,6 +493,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error('shard mode requires both --input-dir and --session-id')
     if have_sharded and args.target_images_npz is not None:
         ap.error('--target-images-npz (PSNR/SSIM metrics) is not supported in shard mode yet')
+    if have_estimated and (args.estimated_dir is None or args.ids_restore_sidecar is None):
+        ap.error('estimated mode requires --estimated-dir and --ids-restore-sidecar')
+    have_target_frames = (
+        args.target_frame_mapping_left is not None or args.target_frame_mapping_right is not None
+    )
+    if have_target_frames and (
+        args.target_frame_mapping_left is None or args.target_frame_mapping_right is None
+    ):
+        ap.error(
+            '--target-frame-mapping-left and --target-frame-mapping-right must be given together',
+        )
+    if have_target_frames and not have_estimated:
+        ap.error('--target-frame-mapping-left/-right are estimated-mode only')
     return args
 
 
@@ -284,7 +513,22 @@ def main(argv: list[str] | None = None) -> None:
     """Run the beast img-token decode pipeline end to end (CLI entry point)."""
     args = parse_args(argv)
 
-    if args.input_dir is not None:
+    trial_split_labels: list[str] | None = None
+    neural_trial_idx: np.ndarray | None = None
+    if args.estimated_dir is not None:
+        log_step(f'Loading estimated img_tokens from: {args.estimated_dir}', level='info')
+        img_tokens, trial_split_labels, neural_trial_idx, _paths = load_estimated_tokens_dir(
+            args.estimated_dir,
+        )
+        log_step(
+            f'Loading ids_restore lookup from sidecar: {args.ids_restore_sidecar}', level='info',
+        )
+        restore_lookup = load_ids_restore_lookup_from_sidecar(args.ids_restore_sidecar)
+        ids_restore = resolve_ids_restore_for_trials(
+            trial_split_labels, neural_trial_idx, restore_lookup,
+        )
+        img_tokens, ids_restore = _unmerge_camera_axis(img_tokens, ids_restore)
+    elif args.input_dir is not None:
         log_step(
             f'Assembling img_tokens + ids_restore from shards: {args.input_dir}/{args.session_id}',
             level='info',
@@ -297,9 +541,14 @@ def main(argv: list[str] | None = None) -> None:
         img_tokens, _tokens_meta = load_img_tokens_trials_npz(args.img_tokens_npz)
         log_step(f'Loading ids_restore from: {args.ids_restore_npz}', level='info')
         ids_restore, _ = load_ids_restore_trials_npz(args.ids_restore_npz)
-    if img_tokens.shape[:-1] != ids_restore.shape:
+    if (
+        img_tokens.shape[:-2] != ids_restore.shape[:-1]
+        or img_tokens.shape[-2] != ids_restore.shape[-1] + 1
+    ):
         raise ValueError(
-            f'img_tokens {img_tokens.shape} and ids_restore {ids_restore.shape} shape mismatch',
+            f'img_tokens {img_tokens.shape} and ids_restore {ids_restore.shape} shape mismatch '
+            '(expected matching leading dims and img_tokens token axis == ids_restore token '
+            'axis + 1, for the CLS token)',
         )
 
     log_step(f'Loading model from: {args.model_dir}', level='info')
@@ -310,16 +559,48 @@ def main(argv: list[str] | None = None) -> None:
 
     handler = ImagePredictionHandler(args.out_dir, args.out_dir)
 
-    # collapse (K, T, V) into a single decode batch dim; L, D stay per-token
+    # collapse (K, T, V) into a single decode batch dim; L, D stay per-token. ids_restore's
+    # token axis is one shorter than img_tokens's (no CLS restore index), so flatten each with
+    # its own trailing dim.
     k, t, v, l, d = img_tokens.shape
+    l_restore = ids_restore.shape[-1]
     flat_tokens = img_tokens.reshape(k * t * v, l, d)
-    flat_restore = ids_restore.reshape(k * t * v, l)
+    flat_restore = ids_restore.reshape(k * t * v, l_restore)
 
     target = None
+    trial_idx_flat = bin_idx_flat = split_flat = None
+    metrics_source = args.img_tokens_npz
     if args.target_images_npz is not None:
         with np.load(args.target_images_npz, allow_pickle=True) as td:
             image = np.asarray(td['image'], dtype=np.float32)
             target = image.reshape(k * t * v, *image.shape[-3:])
+    elif args.target_frame_mapping_left is not None:
+        assert trial_split_labels is not None and neural_trial_idx is not None
+        image_size = int(loaded.config['model']['model_params']['image_size'])
+        unique_splits = sorted(set(trial_split_labels))
+        mapping_left = {
+            sp: load_frame_index_mapping(args.target_frame_mapping_left, sp)
+            for sp in unique_splits
+        }
+        mapping_right = {
+            sp: load_frame_index_mapping(args.target_frame_mapping_right, sp)
+            for sp in unique_splits
+        }
+        log_step('Loading ground-truth target frames for PSNR/SSIM metrics', level='info')
+        target_full = load_target_images_for_trials(
+            trial_split_labels, neural_trial_idx, t, mapping_left, mapping_right, image_size,
+        ).numpy()
+        target = target_full.reshape(k * t * v, *target_full.shape[-3:])
+
+        trial_idx_full = np.broadcast_to(np.asarray(neural_trial_idx)[:, None, None], (k, t, v))
+        bin_idx_full = np.broadcast_to(np.arange(t)[None, :, None], (k, t, v))
+        split_full = np.broadcast_to(
+            np.asarray(trial_split_labels, dtype=object)[:, None, None], (k, t, v),
+        )
+        trial_idx_flat = trial_idx_full.reshape(k * t * v).astype(np.int64)
+        bin_idx_flat = bin_idx_full.reshape(k * t * v).astype(np.int64)
+        split_flat = split_full.reshape(k * t * v).astype(str)
+        metrics_source = args.estimated_dir
 
     psnr_blocks, ssim_blocks, trial_blocks, bin_blocks, split_blocks = [], [], [], [], []
     num_decoded = 0
@@ -342,9 +623,18 @@ def main(argv: list[str] | None = None) -> None:
                 psnr, ssim, trial_idx, bin_idx, split_labels, _ = collect_psnr_ssim_metrics_block(
                     render.unsqueeze(1),
                     target_batch.unsqueeze(1),
-                    args.img_tokens_npz,
+                    metrics_source,
                     k_trials=end - start,
                     t_bins=1,
+                    neural_trial_idx=(
+                        trial_idx_flat[start:end] if trial_idx_flat is not None else None
+                    ),
+                    neural_bin_idx=(
+                        bin_idx_flat[start:end].reshape(-1, 1)
+                        if bin_idx_flat is not None
+                        else None
+                    ),
+                    trial_split=split_flat[start:end] if split_flat is not None else None,
                 )
                 psnr_blocks.append(psnr)
                 ssim_blocks.append(ssim)
@@ -363,7 +653,7 @@ def main(argv: list[str] | None = None) -> None:
             neural_trial_blocks=trial_blocks,
             neural_bin_blocks=bin_blocks,
             trial_split_blocks=split_blocks,
-            source_file_rows=[str(args.img_tokens_npz)] * sum(b.shape[0] for b in trial_blocks),
+            source_file_rows=[str(metrics_source)] * sum(b.shape[0] for b in trial_blocks),
         )
         log_step(f'Saved PSNR/SSIM metrics to: {metrics_path}', level='info')
 

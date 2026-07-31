@@ -19,7 +19,7 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 
 # Stage 3: un-PCA and de-normalize decoded compressed img tokens back to full-dimensional beast
 # img tokens. Requires step1's PCA bundle and step2's decoded output; produces per-trial
-# img_tokens_estimated*.npz, consumed by step4_decode_tokens.sh as --img-tokens-npz.
+# img_tokens_estimated*.npz, consumed by step4_decode_tokens.sh as --estimated-dir.
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 JOB_ID=20505751
 MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/beast_vit_large/$EID/$JOB_ID}"
