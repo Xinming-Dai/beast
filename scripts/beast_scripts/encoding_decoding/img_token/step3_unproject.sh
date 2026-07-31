@@ -39,5 +39,5 @@ python -m beast.sable_encoding_decoding.img_token.unproject \
     --compressed-trials-npz "$COMPRESSED_TRIALS_NPZ" \
     --out-root "$OUT_ROOT"
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done"
 conda deactivate
