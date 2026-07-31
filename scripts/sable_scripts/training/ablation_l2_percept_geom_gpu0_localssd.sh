@@ -1,12 +1,14 @@
 #!/bin/bash
-# Loss-weighting ablation — GPU 0 half (3 cells, perceptual weight sweep).
-# cell_default (10000 steps) completed separately.
+# Loss-weighting ablation — GPU 0 half (4 cells).
+#
+# Step regime: ABLATION_STEPS=6000 (warmup=900, scaled to plan v4 §6.3 pct_start=0.15).
+#   10000-step baseline cell_default kept separately under cell_default/ for cross-check.
 #
 # Each cell varies only the three loss weights (l2, perceptual, gs_reg); all other
 # hyperparameters (optimizer, schedule, data, VDA precomputed, batch, steps, warmup)
 # are held constant via the frozen contract in run_one_cell.sh.
 #
-# This script pins CUDA_VISIBLE_DEVICES=0 and runs 3 cells SEQUENTIALLY on a single GPU.
+# This script pins CUDA_VISIBLE_DEVICES=0 and runs 4 cells SEQUENTIALLY on a single GPU.
 # Run in parallel with ablation_l2_percept_geom_gpu1_localssd.sh on a second shell.
 #
 # Dataset pinned to local NVMe (/localssd/jinqihang/...) — set DATASET_ROOT to override.
@@ -26,11 +28,9 @@ BATCH_SIZE_PER_GPU=${BATCH_SIZE_PER_GPU:-24}     # effective batch 24
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-1}
 GPU_ID=${GPU_ID:-0}
 
-# This half's 3 cells (cell_default completed at 10000 steps): perceptual-weight sweep.
+# This run: only the 6k twin of default, for fair step-matched comparison with the 6k perceptual sweep.
 CELLS=(
-  "no-percept  l2=1.0 p=0.0 g=1.0"
-  "low-percept l2=1.0 p=0.1 g=1.0"
-  "high-percept l2=1.0 p=1.0 g=1.0"
+  "default-6k l2=1.0 p=0.3 g=1.0"
 )
 
 if (( ABLATION_WARMUP < 2 || ABLATION_WARMUP >= ABLATION_STEPS )); then
@@ -99,7 +99,7 @@ launch_spec() {
       "${out}" "${OVERRIDES[@]}" >"${out}/launcher.log" 2>&1
 }
 
-# Run 3 cells sequentially on GPU 0. A failure in one cell surfaces immediately
+# Run 4 cells sequentially on GPU 0. A failure in one cell surfaces immediately
 # rather than being swallowed by parallelism.
 for spec in "${CELLS[@]}"; do
   launch_spec "${spec}"
