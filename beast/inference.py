@@ -69,7 +69,7 @@ class ImagePredictionHandler:
 
         # ensure values are in [0, 255] range
         # This gets you back to [0, 1]
-        tensor = tensor * self.std + self.mean
+        tensor = tensor * self.std.to(tensor.device) + self.mean.to(tensor.device)
         # after getting to [0, 1], scale to [0, 255]
         tensor = torch.clamp(tensor, 0, 1)  # Ensure [0, 1] range
         tensor = tensor * 255.0
@@ -372,7 +372,7 @@ class VideoPredictionHandler:
 
         # ensure values are in [0, 255] range
         # This gets you back to [0, 1]
-        tensor = tensor * self.std + self.mean
+        tensor = tensor * self.std.to(tensor.device) + self.mean.to(tensor.device)
         # after getting to [0, 1], scale to [0, 255]
         tensor = torch.clamp(tensor, 0, 1)  # Ensure [0, 1] range
         tensor = tensor * 255.0

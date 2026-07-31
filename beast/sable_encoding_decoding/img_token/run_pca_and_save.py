@@ -630,8 +630,12 @@ def _load_stage1_train_cameras(
 ) -> dict[str, np.ndarray] | None:
     """Load ``train_{key}`` arrays from the stage-1 camera sidecar.
 
+    Looks for both camera keys (``IMG_TOKEN_CAM_BATCH_KEYS``) and ``ids_restore``, so a
+    two-stage (``stage 1`` then ``stage 2``) run doesn't silently drop train's `ids_restore`
+    from the final sidecar (beast's decode step needs it; Sable's camera-based decode doesn't).
+
     Returns a dict ``{key: arr}`` (without the ``train_`` prefix) or ``None`` if the file
-    does not exist or contains no train camera keys.
+    does not exist or contains no train aux keys.
     """
     p = camera_sidecar_path.resolve()
     if not p.is_file():
@@ -642,7 +646,7 @@ def _load_stage1_train_cameras(
         return None
     d = np.load(p, allow_pickle=True)
     train_cams: dict[str, np.ndarray] = {}
-    for key in IMG_TOKEN_CAM_BATCH_KEYS:
+    for key in (*IMG_TOKEN_CAM_BATCH_KEYS, 'ids_restore'):
         full_key = f'train_{key}'
         if full_key in d.files:
             train_cams[key] = np.asarray(d[full_key], dtype=np.float32)
@@ -778,6 +782,7 @@ def run_img_tokens_pca_joint(
                     time_bins=time_bins,
                     file_prefix=file_prefix,
                     split_subdirs=split_subdirs,
+                    extra_aux_keys=frozenset({'ids_restore'}),
                 )
                 log(
                     f'[stage2] split={split!r} done in {time.perf_counter() - t_asm:.2f}s  '
@@ -966,6 +971,7 @@ def run_img_tokens_pca_joint(
                 time_bins=time_bins,
                 file_prefix=file_prefix,
                 split_subdirs=split_subdirs,
+                extra_aux_keys=frozenset({'ids_restore'}),
             )
             log(
                 f'[load] split={split!r} done in {time.perf_counter() - t_asm:.2f}s  '

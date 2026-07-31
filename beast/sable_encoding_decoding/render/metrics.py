@@ -174,8 +174,15 @@ def collect_psnr_ssim_metrics_block(
     *,
     k_trials: int,
     t_bins: int,
+    neural_trial_idx: np.ndarray | None = None,
+    neural_bin_idx: np.ndarray | None = None,
+    trial_split: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Compute one canonical metrics block for a token file.
+
+    `neural_trial_idx`/`neural_bin_idx`/`trial_split`, when given, are used directly instead of
+    being read from `source_npz` — for callers (e.g. estimated-mode decoding) that already have
+    this metadata in memory and have no single npz file to read it back from.
 
     Returns:
         PSNR/SSIM shaped `[K, T, V]`, neural trial ids shaped `[K]`, neural bin ids shaped
@@ -187,9 +194,21 @@ def collect_psnr_ssim_metrics_block(
     return (
         psnr_flat.reshape(k_trials, t_bins, metric_views).astype(np.float32),
         ssim_flat.reshape(k_trials, t_bins, metric_views).astype(np.float32),
-        load_neural_trial_idx(source_npz, k_trials=k_trials, t_bins=t_bins),
-        load_neural_bin_idx(source_npz, k_trials=k_trials, t_bins=t_bins),
-        load_trial_split(source_npz, k_trials=k_trials, t_bins=t_bins),
+        (
+            neural_trial_idx
+            if neural_trial_idx is not None
+            else load_neural_trial_idx(source_npz, k_trials=k_trials, t_bins=t_bins)
+        ),
+        (
+            neural_bin_idx
+            if neural_bin_idx is not None
+            else load_neural_bin_idx(source_npz, k_trials=k_trials, t_bins=t_bins)
+        ),
+        (
+            trial_split
+            if trial_split is not None
+            else load_trial_split(source_npz, k_trials=k_trials, t_bins=t_bins)
+        ),
         [str(source_npz)] * k_trials,
     )
 
