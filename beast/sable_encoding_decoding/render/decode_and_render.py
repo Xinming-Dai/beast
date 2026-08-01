@@ -26,7 +26,6 @@ from beast.sable_encoding_decoding.img_token.saved_tokens_io import (
 from beast.sable_encoding_decoding.render.decode_utils import (
     _print_combined_metrics_summary,
     combine_metrics_shards_to_combined_npz,
-    delete_decoded_token_sources,
     delete_metrics_shards_for_sources,
     filter_img_tokens_npz_paths_by_neural_trial,
     is_render_complete,
@@ -548,12 +547,6 @@ def main(argv: list[str] | None = None) -> None:
             level='info',
         )
         _print_combined_metrics_summary(metrics_npz, merged)
-        n_deleted = delete_decoded_token_sources(npz_paths, skip_indices=set(missing))
-        log_step(
-            f'Deleted {n_deleted} decoded token .npz file(s) under --z-source after saving '
-            'metrics.',
-            level='info',
-        )
         return
 
     if not args.model_dir:
@@ -937,12 +930,6 @@ def main(argv: list[str] | None = None) -> None:
             level='info',
         )
         _print_combined_metrics_summary(metrics_npz, metrics)
-        n_deleted = delete_decoded_token_sources(npz_paths, skip_indices=set(missing))
-        log_step(
-            f'Deleted {n_deleted} decoded token .npz file(s) under --z-source after saving '
-            'metrics.',
-            level='info',
-        )
         return
 
     log_step(
