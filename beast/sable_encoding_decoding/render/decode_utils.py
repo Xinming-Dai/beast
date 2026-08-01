@@ -366,28 +366,3 @@ def _print_combined_metrics_summary(metrics_npz: Path, merged: dict[str, np.ndar
     )
 
 
-def delete_decoded_token_sources(
-    npz_paths: list[Path],
-    *,
-    skip_indices: set[int] | None = None,
-) -> int:
-    """Delete decoded token `.npz` files under `--z-source` after metrics are saved.
-
-    Args:
-        npz_paths: source token `.npz` paths that were decoded and scored.
-        skip_indices: indices into `npz_paths` to leave alone (e.g. sources whose metrics
-            shard was never produced).
-
-    Returns:
-        Count of files actually removed.
-    """
-    skip = skip_indices or set()
-    removed = 0
-    for i, p in enumerate(npz_paths):
-        if i in skip:
-            continue
-        path = Path(p)
-        if path.is_file():
-            path.unlink()
-            removed += 1
-    return removed
