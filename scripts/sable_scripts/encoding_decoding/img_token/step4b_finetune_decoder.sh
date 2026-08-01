@@ -30,7 +30,7 @@ cd "$REPO_ROOT"
 # PSNR/SSIM on the test split with the finetuned weights. Mirrors the original E-RayZer
 # step5_erayzer_decoder_finetune.sh. 
 MODEL_ROOT=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395                   # dir with config.yaml + *best.ckpt
-EID=4b00df29-3769-43be-bb40-128b1cba6d35
+EID=f312aaec-3b6f-44b3-86b4-3a0c119c0438
 LR="1e-4"
 
 SUBDIR=latents/img_tokens_compressed/$EID
@@ -55,6 +55,7 @@ FINETUNE_ARGS=(
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
     --correspondence-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences"
+    --eid "$EID"
     --batch-size 60
     --include-splits val
     --finetune-ckpt-out "$FINETUNE_DIR/finetuned_decoder_best.ckpt"
@@ -78,7 +79,7 @@ EVAL_ARGS=(
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
     --correspondence-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences"
-    --ibl-session-eids "$EID"
+    --eid "$EID"
     --batch-size 60
     --include-splits test
     --metrics-only

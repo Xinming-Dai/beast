@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A bfsr-delta-gpu
+#SBATCH -A bezq-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -53,7 +53,7 @@ ARGS=(
     --batch-size 60
     --include-splits test
     --neural-trial-index 0
-    --ibl-session-eids "$EID"
+    --eid "$EID"
 )
 [ -n "$VDA_CACHE_ROOT" ] && ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
