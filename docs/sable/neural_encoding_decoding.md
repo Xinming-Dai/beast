@@ -250,7 +250,7 @@ Key flags (see `render/decode_and_render.py::parse_args`):
 | `--out-dir` | output root for renders / metrics / point clouds |
 | `--model-dir` | directory with `config.yaml` + `*best.ckpt`; required unless `--combine-metrics-only` |
 | `--camera-npz` | optional `img_tokens_camera_parameters.npz` sidecar, used when `--z-source` files don't carry camera tensors |
-| `--dataset-path`, `--correspondence-cache-root`, `--vda-cache-root`, `--ibl-session-eids`, `--include-splits`, `--batch-size`, `--num-workers`, `--ibl-precache-valid-index` | dataloader construction overrides, mirroring `beast/inference.py::infer_sable`'s dataloader setup |
+| `--dataset-path`, `--correspondence-cache-root`, `--vda-cache-root`, `--eid`, `--include-splits`, `--batch-size`, `--num-workers`, `--ibl-precache-valid-index` | dataloader construction overrides, mirroring `beast/inference.py::infer_sable`'s dataloader setup |
 | `--sync-batch-index` | dataloader batch index for the first `--z-source` file (directory mode increments per file) |
 | `--neural-trial-index` / `--neural-trial-range` | restrict to specific neural trial ids (mutually exclusive) |
 | `--max-render-samples`, `--max-render-views` | caps on how much to render per file |
