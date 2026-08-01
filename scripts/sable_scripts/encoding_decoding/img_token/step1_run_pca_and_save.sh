@@ -28,7 +28,7 @@ cd "$REPO_ROOT"
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step1_run_pca_and_save.sh
-MODEL_ROOT="${MODEL_ROOT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553/latents}"                    # output paths
+MODEL_ROOT="${MODEL_ROOT:-/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395/latents}"                    # output paths
 INPUT_DIR="$MODEL_ROOT/img_tokens"                          # inference dir of img_tokens_batch*.npz shards
 STAGE="${STAGE:-all}"                                       # 1 | 2 | all
 N_FEAT_KEEP=6                                               # PCA components to keep
@@ -46,4 +46,5 @@ ARGS=(
 
 python -m beast.sable_encoding_decoding.img_token.run_pca_and_save "${ARGS[@]}"
 
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done."
 conda deactivate
