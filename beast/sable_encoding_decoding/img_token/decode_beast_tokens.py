@@ -54,7 +54,9 @@ from beast.sable_encoding_decoding.img_token.saved_tokens_io import (
 )
 from beast.sable_encoding_decoding.img_token.target_frames import (
     load_frame_index_mapping,
+    load_source_frame_index_mapping,
     load_target_images_for_trials,
+    load_target_masks_for_trials,
 )
 from beast.sable_encoding_decoding.img_token.trials_assembly import (
     assemble_z_trials_time_from_inference_batches,
@@ -453,6 +455,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '--target-frame-mapping-left'
         ),
     )
+    estimated.add_argument(
+        '--use-segmentation-mask',
+        action='store_true',
+        help=(
+            'estimated mode: zero out background pixels (per precomputed SAM3 masks) in both '
+            'render and target before saving/metrics; requires --segmentation-root, --eid, and '
+            '--target-frame-mapping-left/-right'
+        ),
+    )
+    estimated.add_argument(
+        '--segmentation-root',
+        type=Path,
+        default=None,
+        help=(
+            'estimated mode: root directory precomputed segmentation masks were written under '
+            '(see beast.preprocess.sable.precompute_sam3_masks_eval)'
+        ),
+    )
+    estimated.add_argument(
+        '--eid', type=str, default=None, help='estimated mode: session id (mask subdirectory)',
+    )
     ap.add_argument(
         '--splits',
         type=str,
@@ -507,6 +530,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if have_target_frames and not have_estimated:
         ap.error('--target-frame-mapping-left/-right are estimated-mode only')
+    if args.use_segmentation_mask and (
+        args.segmentation_root is None or args.eid is None or not have_target_frames
+    ):
+        ap.error(
+            '--use-segmentation-mask requires --segmentation-root, --eid, and '
+            '--target-frame-mapping-left/-right',
+        )
     return args
 
 
@@ -569,6 +599,7 @@ def main(argv: list[str] | None = None) -> None:
     flat_restore = ids_restore.reshape(k * t * v, l_restore)
 
     target = None
+    target_masks = None
     trial_idx_flat = bin_idx_flat = split_flat = None
     metrics_source = args.img_tokens_npz
     if args.target_images_npz is not None:
@@ -603,6 +634,28 @@ def main(argv: list[str] | None = None) -> None:
         split_flat = split_full.reshape(k * t * v).astype(str)
         metrics_source = args.estimated_dir
 
+        if args.use_segmentation_mask:
+            mask_index_left = {
+                sp: load_source_frame_index_mapping(args.target_frame_mapping_left, sp, 'left')
+                for sp in unique_splits
+            }
+            mask_index_right = {
+                sp: load_source_frame_index_mapping(args.target_frame_mapping_right, sp, 'right')
+                for sp in unique_splits
+            }
+            log_step('Loading segmentation masks', level='info')
+            masks_full = load_target_masks_for_trials(
+                trial_split_labels,
+                neural_trial_idx,
+                t,
+                mask_index_left,
+                mask_index_right,
+                args.segmentation_root,
+                args.eid,
+                image_size,
+            ).numpy()
+            target_masks = masks_full.reshape(k * t * v, *masks_full.shape[-3:])
+
     psnr_blocks, ssim_blocks, trial_blocks, bin_blocks, split_blocks = [], [], [], [], []
     num_decoded = 0
     with torch.no_grad():
@@ -614,6 +667,12 @@ def main(argv: list[str] | None = None) -> None:
             result = predict_frame_from_all_tokens(model, tokens_batch, restore_batch)
             render = result['render']
 
+            if target_masks is not None:
+                mask_batch = torch.from_numpy(target_masks[start:end]).to(
+                    device=render.device, dtype=render.dtype,
+                )
+                render = render * mask_batch
+
             for i in range(render.shape[0]):
                 row = start + i
                 handler.save_reconstruction(render[i], 'decoded', row, Path(f'row{row:06d}.png'))
@@ -621,6 +680,8 @@ def main(argv: list[str] | None = None) -> None:
 
             if target is not None:
                 target_batch = torch.from_numpy(target[start:end]).to(args.device)
+                if target_masks is not None:
+                    target_batch = target_batch * mask_batch
                 psnr, ssim, trial_idx, bin_idx, split_labels, _ = collect_psnr_ssim_metrics_block(
                     render.unsqueeze(1),
                     target_batch.unsqueeze(1),
