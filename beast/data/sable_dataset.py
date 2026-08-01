@@ -762,6 +762,9 @@ class IBLTwoViewDataset(SABLEDataset):
 
     * ``training.dataset_path`` — raw IBL frames root (required)
     * ``training.session_names`` — list of session IDs to load; auto-discovers when null
+    * ``training.ibl_inference_session_eids`` — optional session ID(s) that override
+      ``session_names`` for this dataset instance, without mutating it; used to restrict
+      inference/rendering to specific sessions
     * ``model.vda.cache_root`` — precomputed VDA depth cache root
     * ``model.merge_pcd.correspondence_cache_root`` — precomputed correspondence cache root
     * ``model.image_tokenizer.image_size``
@@ -809,9 +812,14 @@ class IBLTwoViewDataset(SABLEDataset):
                 )
             segmentation_root = Path(segmentation_root_raw)
 
+        # ibl_inference_session_eids restricts inference/rendering to specific sessions
+        # without disturbing session_names, which training also relies on
+        session_names = (
+            training.get('ibl_inference_session_eids') or training.get('session_names')
+        )
         self._records: list[_PrecacheRecord] = self._discover_filesystem_records(
             image_root=Path(dataset_path),
-            session_names=training.get('session_names'),
+            session_names=session_names,
             include_splits=include_splits,
             val_split_ratio=val_split_ratio,
             split_seed=split_seed,

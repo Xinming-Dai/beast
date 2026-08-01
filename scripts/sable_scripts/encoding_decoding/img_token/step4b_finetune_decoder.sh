@@ -15,6 +15,13 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
+# Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
+if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
+    export TORCH_CUDA_ARCH_LIST="8.0;8.6"
+fi
+
+[ -x /usr/bin/gcc ] && export CC=/usr/bin/gcc CXX=/usr/bin/g++
+
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
@@ -71,6 +78,7 @@ EVAL_ARGS=(
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
     --correspondence-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences"
+    --ibl-session-eids "$EID"
     --batch-size 60
     --include-splits test
     --metrics-only

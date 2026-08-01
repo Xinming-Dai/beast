@@ -15,6 +15,13 @@ exec 2>&1
 source ~/.bashrc
 conda activate beast
 
+# Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
+if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
+    export TORCH_CUDA_ARCH_LIST="8.0;8.6"
+fi
+
+[ -x /usr/bin/gcc ] && export CC=/usr/bin/gcc CXX=/usr/bin/g++
+
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
@@ -22,7 +29,7 @@ cd "$REPO_ROOT"
 # Requires step3's unprojected tokens (or raw step0 img tokens) as Z_SOURCE; produces
 # rendered frames under OUT_DIR, consumed by step5_generate_video.sh.
 MODEL_ROOT=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395                   # dir with config.yaml + *best.ckpt
-EID=f312aaec-3b6f-44b3-86b4-3a0c119c0438
+EID=4b00df29-3769-43be-bb40-128b1cba6d35
 
 SUBDIR=latents/img_tokens_compressed/$EID
 Z_SOURCE="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID/test"     # single .npz or a directory of img_tokens*.npz
@@ -45,8 +52,8 @@ ARGS=(
     --correspondence-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences"
     --batch-size 60
     --include-splits test
-    --metrics-only  
-    
+    --neural-trial-index 0
+    --ibl-session-eids "$EID"
 )
 [ -n "$VDA_CACHE_ROOT" ] && ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")

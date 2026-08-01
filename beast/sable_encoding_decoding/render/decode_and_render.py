@@ -384,7 +384,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '--use-segmentation-mask.'
         ),
     )
-    p.add_argument('--ibl-session-eids', type=str, default=None)
+    p.add_argument(
+        '--ibl-session-eids',
+        type=str,
+        default=None,
+        help=(
+            'restrict the IBLTwoViewDataset eval dataloader to this session id, overriding '
+            "training.session_names for this run (does not affect the model's config)"
+        ),
+    )
     p.add_argument(
         '--include-splits',
         type=_parse_include_splits,
@@ -685,6 +693,19 @@ def main(argv: list[str] | None = None) -> None:
                 f'--sync-batch-index={args.sync_batch_index} (file uses batch_idx={batch_idx}) '
                 'may not match this .npz file, or --batch-size is inconsistent.',
             )
+
+        if getattr(args, 'ibl_session_eids', None) is not None:
+            expected_eid = args.ibl_session_eids
+            batch_session_ids = {
+                str(scene_name).rsplit('_pair_', 1)[0] for scene_name in batch['scene_name']
+            }
+            if batch_session_ids - {expected_eid}:
+                raise ValueError(
+                    f'{npz_path}: batch_idx={batch_idx} contains session(s) '
+                    f'{sorted(batch_session_ids - {expected_eid})}, which do not match '
+                    f'--ibl-session-eids={expected_eid!r}. The eval dataloader is misaligned '
+                    'with the z-source tokens being decoded.',
+                )
 
         m = flat if (args.metrics_only or do_finetune) else min(int(args.max_render_samples), flat)
         log_step(
