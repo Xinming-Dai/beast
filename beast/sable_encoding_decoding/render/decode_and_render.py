@@ -279,8 +279,8 @@ def _apply_dataloader_overrides(config: dict, args: argparse.Namespace) -> None:
         training['num_workers'] = args.num_workers
     if getattr(args, 'include_splits', None) is not None:
         training['ibl_precache_splits'] = args.include_splits
-    if getattr(args, 'ibl_session_eids', None) is not None:
-        training['ibl_inference_session_eids'] = args.ibl_session_eids
+    if getattr(args, 'eid', None) is not None:
+        training['ibl_inference_session_eids'] = args.eid
     if getattr(args, 'vda_cache_root', None) is not None:
         config['model'].setdefault('vda', {})
         config['model']['vda']['cache_root'] = args.vda_cache_root
@@ -384,7 +384,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        '--ibl-session-eids',
+        '--eid',
         type=str,
         default=None,
         help=(
@@ -687,8 +687,8 @@ def main(argv: list[str] | None = None) -> None:
                 'may not match this .npz file, or --batch-size is inconsistent.',
             )
 
-        if getattr(args, 'ibl_session_eids', None) is not None:
-            expected_eid = args.ibl_session_eids
+        if getattr(args, 'eid', None) is not None:
+            expected_eid = args.eid
             batch_session_ids = {
                 str(scene_name).rsplit('_pair_', 1)[0] for scene_name in batch['scene_name']
             }
@@ -696,7 +696,7 @@ def main(argv: list[str] | None = None) -> None:
                 raise ValueError(
                     f'{npz_path}: batch_idx={batch_idx} contains session(s) '
                     f'{sorted(batch_session_ids - {expected_eid})}, which do not match '
-                    f'--ibl-session-eids={expected_eid!r}. The eval dataloader is misaligned '
+                    f'--eid={expected_eid!r}. The eval dataloader is misaligned '
                     'with the z-source tokens being decoded.',
                 )
 

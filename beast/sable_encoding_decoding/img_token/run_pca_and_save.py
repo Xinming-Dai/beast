@@ -1080,6 +1080,16 @@ def run_img_tokens_pca_joint(
     if assembly_.trial_session_ids is not None:
         n_sess = len({_session_subdir_key(s) for s in assembly_.trial_session_ids})
         log(f'[sessions] session_ids: {n_sess} partition(s)')
+        if session_id is not None:
+            unexpected = {_session_subdir_key(s) for s in assembly_.trial_session_ids} - {
+                _session_subdir_key(session_id),
+            }
+            if unexpected:
+                raise ValueError(
+                    f'run_img_tokens_pca_joint(session_id={session_id!r}): loaded trials '
+                    f'embed unexpected session id(s) {sorted(unexpected)}; the scanned '
+                    'directory may have been mis-tagged during extraction.',
+                )
 
     stage_label = stage  # "1" or "all"
     meta_extra_ = {

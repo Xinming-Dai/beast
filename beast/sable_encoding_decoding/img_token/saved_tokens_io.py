@@ -202,8 +202,8 @@ def apply_dataloader_overrides(config: Any, args: argparse.Namespace) -> None:
         config.training.num_workers = args.num_workers
     if getattr(args, 'include_splits', None) is not None:
         config.training.ibl_precache_splits = args.include_splits
-    if getattr(args, 'ibl_session_eids', None) is not None:
-        config.training.ibl_inference_session_eids = args.ibl_session_eids
+    if getattr(args, 'eid', None) is not None:
+        config.training.ibl_inference_session_eids = args.eid
     if getattr(args, 'vda_cache_root', None) is not None:
         config.model.setdefault('vda', {})
         config.model['vda']['cache_root'] = args.vda_cache_root
