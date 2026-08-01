@@ -29,8 +29,8 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # Uses "estimated mode" (--estimated-dir): decodes step3's img_tokens_estimated_neuraltrial*.npz
 # directly. Those files carry no ids_restore of their own, so --ids-restore-sidecar points at the
 # img_tokens_camera_parameters.npz sidecar step1_run_pca_and_save.sh already writes
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID=20505751
+EID="f312aaec-3b6f-44b3-86b4-3a0c119c0438"
+JOB_ID=20668699
 SPLIT="${SPLIT:-test}"
 MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/beast_vit_large/$EID/$JOB_ID}"
 MODEL_ROOT="${MODEL_ROOT:-$MODEL_DIR/latents/img_tokens_compressed/$EID}"
@@ -40,18 +40,24 @@ DATASET_BASE="${DATASET_BASE:-/work/hdd/bfsr/xdai3/IBL_data/synchronized}"
 TARGET_LEFT="${TARGET_LEFT:-$DATASET_BASE/extracted_frames/eval/leftCamera.video/_iblrig_leftCamera.downsampled.$EID}"
 TARGET_RIGHT="${TARGET_RIGHT:-$DATASET_BASE/extracted_frames/eval/rightCamera.video/_iblrig_rightCamera.downsampled.$EID}"
 OUT_DIR="${OUT_DIR:-$MODEL_ROOT/img_tokens_compressed_estimated/$EID/decode_saved_latents}"
+USE_MASK=true
+SEGMENTATION_ROOT="${SEGMENTATION_ROOT:-$DATASET_BASE/extracted_frames_for_eyz/eval}"
 
 mkdir -p "$OUT_DIR"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Decoding beast estimated img_tokens from $ESTIMATED_DIR"
 
-python -m beast.sable_encoding_decoding.img_token.decode_beast_tokens \
-    --model-dir "$MODEL_DIR" \
-    --estimated-dir "$ESTIMATED_DIR" \
-    --ids-restore-sidecar "$IDS_RESTORE_SIDECAR" \
-    --target-frame-mapping-left "$TARGET_LEFT" \
-    --target-frame-mapping-right "$TARGET_RIGHT" \
+ARGS=(
+    --model-dir "$MODEL_DIR"
+    --estimated-dir "$ESTIMATED_DIR"
+    --ids-restore-sidecar "$IDS_RESTORE_SIDECAR"
+    --target-frame-mapping-left "$TARGET_LEFT"
+    --target-frame-mapping-right "$TARGET_RIGHT"
     --out-dir "$OUT_DIR"
+)
+[ "$USE_MASK" = true ] && ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT" --eid "$EID")
+
+python -m beast.sable_encoding_decoding.img_token.decode_beast_tokens "${ARGS[@]}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Job done"
 conda deactivate
