@@ -21,29 +21,17 @@ from beast.sable_encoding_decoding.neural.encoder import (
     train_cnn_encoder_with_tune,
     train_rrr_encoder_with_tune,
 )
-from beast.sable_encoding_decoding.neural.utils import get_encoding_decoding_args, set_seed
+from beast.sable_encoding_decoding.neural.utils import (
+    LATENT_KIND_LAYOUT,
+    get_encoding_decoding_args,
+    is_img_tokens_compressed_family,
+    set_seed,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _RTOL_INTERVALS = 1e-9
 _ATOL_INTERVALS = 1e-12
-
-
-def _is_img_tokens_compressed_family(latent_kind: str | None) -> bool:
-    """PCA-compressed img-token layouts: subdir name equals `latent_kind`; CNN-only in `main`."""
-    return latent_kind is not None and latent_kind.startswith('img_tokens_compressed')
-
-
-# (subdir under --latent_input_dir, trials npz filename)
-_LATENT_KIND_LAYOUT = {
-    'frame': ('frame_z', 'frame_z_trials.npz'),
-    'mu_s': ('pose_mu_s_z', 'pose_mu_s_z_trials.npz'),
-    'psae': ('psae_z', 'psae_z_trials.npz'),
-    'dino': ('dino_z', 'dino_z_trials.npz'),
-    'combined': ('combined_z', 'combined_z_trials.npz'),
-    'mu_u': ('psae_z', 'psae_z_trials.npz'),
-    'behavior': ('behavior_z', 'behavior_z_trials.npz'),
-}
 
 
 def _default_result_basename(eval_task: str, latent_kind: str | None) -> str:
@@ -63,7 +51,7 @@ def _default_result_basename(eval_task: str, latent_kind: str | None) -> str:
 
 
 # Parent folder of <latent_root>/<subdir>/<eid> when using layout subdirs
-# (see _LATENT_KIND_LAYOUT).
+# (see LATENT_KIND_LAYOUT in utils.py).
 _SUBDIR_TO_RESULT_SUFFIX = {
     'frame_z': 'frame',
     'pose_mu_s_z': 'mu_s',
@@ -137,13 +125,61 @@ def _latent_session_dir_and_trials_npz(
     """
     if latent_kind is None:
         return str(Path(latent_root) / eid), 'z_trials.npz'
-    if _is_img_tokens_compressed_family(latent_kind):
+    if is_img_tokens_compressed_family(latent_kind):
         return (
             str(Path(latent_root) / latent_kind / eid),
             'img_tokens_compressed_trials.npz',
         )
-    subdir, fname = _LATENT_KIND_LAYOUT[latent_kind]
+    subdir, fname = LATENT_KIND_LAYOUT[latent_kind]
     return str(Path(latent_root) / subdir / eid), fname
+
+
+def _permutation_npz_path(permutation_dir: str, eid: str, latent_kind: str | None) -> Path:
+    """Resolve the frame-permutation table path matching a session's latent layout.
+
+    Args:
+        permutation_dir: `--permutation_dir`.
+        eid: session id.
+        latent_kind: parsed `--latent_kind`, or `None`.
+
+    Returns:
+        Path to `<permutation_dir>/<subdir>/<eid>/permutation.npz`.
+
+    Raises:
+        KeyError: if `latent_kind` has no entry in `LATENT_KIND_LAYOUT` and is not an
+            `img_tokens_compressed*` kind.
+    """
+    if is_img_tokens_compressed_family(latent_kind):
+        subdir = latent_kind
+    elif latent_kind is None:
+        subdir = ''
+    else:
+        subdir = LATENT_KIND_LAYOUT[latent_kind][0]
+    return Path(permutation_dir) / subdir / eid / 'permutation.npz'
+
+
+def _apply_frame_permutation(z: np.ndarray, perm: np.ndarray) -> np.ndarray:
+    """Shuffle `z` along its flattened trial*time frame axis using a stored permutation.
+
+    Args:
+        z: latent tensor of shape `[N_trials, T_time_bins, V_views, D_latent]`.
+        perm: permutation indices of length `N_trials * T_time_bins`.
+
+    Returns:
+        `z` with rows reordered by `perm` along the flattened frame axis, reshaped back to
+        `z`'s original shape.
+
+    Raises:
+        ValueError: if `perm`'s length does not match `z`'s trial*time frame count.
+    """
+    n, t, v, d = z.shape
+    if perm.shape[0] != n * t:
+        raise ValueError(
+            f'permutation length {perm.shape[0]} != N_trials*T_time_bins ({n}*{t}={n * t}) '
+            f'for z of shape {z.shape}; the permutation table was likely generated for a '
+            'different --latent_kind or a stale trials npz.',
+        )
+    return z.reshape(n * t, v, d)[perm].reshape(n, t, v, d)
 
 
 def _resolve_tune_storage_path(
@@ -163,9 +199,9 @@ def _resolve_tune_storage_path(
         return explicit
     if explicit is not None:
         return explicit
-    if _is_img_tokens_compressed_family(latent_kind):
+    if is_img_tokens_compressed_family(latent_kind):
         return str(Path(latent_root) / latent_kind)
-    subdir = _LATENT_KIND_LAYOUT[latent_kind][0]
+    subdir = LATENT_KIND_LAYOUT[latent_kind][0]
     return str(Path(latent_root) / subdir)
 
 
@@ -400,7 +436,7 @@ def main() -> None:
     neural_aligned_npz = neural_input_dir / f'{eid}_aligned.npz'
     neural_data_dict = np.load(neural_aligned_npz, allow_pickle=True)
 
-    if _is_img_tokens_compressed_family(args.latent_kind):
+    if is_img_tokens_compressed_family(args.latent_kind):
         # phase 2: img_token compressed latents are decoded via a dedicated module that
         # does not exist yet; the import path below is where it will live.
         from beast.sable_encoding_decoding.img_token.neural_decoder import (
@@ -486,6 +522,16 @@ def main() -> None:
     train_emb_raw = np.asarray(latent_data_dict['train_z_trials_time'], dtype=np.float32)
     val_emb_raw = np.asarray(latent_data_dict['val_z_trials_time'], dtype=np.float32)
     test_emb_raw = np.asarray(latent_data_dict['test_z_trials_time'], dtype=np.float32)
+
+    if args.permutation_dir is not None:
+        permutation_npz_path = _permutation_npz_path(args.permutation_dir, eid, args.latent_kind)
+        print(f'Applying frame permutation from: {permutation_npz_path}')
+        permutation_data_dict = np.load(permutation_npz_path, allow_pickle=True)
+        train_emb_raw = _apply_frame_permutation(
+            train_emb_raw, permutation_data_dict['perm_train'],
+        )
+        val_emb_raw = _apply_frame_permutation(val_emb_raw, permutation_data_dict['perm_val'])
+        test_emb_raw = _apply_frame_permutation(test_emb_raw, permutation_data_dict['perm_test'])
 
     ref = next((x for x in (train_emb_raw, val_emb_raw, test_emb_raw) if x.size > 0), None)
     if ref is None:

@@ -18,8 +18,24 @@ from torcheval.metrics import R2Score
 
 _VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined', 'behavior'))
 
+# (subdir under --latent_input_dir, trials npz filename)
+LATENT_KIND_LAYOUT = {
+    'frame': ('frame_z', 'frame_z_trials.npz'),
+    'mu_s': ('pose_mu_s_z', 'pose_mu_s_z_trials.npz'),
+    'psae': ('psae_z', 'psae_z_trials.npz'),
+    'dino': ('dino_z', 'dino_z_trials.npz'),
+    'combined': ('combined_z', 'combined_z_trials.npz'),
+    'mu_u': ('psae_z', 'psae_z_trials.npz'),
+    'behavior': ('behavior_z', 'behavior_z_trials.npz'),
+}
 
-def _parse_latent_kind(value: str) -> str:
+
+def is_img_tokens_compressed_family(latent_kind: str | None) -> bool:
+    """PCA-compressed img-token layouts: subdir name equals `latent_kind`; CNN-only in `main`."""
+    return latent_kind is not None and latent_kind.startswith('img_tokens_compressed')
+
+
+def parse_latent_kind(value: str) -> str:
     """Validate the `--latent_kind` CLI argument.
 
     Args:
@@ -70,7 +86,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
     )
     parser.add_argument(
         '--latent_kind',
-        type=_parse_latent_kind,
+        type=parse_latent_kind,
         default=None,
         help='Latent layout under --latent_input_dir (matches src/inference.py '
         '--return-combined-*-z): '
@@ -100,6 +116,16 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         '.npy is added by numpy.save). Default: encoding_results or decoding_results from '
         '--eval_task, with _<latent_kind> appended when --latent_kind is set, or inferred '
         'from the layout (e.g. .../dino_z/<eid>/ → encoding_results_dino).',
+    )
+    parser.add_argument(
+        '--permutation_dir',
+        type=str,
+        default=None,
+        help='Root directory of frame-permutation tables produced by '
+        'generate_permutation_tables.py (same <subdir>/<eid>/permutation.npz layout as '
+        '--latent_input_dir). When set, the loaded train/val/test z_trials_time arrays are '
+        'shuffled along the flattened trial*time frame axis before training, using the '
+        "session's stored permutation indices — a frame-permutation null baseline.",
     )
     parser.add_argument(
         '--tune_storage_path',
