@@ -1910,12 +1910,16 @@ def extract_sable_latents(
             level='info',
         )
     else:
+        sessions_this_run = {
+            path.parent.parent.name for paths in saved_files.values() for path in paths
+        }
         combined_trials_files = _combine_and_cleanup_sessions(
             output_dir=output_dir,
             latent_types=latent_types,
             splits_to_process=splits_to_process,
             resolved_time_bins=resolved_time_bins,
             resume=resume,
+            sessions_this_run=sessions_this_run,
         )
 
     return {
@@ -1933,8 +1937,9 @@ def _combine_and_cleanup_sessions(
     splits_to_process: list[str],
     resolved_time_bins: int,
     resume: bool,
+    sessions_this_run: set[str],
 ) -> list[Path]:
-    """Combine each discovered session's batches into a trials npz, then delete the batches.
+    """Combine this run's sessions' batches into a trials npz, then delete the batches.
 
     ``img_tokens`` is always skipped (see ``extract_sable_latents``'s docstring): its raw
     per-batch shards are what ``img_token.run_pca_and_save`` consumes directly.
@@ -1947,6 +1952,11 @@ def _combine_and_cleanup_sessions(
         resolved_time_bins: neural bins per trial, passed through to the assembler.
         resume: when ``True``, a session already having a valid combined trials file is left
             untouched (not re-assembled, not re-deleted).
+        sessions_this_run: session subdirectory names this run actually wrote (or found
+            already-written) batches for. Other sessions under ``output_dir`` are left
+            untouched even if present on disk — they belong to other, possibly concurrent,
+            runs sharing this ``output_dir`` (e.g. one SLURM job per session), and combining or
+            deleting their files here would race with that other run.
 
     Returns:
         list of combined trials ``.npz`` paths, one per discovered ``(latent_type, session)``.
@@ -1972,7 +1982,9 @@ def _combine_and_cleanup_sessions(
         if not latent_dir.is_dir():
             continue
 
-        for session_dir in sorted(p for p in latent_dir.iterdir() if p.is_dir()):
+        for session_dir in sorted(
+            p for p in latent_dir.iterdir() if p.is_dir() and p.name in sessions_this_run
+        ):
             trials_path = session_dir / f'{latent_type}_trials.npz'
             if resume and _is_valid_trials_npz(trials_path):
                 combined_trials_files.append(trials_path)
