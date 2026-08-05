@@ -827,7 +827,8 @@ class IBLTwoViewDataset(SABLEDataset):
         )
 
         vda_cfg = model_cfg.get('vda', {}) or {}
-        vda_cache_root = vda_cfg.get('cache_root')
+        vda_mode = str(vda_cfg.get('mode', 'online')).strip().lower()
+        vda_cache_root = vda_cfg.get('cache_root') if vda_mode == 'precomputed' else None
         self._vda_cache_root: Path | None = Path(vda_cache_root) if vda_cache_root else None
 
         merge_pcd_cfg = model_cfg.get('merge_pcd', {}) or {}
