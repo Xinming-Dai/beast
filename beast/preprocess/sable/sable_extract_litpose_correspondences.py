@@ -695,6 +695,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help='where to write bundles. Overrides output_dir/dataset from --config.',
     )
     p.add_argument(
+        '--input-dir',
+        type=Path,
+        default=None,
+        help='root of extracted-frames directory for session discovery. Overrides input_dir from --config.',
+    )
+    p.add_argument(
         '--keypoints',
         type=str,
         default=None,
@@ -816,9 +822,14 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     # Resolve input_dir for session discovery
     # ---------------------------------------------------------------------------
-    if not cfg.get('input_dir'):
-        raise ValueError('input_dir must be set in --config for session discovery')
-    input_dir = Path(str(cfg['input_dir'])).expanduser().resolve()
+    if args.input_dir is not None:
+        input_dir = args.input_dir.expanduser().resolve()
+    elif cfg.get('input_dir'):
+        input_dir = Path(str(cfg['input_dir'])).expanduser().resolve()
+    else:
+        raise ValueError(
+            'input_dir unknown: pass --input-dir or set input_dir in --config'
+        )
 
     # ---------------------------------------------------------------------------
     # Scalar parameters: CLI overrides config overrides default
