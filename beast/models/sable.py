@@ -1,5 +1,6 @@
 """Sable: 3D Gaussian Splatting model with transformer encoder and pose estimation."""
 import copy
+import logging
 import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,6 +35,8 @@ from beast.models.model_utils.utils_icp import (
 )
 from beast.models.model_utils.utils_latent import latent_tensor_export_if_requested
 from beast.models.model_utils.utils_dino import DinoV3
+
+_logger = logging.getLogger(__name__)
 
 def imagenet_normalize(x):
     mean = x.new_tensor(_IMAGENET_MEAN).view(1, 3, 1, 1)
@@ -397,6 +400,24 @@ class Sable(BaseLightningModel):
         merge_pcd_cfg = self.config['model'].get('merge_pcd', {})
         self.num_icp_points = int(merge_pcd_cfg.get('num_points', 3))
         self.debug_merged_pcd = bool(merge_pcd_cfg.get('debug_merged_pcd', False))
+
+        # affine_transformation may be a single 4x4 matrix (applied to every sample)
+        # or a dict keyed by session_id (sessions without an entry fall back to auto-ICP)
+        self._session_ids = list(self.config['training'].get('session_names') or [])
+        affine_cfg = merge_pcd_cfg.get('affine_transformation', None)
+        if isinstance(affine_cfg, dict):
+            self._affine_by_session = {
+                session_id: np.array(matrix, dtype=np.float64)
+                for session_id, matrix in affine_cfg.items()
+            }
+            self._affine_global = None
+        elif affine_cfg is not None:
+            self._affine_by_session = {}
+            self._affine_global = np.array(affine_cfg, dtype=np.float64)
+        else:
+            self._affine_by_session = {}
+            self._affine_global = None
+        self._affine_fallback_logged: set[str] = set()
 
         self.vda_mode = str(vda_cfg.get('mode', 'online')).strip().lower()
         if self.vda_mode not in {'online', 'precomputed'}:
@@ -923,10 +944,6 @@ class Sable(BaseLightningModel):
                 self.debug_merged_pcd_num_batches = int(self.config['model']['merge_pcd'].get('debug_merged_pcd_num_batches', 1))
                 n_dbg_save = min(self.debug_merged_pcd_num_batches, b)
 
-            T_kabsch_config = self.config['model']['merge_pcd'].get('affine_transformation', None)
-            if T_kabsch_config is not None:
-                T_kabsch_fixed = np.array(T_kabsch_config, dtype=np.float64)
-
             for b_i in range(b):
                 corr_xy_from_pixels = None
                 src_idx = []
@@ -936,9 +953,27 @@ class Sable(BaseLightningModel):
                 init_src_pcd.points = o3d.utility.Vector3dVector(xyz_init_src_pts[b_i])
                 init_tgt_pcd.points = o3d.utility.Vector3dVector(xyz_init_tgt_pts[b_i])
 
-                if T_kabsch_config is not None:
+                session_id_bi = None
+                if self._session_ids:
+                    session_idx_bi = int(data['session_idx'][b_i])
+                    if 0 <= session_idx_bi < len(self._session_ids):
+                        session_id_bi = self._session_ids[session_idx_bi]
+
+                T_kabsch_fixed = (
+                    self._affine_by_session.get(session_id_bi) if session_id_bi is not None else None
+                )
+                if T_kabsch_fixed is None:
+                    T_kabsch_fixed = self._affine_global
+
+                if T_kabsch_fixed is not None:
                     T_kabsch = T_kabsch_fixed
                 else:
+                    if session_id_bi is not None and session_id_bi not in self._affine_fallback_logged:
+                        self._affine_fallback_logged.add(session_id_bi)
+                        _logger.info(
+                            f'no affine_transformation configured for session {session_id_bi!r}; '
+                            'using auto-ICP'
+                        )
                     # use GT animal pose as correspondences for kabsch; padding entries have confidence == 0
                     valid = data['confidence'][b_i] > 0
                     left_xy_np = data['leftcamera_xy'][b_i][valid].cpu().numpy()
