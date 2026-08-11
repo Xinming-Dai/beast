@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=20G
-#SBATCH -t 0-00:30:00
+#SBATCH -t 0-11:59:00
 #SBATCH -J litpose
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/lightningpose/litpose_predict_sable_%j.log
 #SBATCH --export=ALL
@@ -15,12 +15,23 @@ exec 2>&1
 source ~/.bashrc
 conda activate lp
 
+export PATH="${PATH}:/sw/external/python/anaconda3/bin"
+
 BEAST_REPO=/u/xdai3/project3d/SBALE_repo/beast
 ROOT=/work/hdd/bfsr/xdai3/IBL-2view
 LIGHTNING_POSE_MODEL_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/lightning_pose/multiview_transformer_3235_0
-SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/run_litpose_predict_sable.py
+SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/run_litpose_predict_sable.py
+CONFIG=/u/xdai3/project3d/SBALE_repo/beast/configs/multiview/extraction_pipeline_sable.yaml
 
 SESSION_IDS=(
+  9b528ad0-4599-4a55-9148-96cc1d93fb24
+  51e53aff-1d5d-4182-a684-aba783d50ae5
+  0802ced5-33a3-405e-8336-b65ebc5cb07c
+  88224abb-5746-431f-9c17-17d7ef806e6a
+  a4a74102-2af5-45dc-9e41-ef7f5aed88be
+  ecb5520d-1358-434c-95ec-93687ecd1396
+  f312aaec-3b6f-44b3-86b4-3a0c119c0438
+
   # b03fbc44-3d8e-4a6c-8a50-5ea3498568e0
   # b196a2ad-511b-4e90-ac99-b5a29ad25c22
   # b22f694e-4a34-4142-ab9d-2556c3487086
@@ -36,7 +47,8 @@ SESSION_IDS=(
 PYTHONPATH="${BEAST_REPO}:${PYTHONPATH}" python -u "${SCRIPT}" \
   --root "${ROOT}" \
   --model-dir "${LIGHTNING_POSE_MODEL_DIR}" \
-  --session-ids e535fb62-e245-4a48-b119-88ce62a6fe67 \
+  --config "${CONFIG}" \
+  --sessionids "${SESSION_IDS[@]}" \
   --skip-existing
-
+  
 conda deactivate
