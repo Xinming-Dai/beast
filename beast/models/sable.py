@@ -989,9 +989,12 @@ class Sable(BaseLightningModel):
                             np.ascontiguousarray(left_xy_np, dtype=np.float32),
                             np.ascontiguousarray(right_xy_np, dtype=np.float32),
                         )
-                    T_kabsch = estimate_initial_transform(
-                        init_src_pcd, init_tgt_pcd, src_idx, tgt_idx
-                    )
+                    if len(src_idx) >= 3:
+                        T_kabsch = estimate_initial_transform(
+                            init_src_pcd, init_tgt_pcd, src_idx, tgt_idx
+                        )
+                    else:
+                        T_kabsch = np.eye(4)
 
                 init_src_pcd.transform(T_kabsch)
                 init_src_pts = np.asarray(init_src_pcd.points)
