@@ -1060,7 +1060,7 @@ class IBLTwoViewDataset(SABLEDataset):
         context_indices, target_indices = self._resolve_view_indices()
         correspondences = self._load_correspondences_sable(
             session_id=rec.session_id,
-            pair_idx=rec.pair_idx,
+            pair_idx=rec.left_source_frame_index,
             left_orig_size=(left_orig_w, left_orig_h),
             right_orig_size=(right_orig_w, right_orig_h),
         )
