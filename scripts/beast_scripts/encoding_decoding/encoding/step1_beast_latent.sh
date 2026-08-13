@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A beez-delta-gpu
+#SBATCH -A bfsr-delta-gpu
 #SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -20,9 +20,9 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"                                              # single session ID (eid)
-JOB_ID=20505751
-MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/beast_vit_large/$EID/$JOB_ID}"
+EID="${EID:-ecb5520d-1358-434c-95ec-93687ecd1396}"                                              # single session ID (eid)
+JOB_ID=20861003
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_large/$EID/$JOB_ID}"
 DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
 # eval-layout per-camera directories (see docs/sable/neural_extraction.md); each holds
 # <split>/interval<N>timebin<M>.png plus a <split>/frame_index_mapping.json sidecar

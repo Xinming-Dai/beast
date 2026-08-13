@@ -25,9 +25,9 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # --input-dir instead of --combined-trials-*-npz. run_pca_and_save.py itself is unchanged.
 # Produces img_tokens_pca_joint.npz + img_tokens_compressed_trials.npz under MODEL_ROOT,
 # consumed by step2_run_decoding.sh's LATENT_INPUT_DIR.
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID=20505751
-MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/beast_vit_large/$EID/$JOB_ID}"
+EID="${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}"
+JOB_ID=20668699
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_large/$EID/$JOB_ID}"
 INPUT_DIR="${INPUT_DIR:-$MODEL_DIR/latents/img_tokens}"     # root of img_tokens_batch*.npz shards
 # no /$EID suffix here: --session-names below already selects INPUT_DIR/$EID as the per-session
 # input, and run_pca_and_save.py's --input-dir loop appends session_name once under this anchor
