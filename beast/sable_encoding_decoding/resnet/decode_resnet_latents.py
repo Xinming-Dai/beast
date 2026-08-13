@@ -102,6 +102,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument('--eid', type=str, default=None, help='session id (mask subdirectory)')
+    ap.add_argument(
+        '--metrics-only',
+        action='store_true',
+        help=(
+            'skip saving decoded-frame PNGs; only compute/save PSNR/SSIM metrics. Requires '
+            '--target-frame-mapping-left/-right.'
+        ),
+    )
     args = ap.parse_args(argv)
 
     have_target_frames = (
@@ -119,6 +127,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error(
             '--use-segmentation-mask requires --segmentation-root, --eid, and '
             '--target-frame-mapping-left/-right',
+        )
+    if args.metrics_only and not have_target_frames:
+        ap.error(
+            '--metrics-only requires --target-frame-mapping-left/-right (nothing to score '
+            'otherwise)',
         )
     return args
 
@@ -209,9 +222,12 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 render = render * mask_batch
 
-            for i in range(render.shape[0]):
-                row = start + i
-                handler.save_reconstruction(render[i], 'decoded', row, Path(f'row{row:06d}.png'))
+            if not args.metrics_only:
+                for i in range(render.shape[0]):
+                    row = start + i
+                    handler.save_reconstruction(
+                        render[i], 'decoded', row, Path(f'row{row:06d}.png'),
+                    )
             num_decoded += render.shape[0]
 
             if target is not None:
