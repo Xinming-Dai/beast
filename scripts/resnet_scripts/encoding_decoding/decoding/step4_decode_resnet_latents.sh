@@ -27,10 +27,10 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # the camera axis is already a plain leading dim of size 2 in the saved latents (no shard-layout
 # merge/unmerge needed). Produces rendered frames under OUT_DIR, consumed by
 # step5_generate_video.sh.
-EID="f312aaec-3b6f-44b3-86b4-3a0c119c0438"                                              # single session ID (eid)
+EID="${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}"
 JOB_ID=20668654
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/$EID/$JOB_ID}"
 SPLIT="${SPLIT:-test}"
-MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/resnet_ae_152/$EID/$JOB_ID}"
 MODEL_ROOT="${MODEL_ROOT:-$MODEL_DIR/latents/img_tokens_compressed/$EID}"
 ESTIMATED_DIR="${ESTIMATED_DIR:-$MODEL_ROOT/img_tokens_compressed_estimated/$EID/$SPLIT}"
 DATASET_BASE="${DATASET_BASE:-/work/hdd/bfsr/xdai3/IBL_data/synchronized}"
@@ -39,6 +39,7 @@ TARGET_RIGHT="${TARGET_RIGHT:-$DATASET_BASE/extracted_frames/eval/rightCamera.vi
 OUT_DIR="${OUT_DIR:-$MODEL_ROOT/img_tokens_compressed_estimated/$EID/decode_saved_latents}"
 USE_MASK=true
 SEGMENTATION_ROOT="${SEGMENTATION_ROOT:-$DATASET_BASE/extracted_frames_for_eyz/eval}"
+METRICS_ONLY="${METRICS_ONLY:-true}"
 
 mkdir -p "$OUT_DIR"
 
@@ -52,6 +53,7 @@ ARGS=(
     --out-dir "$OUT_DIR"
 )
 [ "$USE_MASK" = true ] && ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT" --eid "$EID")
+[ "$METRICS_ONLY" = true ] && ARGS+=(--metrics-only)
 
 python -m beast.sable_encoding_decoding.resnet.decode_resnet_latents "${ARGS[@]}"
 

@@ -500,6 +500,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument('--batch-size', type=int, default=32)
     ap.add_argument('--device', type=str, default='cuda:0')
+    ap.add_argument(
+        '--metrics-only',
+        action='store_true',
+        help=(
+            'skip saving decoded-frame PNGs; only compute/save PSNR/SSIM metrics. Requires '
+            '--target-images-npz or --target-frame-mapping-left/-right.'
+        ),
+    )
     args = ap.parse_args(argv)
 
     have_combined = args.img_tokens_npz is not None or args.ids_restore_npz is not None
@@ -536,6 +544,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error(
             '--use-segmentation-mask requires --segmentation-root, --eid, and '
             '--target-frame-mapping-left/-right',
+        )
+    if args.metrics_only and args.target_images_npz is None and not have_target_frames:
+        ap.error(
+            '--metrics-only requires --target-images-npz or '
+            '--target-frame-mapping-left/-right (nothing to score otherwise)',
         )
     return args
 
@@ -673,9 +686,12 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 render = render * mask_batch
 
-            for i in range(render.shape[0]):
-                row = start + i
-                handler.save_reconstruction(render[i], 'decoded', row, Path(f'row{row:06d}.png'))
+            if not args.metrics_only:
+                for i in range(render.shape[0]):
+                    row = start + i
+                    handler.save_reconstruction(
+                        render[i], 'decoded', row, Path(f'row{row:06d}.png'),
+                    )
             num_decoded += render.shape[0]
 
             if target is not None:

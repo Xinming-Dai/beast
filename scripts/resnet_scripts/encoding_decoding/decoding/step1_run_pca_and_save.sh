@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH -c 1
 #SBATCH --mem 120G
-#SBATCH -t 0-00:05:00
+#SBATCH -t 0-00:59:00
 #SBATCH --export=ALL
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/encoding_decoding/decoding/step1_run_pca_and_save_%j.log
 
@@ -28,9 +28,9 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # run once first. --input-dir is passed (unused for reading, since every split is covered by
 # --combined-trials-*-npz) purely so main()'s per-session loop nests the PCA bundle under $EID.
 # Produces img_tokens_pca_joint.npz + img_tokens_compressed_trials.npz under MODEL_ROOT.
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID=20505763
-MODEL_DIR="${MODEL_DIR:-/work/hdd/bfsr/xdai3/project3d_ckpt/resnet_ae_152/$EID/$JOB_ID}"
+EID="${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}"
+JOB_ID=20668654
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/$EID/$JOB_ID}"
 TRIALS_NPZ="${TRIALS_NPZ:-$MODEL_DIR/latents/frame_z/$EID/frame_z_trials.npz}"
 SPLIT_DIR="${SPLIT_DIR:-$MODEL_DIR/latents/frame_z/$EID/per_split}"
 MODEL_ROOT="${MODEL_ROOT:-$MODEL_DIR/latents}"
