@@ -7,12 +7,14 @@ are read directly from the `.npz` when present. For estimated tokens that do not
 """
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+import yaml
 
 from beast.api.model import Model
 from beast.data.sable_dataset import collate_with_correspondence_padding
@@ -557,6 +559,7 @@ def main(argv: list[str] | None = None) -> None:
 
     wrapped = Model.from_dir(args.model_dir)
     config = wrapped.config
+    config_to_save = copy.deepcopy(config)
     config['inference'] = True
     config['evaluation'] = config.get('evaluation', False)
     _apply_dataloader_overrides(config, args)
@@ -897,6 +900,11 @@ def main(argv: list[str] | None = None) -> None:
         ckpt_out.parent.mkdir(parents=True, exist_ok=True)
         torch.save({'state_dict': model.state_dict()}, ckpt_out)
         log_step(f'Saved finetuned checkpoint to {ckpt_out}', level='info')
+
+        config_out = ckpt_out.parent / 'config.yaml'
+        with open(config_out, 'w') as f:
+            yaml.safe_dump(config_to_save, f)
+        log_step(f'Saved config to {config_out}', level='info')
 
     if args.metrics_only:
         metrics_npz = resolve_metrics_npz_path(args.metrics_npz, out_dir)
