@@ -22,13 +22,47 @@ fi
 
 [ -x /usr/bin/gcc ] && export CC=/usr/bin/gcc CXX=/usr/bin/g++
 
+# # Pre-build the gsplat CUDA extension before rendering starts. Jobs land on
+for _cuda in /usr/local/cuda \
+             /opt/nvidia/hpc_sdk/Linux_x86_64/25.3/cuda/12.8 \
+             /opt/cuda; do
+    [ -d "$_cuda" ] && export CUDA_HOME="$_cuda" && break
+done
+export PATH="${CUDA_HOME:-}/bin:${PATH}"
+
+GSPLAT_VER="$(python -c 'import gsplat; print(gsplat.__version__)' 2>/dev/null || echo unknown)"
+GSPLAT_KEY="${GSPLAT_VER}_${TORCH_CUDA_ARCH_LIST}"
+GSPLAT_CACHE_DIR="$HOME/.cache/gsplat_build"
+mkdir -p "$GSPLAT_CACHE_DIR"
+GSPLAT_LOCK_DIR="$GSPLAT_CACHE_DIR/${GSPLAT_KEY}.lock"
+GSPLAT_DONE_MARKER="$GSPLAT_CACHE_DIR/${GSPLAT_KEY}.done"
+
+if [ ! -f "$GSPLAT_DONE_MARKER" ]; then
+    if mkdir "$GSPLAT_LOCK_DIR" 2>/dev/null; then
+        echo "[$(date)] Building gsplat CUDA extension (key: $GSPLAT_KEY)..."
+        if python -c "from gsplat.cuda._backend import _C"; then
+            touch "$GSPLAT_DONE_MARKER"
+        else
+            echo "WARNING: gsplat pre-build failed; rendering will retry the build itself"
+        fi
+        rmdir "$GSPLAT_LOCK_DIR"
+    else
+        echo "[$(date)] Another job is building the gsplat CUDA extension, waiting..."
+        for _ in $(seq 1 120); do
+            [ -f "$GSPLAT_DONE_MARKER" ] && break
+            [ -d "$GSPLAT_LOCK_DIR" ] || break
+            sleep 5
+        done
+    fi
+fi
+
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 cd "$REPO_ROOT"
 
 # Stage 4b finetunes SABLE's image-token decoder (image_token_decoder + upsampler + renderer)
 # on the val split's neural-decoded (CNN-predicted) img tokens against real images, then scores
 # PSNR/SSIM on the test split with the finetuned weights. Mirrors the original E-RayZer
-# step5_erayzer_decoder_finetune.sh. 
+# step5_erayzer_decoder_finetune.sh.
 MODEL_ROOT=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395                   # dir with config.yaml + *best.ckpt
 EID=f312aaec-3b6f-44b3-86b4-3a0c119c0438
 LR="1e-4"
