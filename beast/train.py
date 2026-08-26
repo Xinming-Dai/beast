@@ -56,6 +56,41 @@ def pretty_print_config(config: dict) -> None:
     _logger.info('')
 
 
+def load_pretrained_weights(model: BaseLightningModel, checkpoint_path: str | Path) -> None:
+    """Initialize model weights from a checkpoint, ignoring optimizer/scheduler state.
+
+    Loads a plain state dict or a Lightning checkpoint's ``state_dict``. Keys whose
+    shape does not match the current model are skipped, and the remaining keys are
+    loaded non-strictly so partial matches (e.g. finetuning with a different head)
+    still succeed.
+
+    Parameters
+    ----------
+    model: initialized Lightning model whose weights will be overwritten in place
+    checkpoint_path: path to a ``.ckpt``/``.pt`` file containing model weights
+
+    """
+    if rank_zero_only.rank == 0:
+        log_step(f'Loading pretrained weights from {checkpoint_path}', level='info')
+    raw_ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    state_dict = raw_ckpt.get('state_dict', raw_ckpt.get('model', raw_ckpt))
+
+    model_state = model.state_dict()
+    for key in list(state_dict.keys()):
+        if key in model_state and state_dict[key].shape != model_state[key].shape:
+            _logger.warning(
+                f'Skipping {key}: checkpoint shape {tuple(state_dict[key].shape)} '
+                f'!= model shape {tuple(model_state[key].shape)}',
+            )
+            del state_dict[key]
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        _logger.warning(f'Missing keys when loading checkpoint: {missing}')
+    if unexpected:
+        _logger.warning(f'Unexpected keys when loading checkpoint: {unexpected}')
+
+
 def train(config: dict, model: BaseLightningModel, output_dir: str | Path) -> BaseLightningModel:
     """Set up data, trainer, and callbacks, then train the model.
 
@@ -91,6 +126,12 @@ def train(config: dict, model: BaseLightningModel, output_dir: str | Path) -> Ba
     if rank_zero_only.rank == 0:
         log_step("Printing config", level='debug')
     pretty_print_config(config)
+
+    checkpoint_path = config['model'].get('checkpoint')
+    if checkpoint_path:
+        if rank_zero_only.rank == 0:
+            log_step(f"Loading pretrained checkpoint: {checkpoint_path}", level='debug')
+        load_pretrained_weights(model, checkpoint_path)
 
     # ----------------------------------------------------------------------------------
     # Set up data objects
