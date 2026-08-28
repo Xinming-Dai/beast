@@ -14,8 +14,9 @@ from beast.inference import predict_images, predict_video
 from beast.io import load_config, validate_config
 from beast.logging import log_step
 from beast.models.base import BaseLightningModel
-from beast.models.sable import Sable
+from beast.models.pca import PCAAutoencoder
 from beast.models.resnets import ResnetAutoencoder
+from beast.models.sable import Sable
 from beast.models.vits import VisionTransformer
 from beast.train import train
 
@@ -50,6 +51,7 @@ class Model:
         'vit': VisionTransformer,
         'resnet': ResnetAutoencoder,
         'sable': Sable,
+        'pca': PCAAutoencoder,
     }
 
     def __init__(
