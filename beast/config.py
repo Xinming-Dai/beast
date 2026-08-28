@@ -72,8 +72,22 @@ class VitModelParams(BaseModel):
     lambda_perceptual: float = 10.0
 
 
+class PcaModelConfig(BaseModel):
+    model_class: Literal['pca']
+    model_params: PcaModelParams
+    seed: int = 0
+    checkpoint: str | None = None
+
+
+class PcaModelParams(BaseModel):
+    image_size: int = 224
+    num_channels: int = 3
+    n_components: int | None = None
+    pca_pickle_path: str | None = None
+
+
 ModelConfig = Annotated[
-    ResnetModelConfig | VitModelConfig,
+    ResnetModelConfig | VitModelConfig | PcaModelConfig,
     Field(discriminator='model_class'),
 ]
 
