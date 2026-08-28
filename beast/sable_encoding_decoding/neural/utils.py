@@ -16,7 +16,7 @@ import torch
 from scipy.special import gammaln
 from torcheval.metrics import R2Score
 
-_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined', 'behavior'))
+_VALID_LATENT_KIND_FIXED = frozenset(('frame', 'dino', 'combined', 'behavior', 'dynamic_vars'))
 
 
 def _parse_latent_kind(value: str) -> str:
@@ -77,6 +77,7 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         'frame → frame_z/<eid>/frame_z_trials.npz; '
         'dino → dino_z/<eid>/dino_z_trials.npz; '
         'combined → combined_z/<eid>/combined_z_trials.npz; '
+        'dynamic_vars → dynamic_vars_z/<eid>/dynamic_vars_z_trials.npz; '
         'any img_tokens_compressed* (e.g. img_tokens_compressed, img_tokens_compressed_3_comp) → '
         '<latent_kind>/<eid>/img_tokens_compressed_trials.npz (PCA outputs; '
         'run_encoding_decoding.py uses CNN Ray Tune only, no RRR). '

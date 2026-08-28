@@ -43,6 +43,7 @@ _LATENT_KIND_LAYOUT = {
     'combined': ('combined_z', 'combined_z_trials.npz'),
     'mu_u': ('psae_z', 'psae_z_trials.npz'),
     'behavior': ('behavior_z', 'behavior_z_trials.npz'),
+    'dynamic_vars': ('dynamic_vars_z', 'dynamic_vars_z_trials.npz'),
 }
 
 
@@ -71,6 +72,7 @@ _SUBDIR_TO_RESULT_SUFFIX = {
     'psae_z': 'psae',
     'combined_z': 'combined',
     'behavior_z': 'behavior',
+    'dynamic_vars_z': 'dynamic_vars',
 }
 
 
