@@ -7,6 +7,7 @@ from beast.cli.commands import (
     extract,
     extract_3d,
     extract_sable,
+    fit_pca,
     predict,
     train,
 )
@@ -18,6 +19,7 @@ COMMANDS = {
     'predict': predict,              # model inference on images and videos
     'extract_3d': extract_3d,        # 3D frame extraction and segmentation
     'extract_sable': extract_sable,  # SABLE IBL stereo extraction pipeline
+    'fit-pca': fit_pca,              # fit a linear PCA model for pca-model initialization
     'combine-view-latents': combine_view_latents,  # pair per-view latents for ViT/ResNet
     'combine-eval-layout-latents': combine_eval_layout_latents,  # eval-layout ViT/ResNet trials
     'combine-eval-layout-img-tokens': combine_eval_layout_img_tokens,  # eval-layout img_tokens
