@@ -127,6 +127,7 @@ class OptimizerConfig(BaseModel):
 class DataConfig(BaseModel):
     data_dir: str | Path
     session_names: list[str] | str | None = None
+    cameras: list[str] | str | None = None
 
 
 BeastConfig.model_rebuild()
