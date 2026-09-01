@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import matplotlib.pyplot as plt
 import numpy as np
 
-from analyses.neural_analysis.plot_helpers import bps_per_neuron, normalize_eid
+from scripts.neural_analysis.plot_helpers import bps_per_neuron, normalize_eid
 
 
 DEFAULT_RESULTS_DIR = Path("/work/nvme/bfsr/xdai3/project3d/plotting/figure3")
@@ -303,7 +303,7 @@ def main() -> None:
         default="cnn",
         help="Encoder block inside encoding results. Default only calculates cnn.",
     )
-    parser.add_argument("--top-bps", type=int, default=5, help="Number of top-BPS neurons to plot.")
+    parser.add_argument("--top-bps", type=int, default=10, help="Number of top-BPS neurons to plot.")
     parser.add_argument("--duration-s", type=float, default=1.0, help="Right x-axis time in seconds.")
     parser.add_argument("--no-normalize", action="store_true", help="Plot raw PSTH values instead of normalized traces.")
     parser.add_argument(

@@ -6,8 +6,9 @@ from pathlib import Path
 import pickle
 from typing import Any
 
+import matplotlib.colors as mcolors
 import numpy as np
-from analyses.neural_analysis.read_neural_encoding_decoding_results import (
+from scripts.neural_analysis.read_neural_encoding_decoding_results import (
     decoding_results_dict,
 )
 
@@ -19,7 +20,27 @@ EID_SET: set[str] = {
     "f312aaec-3b6f-44b3-86b4-3a0c119c0438",
 }
 
-METHOD_LIST: list[str] = ['Keypoints', 'PCA','BEAST', 'ResNet', 'CLS', 'Depth', 'Concat']
+METHOD_LIST: list[str] = ['Keypoints', 'PCA','beast', 'ResNet', 'sable_frame', 'sable_dino']
+
+DEFAULT_METHODS: list[str] = ["random_baseline", "keypoints", "pca", "resnet", "beast", "sable_dino"]
+DEFAULT_METHOD_LABELS: list[str] = ["Random", "Keypoints", "PCA", "ResNet AE", "BEAST", "SABLE"]
+
+# base hues shared across the encoding/decoding bar plots, extended with a color for
+# random_baseline in the same style. when both encoders are plotted, cnn is lightened to
+# distinguish it from rrr; with a single encoder it uses the base color directly.
+ENCODING_BASE_COLORS: dict[str, str] = {
+    "random_baseline": "#616161",
+    "keypoints": "#F8766D",
+    "pca": "#7FCDBB",
+    "resnet": "#4DAF4A",
+    "beast": "#BDBDBD",
+    "sable_dino": "#F28E2B",
+}
+
+
+def _lightened_hex(hex_color: str) -> str:
+    """Lighten a hex color, e.g. to distinguish a CNN bar from its RRR counterpart."""
+    return mcolors.to_hex(tuple(min(1.0, 0.52 + 0.48 * c) for c in mcolors.to_rgb(hex_color)))
 
 PANEL_LABEL_FONT_SIZE = 14
 PANEL_LABEL_FONT_WEIGHT = "bold"
@@ -160,7 +181,7 @@ def load_neural_meta(path: str | Path) -> dict[str, Any]:
 
 def bps_per_neuron(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
     """Bits per spike for each neuron, matching the repo's single-cell analysis."""
-    from analyses.neural_analysis.eval_utils import bits_per_spike
+    from scripts.neural_analysis.eval_utils import bits_per_spike
 
     gt = np.asarray(gt, dtype=np.float64)
     pred = np.asarray(pred, dtype=np.float64)
