@@ -154,6 +154,7 @@ def train(config: dict, model: BaseLightningModel, output_dir: str | Path) -> Ba
         imgaug_pipeline=imgaug_pipeline_,
         num_channels=config['model']['model_params'].get('num_channels', 3),
         session_names=config['data'].get('session_names'),
+        cameras=config['data'].get('cameras'),
     )
 
     # datamodule; breaks up dataset into train/val/test
