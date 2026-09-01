@@ -1,0 +1,42 @@
+# model configuration
+model:
+  seed: 0
+  checkpoint: /projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_18/ibl_pretrain_restricted_sessions/21334264/tb_logs/version_0/checkpoints/epoch=159-step=104960-best.ckpt  # load weights from checkpoint
+  model_class: resnet
+  model_params:
+    backbone: resnet18
+    num_latents: 768  # null is a fully convolutional model, integer value forces bottleneck; matched to SABLE's per-view latent dim
+    image_size: 224  # usually 224
+    num_channels: 3  # 3 for RGB
+
+# training configuration
+training:
+  seed: 0
+  imgaug: default
+  train_batch_size: 24       # per GPU
+  val_batch_size: 24
+  test_batch_size: 24
+  num_epochs: 280
+  num_workers: 8              # Number of CPU workers for the DataLoader
+  num_gpus: 1
+  num_nodes: 1
+  log_every_n_steps: 10       # frequency to log training metrics
+  check_val_every_n_epoch: 5  # frequency to log validation metrics
+
+# optimizer configuration
+optimizer:
+  type: AdamW
+  accumulate_grad_batches: 1
+  lr: 5.e-4
+  wd: 0.05
+  scheduler: cosine  # {step, cosine}
+  warmup_pct: 0.15   # for cosine
+  div_factor: 10     # for cosine
+  gamma: 0.5         # for step
+  steps:             # for step
+    - 200
+    - 400
+
+# data configuration
+data:
+  data_dir: /PATH/TO/DATA
