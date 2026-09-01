@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from analyses.neural_analysis.plot_helpers import (
+from scripts.neural_analysis.plot_helpers import (
     encoding_results_to_region_values,
     load_neural_meta,
     map_cluster_regions_to_region_ids,

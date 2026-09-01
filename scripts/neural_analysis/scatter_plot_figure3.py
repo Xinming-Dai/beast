@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import matplotlib.pyplot as plt
 import numpy as np
 
-from analyses.neural_analysis.plot_helpers import (
+from scripts.neural_analysis.plot_helpers import (
     AXIS_LABEL_FONT_KWARGS,
     AXIS_TICK_LABEL_FONT_KWARGS,
     EID_SET,
@@ -40,9 +40,11 @@ from analyses.neural_analysis.plot_helpers import (
     iter_eid_encoding_npys,
     normalize_eid,
 )
-from analyses.neural_analysis.viz_single_cell import bps_per_neuron
+from scripts.neural_analysis.viz_single_cell import bps_per_neuron
 
 RESULTS_DIR = Path("/work/nvme/bfsr/xdai3/project3d/plotting/figure3")
+TEXT_FONT_SIZE = 12
+FIG_SIZE = 2.2
 
 
 def _encoding_dict(path: Path) -> dict:
@@ -121,7 +123,8 @@ def plot_bps_scatter(
     x_label: str,
     y_label: str,
     panel_label: str | None = "C",
-    metric_label: str = "BPS↑",
+    show_bps: bool = False,
+    show_axis_labels: bool = True,
     save_path: Path | None = None,
     also_save_pdf: bool = False,
     show: bool = True,
@@ -132,8 +135,9 @@ def plot_bps_scatter(
 
     mx = float(np.nanmean(x)) if x.size else float("nan")
     my = float(np.nanmean(y)) if y.size else float("nan")
+    print(f"Mean BPS: {x_label} vs {y_label} = {mx:.2f} vs {my:.2f}")
 
-    fig, ax = plt.subplots(figsize=(5.0, 5.0), dpi=150)
+    fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE), dpi=150)
 
     lo = -0.25
     hi = 1.85
@@ -159,20 +163,10 @@ def plot_bps_scatter(
         zorder=2,
     )
 
-    ax.set_xlabel(x_label, **AXIS_LABEL_FONT_KWARGS)
-    ax.set_ylabel(y_label, **AXIS_LABEL_FONT_KWARGS)
+    if show_axis_labels:
+        ax.set_xlabel(x_label, **AXIS_LABEL_FONT_KWARGS)
+        ax.set_ylabel(y_label, **AXIS_LABEL_FONT_KWARGS)
     _apply_axis_tick_font(ax)
-
-    ax.text(
-        0.02,
-        0.98,
-        metric_label,
-        transform=ax.transAxes,
-        fontsize=11,
-        va="top",
-        ha="left",
-        color="0.2",
-    )
 
     if panel_label:
         ax.text(
@@ -194,8 +188,7 @@ def plot_bps_scatter(
 
     fig.tight_layout()
 
-    if np.isfinite(mx) and np.isfinite(my):
-        fontsize = 12
+    if show_bps and np.isfinite(mx) and np.isfinite(my):
         ha = "right"
         va = "bottom"
         x_right = 0.98
@@ -203,11 +196,15 @@ def plot_bps_scatter(
         s3 = f"{my:.2f}"
         s2 = "  vs  "
         s1 = f"{mx:.2f}"
-        t3 = ax.text(x_right, y_b, s3, transform=ax.transAxes, fontsize=fontsize, va=va, ha=ha, color="#1b5e20")
+        t3 = ax.text(
+            x_right, y_b, s3, transform=ax.transAxes, fontsize=TEXT_FONT_SIZE, va=va, ha=ha, color="#1b5e20"
+        )
         fig.canvas.draw()
         r = fig.canvas.get_renderer()
         w3 = t3.get_window_extent(renderer=r).width / fig.bbox.width
-        t2 = ax.text(x_right - w3, y_b, s2, transform=ax.transAxes, fontsize=fontsize, va=va, ha=ha, color="black")
+        t2 = ax.text(
+            x_right - w3, y_b, s2, transform=ax.transAxes, fontsize=TEXT_FONT_SIZE, va=va, ha=ha, color="black"
+        )
         fig.canvas.draw()
         r = fig.canvas.get_renderer()
         w2 = t2.get_window_extent(renderer=r).width / fig.bbox.width
@@ -216,7 +213,7 @@ def plot_bps_scatter(
             y_b,
             s1,
             transform=ax.transAxes,
-            fontsize=fontsize,
+            fontsize=TEXT_FONT_SIZE,
             va=va,
             ha=ha,
             color="0.45",
@@ -278,7 +275,11 @@ def main() -> None:
     )
     p.add_argument("--save-pdf", action="store_true", help="Also save PDF")
     p.add_argument("--no-show", action="store_true")
-    p.add_argument("--panel-label", type=str, default="C", help="Panel letter (empty to omit)")
+    p.add_argument("--panel-label", type=str, default=None, help="Panel letter (empty to omit)")
+    p.add_argument("--show-bps", action="store_true", help="Show mean BPS text on the plot")
+    p.add_argument(
+        "--no-axis-labels", action="store_true", help="Hide the x and y axis labels"
+    )
 
     args = p.parse_args()
     method_y, method_x = args.methods
@@ -309,6 +310,8 @@ def main() -> None:
         x_label=method_x,
         y_label=method_y,
         panel_label=args.panel_label or None,
+        show_bps=args.show_bps,
+        show_axis_labels=not args.no_axis_labels,
         save_path=save_path,
         also_save_pdf=args.save_pdf,
         show=not args.no_show,
