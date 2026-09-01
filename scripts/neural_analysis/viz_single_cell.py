@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analyses.neural_analysis.eval_utils import bits_per_spike, viz_single_cell
+from scripts.neural_analysis.eval_utils import bits_per_spike, viz_single_cell
 
 
 def find_encoding_results_npy(data_dir: Path) -> Path:

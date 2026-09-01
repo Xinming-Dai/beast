@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Figure 3 PSTH and activity-raster panels for one EID and two methods.
+"""Figure 3 PSTH panels plus an activity-raster row, comparing two methods for one EID.
 
-The expected folder layout matches the other Figure 3 scripts:
+This is ``top_bps_psth_compare_models_figure3.py`` (the PSTH row of
+``psth_activity_raster_figure3.py``, with a "BPS: X vs. Y" label per panel) with the
+activity-raster row from ``psth_activity_raster_figure3.py`` added back below it. The
+expected folder layout matches the other Figure 3 scripts:
 
 ```
 figure3/
@@ -14,21 +17,19 @@ figure3/
 Example:
 
 ```
-python "src/analyses/neural_analysis/psth_activity raster_figure3.py" \
+python scripts/neural_analysis/top_bps_raster_compare_models_figure3.py \
   --results-dir /path/to/figure3 \
   --eid 4b00df29-3769-43be-bb40-128b1cba6d35 \
   --methods ResNet CLS \
   --neuron-indices 0 149 435 478 \
   --method1-label ResNet \
   --method2-label CLS
-  --trial-idx 0,19 \
 ```
 """
 
 from __future__ import annotations
 
 import argparse
-from math import lgamma
 from pathlib import Path
 import sys
 import warnings
@@ -39,22 +40,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 
-from analyses.neural_analysis.plot_helpers import (
+from scripts.neural_analysis.plot_helpers import (
     AXIS_LABEL_FONT_KWARGS,
     AXIS_TICK_LABEL_FONT_KWARGS,
     EID_SET,
     METHOD_LIST,
     PANEL_LABEL_FONT_KWARGS,
     _default_output_path_helper,
+    bps_per_neuron,
     iter_eid_encoding_npys,
     normalize_eid,
 )
 
 
-RESULTS_DIR = Path("/work/nvme/bfsr/xdai3/project3d/plotting/figure3")
+RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_zero_shot_encoding")
 GROUND_TRUTH_COLOR = "black"
 METHOD1_COLOR = "0.75"
-METHOD2_COLOR = "#2f8f2f"
+METHOD2_COLOR = "#F28E2B"
 
 
 def _encoding_dict(path: Path) -> dict:
@@ -158,51 +160,6 @@ def trials_idx_to_bounds(
     if stop <= start or stop > n_trials_full:
         raise IndexError(f"Trial slice [{start}:{stop}) invalid for n_trials={n_trials_full}")
     return start, stop
-
-
-def _poisson_neg_log_likelihood(rates: np.ndarray, spikes: np.ndarray) -> float:
-    rates = np.asarray(rates, dtype=np.float64).copy()
-    spikes = np.asarray(spikes, dtype=np.float64)
-    if rates.shape != spikes.shape:
-        raise ValueError(f"rates/spikes shape mismatch: {rates.shape} vs {spikes.shape}")
-
-    mask = np.isnan(spikes)
-    rates = rates[~mask]
-    spikes = spikes[~mask]
-    if np.any(np.isnan(rates)):
-        raise ValueError("NaN rate predictions found")
-    if np.any(rates < 0):
-        raise ValueError("Negative rate predictions found")
-    rates[rates == 0] = 1e-9
-
-    log_factorial = np.vectorize(lgamma, otypes=[float])(spikes + 1.0)
-    return float(np.sum(rates - spikes * np.log(rates) + log_factorial))
-
-
-def _bits_per_spike(rates: np.ndarray, spikes: np.ndarray) -> float:
-    n_spikes = float(np.nansum(spikes))
-    if n_spikes <= 0:
-        return float("nan")
-    nll_model = _poisson_neg_log_likelihood(rates, spikes)
-    null_rate = np.nanmean(spikes, axis=tuple(range(spikes.ndim - 1)), keepdims=True)
-    null_rates = np.tile(null_rate, spikes.shape[:-1] + (1,))
-    nll_null = _poisson_neg_log_likelihood(null_rates, spikes)
-    return (nll_null - nll_model) / n_spikes / np.log(2.0)
-
-
-def bps_per_neuron(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
-    """Bits per spike for each neuron, matching the repo's single-cell analysis."""
-    gt = np.asarray(gt, dtype=np.float64)
-    pred = np.asarray(pred, dtype=np.float64)
-    if gt.shape != pred.shape or gt.ndim != 3:
-        raise ValueError(f"gt/pred must match 3D (trials,time,neurons); got {gt.shape}, {pred.shape}")
-    out = np.full(gt.shape[2], np.nan, dtype=np.float64)
-    for neuron_idx in range(gt.shape[2]):
-        spikes = gt[..., neuron_idx : neuron_idx + 1]
-        rates = pred[..., neuron_idx : neuron_idx + 1]
-        bps = _bits_per_spike(rates, spikes)
-        out[neuron_idx] = np.nan if np.isinf(bps) else bps
-    return out
 
 
 def _apply_axis_tick_font(ax: plt.Axes) -> None:
@@ -336,7 +293,7 @@ def _plot_activity_raster(
     return im
 
 
-def plot_psth_comparison(
+def plot_top_bps_raster_compare_models(
     results_dir: Path,
     eid: str,
     methods: tuple[str, str],
@@ -354,6 +311,7 @@ def plot_psth_comparison(
     also_save_pdf: bool = False,
     show: bool = True,
 ) -> plt.Figure:
+    """Plot PSTH panels comparing two methods, plus an activity-raster row for one neuron."""
     path1 = encoding_result_for_method(results_dir, methods[0], eid)
     path2 = encoding_result_for_method(results_dir, methods[1], eid)
 
@@ -470,21 +428,24 @@ def plot_psth_comparison(
     colorbar.set_ticks([-1.0, 0.0, 1.0])
     colorbar.ax.tick_params(labelsize=8, length=2, pad=1)
 
+    label_colors = (GROUND_TRUTH_COLOR, METHOD1_COLOR, METHOD2_COLOR)
     handles = [
-        plt.Line2D([0], [0], color=GROUND_TRUTH_COLOR, linewidth=1.5, label="Ground Truth"),
-        plt.Line2D([0], [0], color=METHOD1_COLOR, linewidth=3.0, label=label1),
-        plt.Line2D([0], [0], color=METHOD2_COLOR, linewidth=3.0, label=label2),
+        plt.Line2D([0], [0], color=color, linewidth=0, label=text)
+        for color, text in zip(label_colors, ("Ground Truth", label1, label2))
     ]
-    fig.legend(
+    legend = fig.legend(
         handles=handles,
         loc="upper right",
         bbox_to_anchor=(0.99, 0.99),
         frameon=False,
         ncol=3,
         fontsize=10,
-        handlelength=1.2,
+        handlelength=0,
+        handletextpad=0,
         columnspacing=0.9,
     )
+    for text, color in zip(legend.get_texts(), label_colors):
+        text.set_color(color)
     if panel_label:
         fig.text(0.005, 0.98, panel_label, **PANEL_LABEL_FONT_KWARGS, va="top", ha="left")
 
@@ -542,14 +503,17 @@ def main() -> None:
     p.add_argument("--duration-s", type=float, default=1.0, help="Right x-axis time in seconds")
     p.add_argument("--method1-label", type=str, default=None, help="Legend label for grey method")
     p.add_argument("--method2-label", type=str, default=None, help="Legend label for green method")
-    p.add_argument("--panel-label", type=str, default="D", help="Panel letter (empty to omit)")
+    p.add_argument("--panel-label", type=str, default=None, help="Panel letter (empty to omit)")
     p.add_argument("--no-normalize", action="store_true", help="Plot raw PSTH values instead of 0-1 normalized traces")
     p.add_argument(
         "-o",
         "--output",
         type=Path,
         default=None,
-        help="Save figure here (default: <results-dir>/psth_activity_raster_figure3_<timestamp>/psth_activity_raster_figure3.png)",
+        help=(
+            "Save figure here (default: <results-dir>/top_bps_raster_compare_models_figure3_"
+            "<timestamp>/top_bps_raster_compare_models_figure3.png)"
+        ),
     )
     p.add_argument("--save-pdf", action="store_true", help="Also save a PDF next to the PNG")
     p.add_argument("--no-show", action="store_true", help="Do not open an interactive window")
@@ -575,11 +539,11 @@ def main() -> None:
     if save_path is None:
         save_path = _default_output_path_helper(
             args.results_dir,
-            "psth_activity_raster_figure3",
-            "psth_activity_raster_figure3.png",
+            "top_bps_raster_compare_models_figure3",
+            "top_bps_raster_compare_models_figure3.png",
         )
 
-    plot_psth_comparison(
+    plot_top_bps_raster_compare_models(
         args.results_dir,
         args.eid,
         tuple(args.methods),
