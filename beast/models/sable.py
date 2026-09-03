@@ -338,7 +338,7 @@ class Sable(BaseLightningModel):
             depth_init=config['model']['transformer'].get('depth_init', False),
         )
 
-        self.dino_featurizer = DinoV3(freeze=False)
+        self.dino_featurizer = DinoV3()
 
         # transformer encoder2 and init
         self.transformer_encoder_geom = build_transformer_blocks(

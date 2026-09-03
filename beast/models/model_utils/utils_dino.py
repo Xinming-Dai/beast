@@ -10,13 +10,14 @@ class DinoV3(nn.Module):
     def __init__(
         self,
         model_name='facebook/dinov3-vitb16-pretrain-lvd1689m',
-        freeze=True,
+        num_trainable_blocks=2,
     ):
         """Initialize DINOv3.
 
         Args:
             model_name: HuggingFace model identifier.
-            freeze: whether to freeze all parameters (default True).
+            num_trainable_blocks: number of final transformer blocks (plus the
+                final norm) to leave trainable; the rest of the backbone is frozen.
         """
         super().__init__()
 
@@ -24,9 +25,15 @@ class DinoV3(nn.Module):
 
         self.embed_dim = self.model.config.hidden_size
 
-        if freeze:
-            for p in self.model.parameters():
-                p.requires_grad = False
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        if num_trainable_blocks > 0:
+            for layer in self.model.model.layer[-num_trainable_blocks:]:
+                for p in layer.parameters():
+                    p.requires_grad = True
+            for p in self.model.norm.parameters():
+                p.requires_grad = True
 
     def forward(self, images):
         """Extract patch and CLS tokens from multi-view images.
