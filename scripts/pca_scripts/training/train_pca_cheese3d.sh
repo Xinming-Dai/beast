@@ -5,10 +5,10 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=20G
+#SBATCH --mem=48G
 #SBATCH -t 0-11:59:00
-#SBATCH -J beast_cheese3d
-#SBATCH -o /u/xdai3/project3d/SABLE_repo_3/beast/scripts/beast_scripts/training/train_beast_cheese3d_%j.log
+#SBATCH -J pca_cheese3d
+#SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/pca_scripts/training/train_pca_cheese3d_%j.log
 #SBATCH --export=ALL
 
 exec 2>&1
@@ -18,13 +18,25 @@ conda activate beast
 REPO_ROOT="/u/xdai3/project3d/SABLE_repo_3/beast"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
-CONFIG="${CONFIG:-$REPO_ROOT/configs/vit_for_SABLE_baseline_cheese3d.yaml}"
+CONFIG="${CONFIG:-$REPO_ROOT/configs/pca_cheese3d.yaml}"
 
 # Data path (override by exporting before sbatch, e.g.:
-#   sbatch --export=ALL,DATASET_PATH=/path/to/cheese3d_cam scripts/beast_scripts/training/train_beast_cheese3d.sh)
+#   sbatch --export=ALL,DATASET_PATH=/path/to/cheese3d_cam scripts/pca_scripts/training/train_pca_cheese3d.sh)
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
+# training sessions, matching configs/pca_cheese3d.yaml's data.session_names
+SESSIONS=(
+    20231031_B20_chew_bl_000
+    20231031_B21_chew_bl_000
+    20231031_B26_chew_bl_000
+    20231031_B31_chew_bl_000
+    20231031_B6_chew_temperature_000
+    20231031_B20_chew_temperature_000
+    20231031_B21_chew_temperature_000
+    20231031_B26_chew_temperature_000
+    20231031_B31_chew_temperature_000
+)
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit/cheese3d}"
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/pca_ae/cheese3d}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
@@ -57,15 +69,27 @@ if torch.cuda.is_available():
         print(f"  cuda:{i} {torch.cuda.get_device_name(i)}  capability={cap[0]}.{cap[1]}")
 PY
 
-echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
-
 [ -f "$CONFIG" ] || { echo "ERROR: Config not found: $CONFIG"; exit 1; }
 [ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
 
-cd "$REPO_ROOT"
+PCA_INIT="$CHECKPOINT_DIR/pca_init.pkl"
+
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Fitting initial PCA subspace -> $PCA_INIT"
+
+# fit an incremental PCA on the training images to initialize the autoencoder's mean/components,
+# so gradient descent starts from a reasonable subspace instead of a random one
+beast fit-pca \
+    --data-dir "$DATASET_PATH" \
+    --session-names "${SESSIONS[@]}" \
+    --n-components 768 \
+    --batch-size 768 \
+    --output "$PCA_INIT"
+
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting training..."
 
 OVERRIDES=(
     "data.data_dir=$DATASET_PATH"
+    "model.model_params.pca_pickle_path=$PCA_INIT"
 )
 
 beast train \
