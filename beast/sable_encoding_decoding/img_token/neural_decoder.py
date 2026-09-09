@@ -280,6 +280,7 @@ def train_tcn_neural_to_compressed(
     *,
     num_samples: int = 30,
     tune_storage_path: str | None = None,
+    seed: int = 42,
 ) -> dict[str, Any]:
     """Run Ray Tune hyperparameter search, then retrain on train+val and evaluate on test.
 
@@ -287,6 +288,7 @@ def train_tcn_neural_to_compressed(
         data_dict: mapping `eid -> {'X': [train, val, test], 'y': [...]}`.
         num_samples: number of Ray Tune trials.
         tune_storage_path: Ray Tune experiment root directory; `None` uses Ray's default.
+        seed: RNG seed forwarded to `train_cnn_decoder_with_tune`.
 
     Returns:
         Mapping `eid -> result dict` from `train_cnn_decoder_with_tune`.
@@ -295,6 +297,7 @@ def train_tcn_neural_to_compressed(
         data_dict,
         num_samples=num_samples,
         tune_storage_path=tune_storage_path,
+        seed=seed,
     )
 
 

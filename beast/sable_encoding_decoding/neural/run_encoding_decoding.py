@@ -447,7 +447,7 @@ def main() -> None:
 
         if eval_task == 'encoding':
             cnn_result = train_cnn_encoder_with_tune(
-                train_data, num_samples=30, tune_storage_path=tune_storage_path,
+                train_data, num_samples=30, tune_storage_path=tune_storage_path, seed=seed,
             )
             print(
                 f"CNN Encoding {eid} Test BPS: {cnn_result[eid]['bps']} "
@@ -456,7 +456,7 @@ def main() -> None:
             result_dict[eid] = {'cnn': cnn_result[eid]}
         elif eval_task == 'decoding':
             cnn_result = train_cnn_decoder_with_tune(
-                train_data, num_samples=30, tune_storage_path=tune_storage_path,
+                train_data, num_samples=30, tune_storage_path=tune_storage_path, seed=seed,
             )
             print(f"CNN Decoding {eid} Test R2: {cnn_result['test'][eid]['r2']}")
             print(f"CNN Decoding {eid} Val R2: {cnn_result['val'][eid]['r2']}")
@@ -556,14 +556,14 @@ def main() -> None:
             train_data, num_samples=30, tune_storage_path=tune_storage_path,
         )
         cnn_result = train_cnn_encoder_with_tune(
-            train_data, num_samples=30, tune_storage_path=tune_storage_path,
+            train_data, num_samples=30, tune_storage_path=tune_storage_path, seed=seed,
         )
     elif eval_task == 'decoding':
         rrr_result = train_rrr_decoder_with_tune(
             train_data, num_samples=30, tune_storage_path=tune_storage_path,
         )
         cnn_result = train_cnn_decoder_with_tune(
-            train_data, num_samples=30, tune_storage_path=tune_storage_path,
+            train_data, num_samples=30, tune_storage_path=tune_storage_path, seed=seed,
         )
     else:
         raise ValueError(f'Invalid evaluation task: {eval_task}')

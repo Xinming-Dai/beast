@@ -17,7 +17,7 @@ from sklearn.metrics import r2_score as r2_score_sklearn
 from tqdm import tqdm
 
 from beast.sable_encoding_decoding.neural.rrr_encoder import train_model_main
-from beast.sable_encoding_decoding.neural.utils import _std, bits_per_spike
+from beast.sable_encoding_decoding.neural.utils import _std, bits_per_spike, set_seed
 
 
 class Embed_Dataset(torch.utils.data.Dataset):
@@ -228,6 +228,7 @@ def train_cnn_encoder(
     data_dict: dict[str, Any],
     report_to_tune: bool = False,
     verbose: bool = True,
+    seed: int = 42,
 ) -> dict[str, Any] | None:
     """Train a `KeypointsNetwork` (facemap) CNN encoder for each session in `data_dict`.
 
@@ -237,12 +238,17 @@ def train_cnn_encoder(
         report_to_tune: if `True`, report `bps`/`r2` of the last session to Ray Tune
             instead of returning results.
         verbose: whether to print periodic eval progress and LR-annealing messages.
+        seed: RNG seed applied at the start of this call; needed because Ray Tune runs
+            each trial in its own worker process, which does not inherit the driver's
+            seeded RNG state, so model init and DataLoader shuffling would otherwise be
+            unseeded.
 
     Returns:
         Mapping `eid -> result dict` with keys `gt`, `pred`, `norm_gt`, `norm_pred`,
         `mean_X`, `std_X`, `mean_y`, `std_y`, `bps`, `r2`, `eid`; or `None` when
         `report_to_tune=True`.
     """
+    set_seed(seed)
     lr = config['lr']
     wd = config['wd']
     smoothing_penalty = 0.5
@@ -376,6 +382,7 @@ def train_cnn_encoder_with_tune(
     data_dict: dict[str, Any],
     num_samples: int = 10,
     tune_storage_path: str | None = None,
+    seed: int = 42,
 ) -> dict[str, Any] | None:
     """Ray-Tune hyperparameter search over `lr`/`wd` for `train_cnn_encoder`.
 
@@ -383,6 +390,7 @@ def train_cnn_encoder_with_tune(
         data_dict: mapping `eid -> {'X': [train, val, test], 'y': [...]}`.
         num_samples: number of Ray Tune trials.
         tune_storage_path: Ray Tune experiment root directory; `None` uses Ray's default.
+        seed: RNG seed forwarded to every `train_cnn_encoder` trial (see its docstring).
 
     Returns:
         Final `train_cnn_encoder` result evaluated with the best config on the held-out
@@ -397,7 +405,11 @@ def train_cnn_encoder_with_tune(
     search_space = {'lr': tune.loguniform(1e-4, 3e-3), 'wd': 1e-4}
     analysis = tune.run(
         tune.with_parameters(
-            train_cnn_encoder, data_dict=train_val_dict, report_to_tune=True, verbose=True,
+            train_cnn_encoder,
+            data_dict=train_val_dict,
+            report_to_tune=True,
+            verbose=True,
+            seed=seed,
         ),
         resources_per_trial={'cpu': 2, 'gpu': 1},
         config=search_space,
@@ -414,5 +426,9 @@ def train_cnn_encoder_with_tune(
         train_test_dict[eid]['X'].pop(-2)
         train_test_dict[eid]['y'].pop(-2)
     return train_cnn_encoder(
-        config=best_config, data_dict=train_test_dict, report_to_tune=False, verbose=True,
+        config=best_config,
+        data_dict=train_test_dict,
+        report_to_tune=False,
+        verbose=True,
+        seed=seed,
     )
