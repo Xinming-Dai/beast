@@ -25,6 +25,7 @@ from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
+from beast.models.model_utils.train_vis import _sanitize_filename
 from beast.models.model_utils.utils_icp import (
     apply_similarity_transform_to_poses,
     estimate_camera_similarity_transform,
@@ -846,6 +847,7 @@ def save_gaussian_pointclouds(
     max_samples: int | None = None,
     session_ids: list[str] | None = None,
     sample_indices: list[int] | None = None,
+    scene_names: list[str] | None = None,
 ) -> list[Path]:
     """Save Gaussian centers from one Sable batch output as PLY point clouds.
 
@@ -861,13 +863,18 @@ def save_gaussian_pointclouds(
         output_dir: root output directory; PLY files are written under
             ``output_dir / 'ply'``, or ``output_dir / 'ply' / session_ids[sample_idx]``
             when ``session_ids`` is given.
-        batch_idx: used in the output filename
-            ``pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply``.
+        batch_idx: used in the output filename when ``scene_names`` is not given
+            (``pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply``).
         max_samples: cap on the number of batch items to save.  ``None`` saves all.
         session_ids: one session ID per batch item; when given, files are grouped into
             a per-session subfolder instead of a flat ``ply`` directory.
         sample_indices: batch item indices to save; when given, all other items are
             skipped. ``None`` saves every item (subject to ``max_samples``).
+        scene_names: one scene identifier per batch item (e.g. ``batch['scene_name']``,
+            encoding session + frame/pair index); when given, filenames are
+            ``pointcloud_{scene_name}_sample{sample_idx:02d}.ply`` instead of the
+            ``batch_idx``-based default, so files can be traced back to their
+            session/frame without rerunning inference.
 
     Returns:
         list of Path objects for the PLY files that were written.
@@ -898,7 +905,11 @@ def save_gaussian_pointclouds(
 
         sample_dir = ply_dir / session_ids[sample_idx] if session_ids is not None else ply_dir
         sample_dir.mkdir(parents=True, exist_ok=True)
-        out_ply = sample_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
+        if scene_names is not None:
+            scene_tag = _sanitize_filename(scene_names[sample_idx])
+            out_ply = sample_dir / f'pointcloud_{scene_tag}_sample{sample_idx:02d}.ply'
+        else:
+            out_ply = sample_dir / f'pointcloud_batch{batch_idx:04d}_sample{sample_idx:02d}.ply'
 
         if has_o3d:
             pcd = o3d.geometry.PointCloud()
@@ -953,6 +964,7 @@ def save_camera_pointcloud_scene(
     screen_width: float | None = None,
     session_ids: list[str] | None = None,
     sample_indices: list[int] | None = None,
+    scene_names: list[str] | None = None,
 ) -> list[Path]:
     """Save the predicted point cloud together with camera frustums as a .glb scene.
 
@@ -984,8 +996,8 @@ def save_camera_pointcloud_scene(
             for the ground-truth camera overlay described above.
         output_dir: root output directory; ``.glb`` files are written under
             ``output_dir / 'glb'``.
-        batch_idx: used in the output filename
-            ``scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb``.
+        batch_idx: used in the output filename when ``scene_names`` is not given
+            (``scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb``).
         max_samples: cap on the number of batch items to save.  ``None`` saves all.
         screen_width: physical size of the drawn camera frustums, in the same units as
             the point cloud. ``None`` (default) auto-scales to 5% of the point cloud's
@@ -997,6 +1009,11 @@ def save_camera_pointcloud_scene(
             a per-session subfolder instead of a flat ``glb`` directory.
         sample_indices: batch item indices to save; when given, all other items are
             skipped. ``None`` saves every item (subject to ``max_samples``).
+        scene_names: one scene identifier per batch item (e.g. ``batch['scene_name']``,
+            encoding session + frame/pair index); when given, filenames are
+            ``scene_{scene_name}_sample{sample_idx:02d}.glb`` instead of the
+            ``batch_idx``-based default, so files can be traced back to their
+            session/frame without rerunning inference.
 
     Returns:
         list of Path objects for the .glb files that were written.
@@ -1102,7 +1119,11 @@ def save_camera_pointcloud_scene(
 
         sample_dir = glb_dir / session_ids[sample_idx] if session_ids is not None else glb_dir
         sample_dir.mkdir(parents=True, exist_ok=True)
-        out_glb = sample_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
+        if scene_names is not None:
+            scene_tag = _sanitize_filename(scene_names[sample_idx])
+            out_glb = sample_dir / f'scene_{scene_tag}_sample{sample_idx:02d}.glb'
+        else:
+            out_glb = sample_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
         scene.export(out_glb)
 
         log_step(
@@ -1309,6 +1330,8 @@ def infer_sable(
             if max_batches is not None and batch_idx >= max_batches:
                 break
 
+            scene_names = batch.get('scene_name')
+
             session_ids = None
             sample_indices = None
             if max_files_per_session is not None:
@@ -1335,6 +1358,7 @@ def infer_sable(
                 ply_paths = save_gaussian_pointclouds(
                     result, output_dir, batch_idx,
                     session_ids=session_ids, sample_indices=sample_indices,
+                    scene_names=scene_names,
                 )
                 all_ply.extend(ply_paths)
 
@@ -1342,6 +1366,7 @@ def infer_sable(
                 glb_paths = _save_camera_pointcloud_scene_fn(
                     result, output_dir, batch_idx,
                     session_ids=session_ids, sample_indices=sample_indices,
+                    scene_names=scene_names,
                 )
                 all_glb.extend(glb_paths)
 

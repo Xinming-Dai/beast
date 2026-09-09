@@ -944,6 +944,8 @@ class Sable(BaseLightningModel):
                 self.debug_merged_pcd_num_batches = int(self.config['model']['merge_pcd'].get('debug_merged_pcd_num_batches', 1))
                 n_dbg_save = min(self.debug_merged_pcd_num_batches, b)
 
+            session_idx_batch = data.get('session_idx')
+
             for b_i in range(b):
                 corr_xy_from_pixels = None
                 src_idx = []
@@ -954,8 +956,8 @@ class Sable(BaseLightningModel):
                 init_tgt_pcd.points = o3d.utility.Vector3dVector(xyz_init_tgt_pts[b_i])
 
                 session_id_bi = None
-                if self._session_ids:
-                    session_idx_bi = int(data['session_idx'][b_i])
+                if self._session_ids and session_idx_batch is not None:
+                    session_idx_bi = int(session_idx_batch[b_i])
                     if 0 <= session_idx_bi < len(self._session_ids):
                         session_id_bi = self._session_ids[session_idx_bi]
 
