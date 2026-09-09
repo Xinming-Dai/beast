@@ -16,7 +16,7 @@ from scipy.ndimage import gaussian_filter1d
 from sklearn.metrics import r2_score as r2_score_sklearn
 
 from beast.sable_encoding_decoding.neural.rrr_decoder import train_model_main
-from beast.sable_encoding_decoding.neural.utils import _std
+from beast.sable_encoding_decoding.neural.utils import _std, set_seed
 
 
 class Behavior_Dataset(torch.utils.data.Dataset):
@@ -208,6 +208,7 @@ def train_cnn_decoder(
     data_dict: dict[str, Any],
     report_to_tune: bool = False,
     verbose: bool = True,
+    seed: int = 42,
 ) -> dict[str, Any] | None:
     """Train a `KeypointsNetwork` (facemap) CNN decoder for each session in `data_dict`.
 
@@ -217,12 +218,17 @@ def train_cnn_decoder(
         report_to_tune: if `True`, report `r2` of the last session to Ray Tune instead of
             returning results.
         verbose: whether to print periodic eval progress and LR-annealing messages.
+        seed: RNG seed applied at the start of this call; needed because Ray Tune runs
+            each trial in its own worker process, which does not inherit the driver's
+            seeded RNG state, so model init and DataLoader shuffling would otherwise be
+            unseeded.
 
     Returns:
         Mapping `eid -> result dict` with keys `gt`, `pred`, `norm_gt`, `norm_pred`,
         `mean_X`, `std_X`, `mean_y`, `std_y`, `r2`, `eid`; or `None` when
         `report_to_tune=True`.
     """
+    set_seed(seed)
     lr = config['lr']
     wd = config['wd']
     smoothing_penalty = 0.5
@@ -341,6 +347,7 @@ def train_cnn_decoder_with_tune(
     data_dict: dict[str, Any],
     num_samples: int = 10,
     tune_storage_path: str | None = None,
+    seed: int = 42,
 ) -> dict[str, dict[str, Any]]:
     """Ray-Tune hyperparameter search over `lr`/`wd` for `train_cnn_decoder`.
 
@@ -348,6 +355,7 @@ def train_cnn_decoder_with_tune(
         data_dict: mapping `eid -> {'X': [train, val, test], 'y': [...]}`.
         num_samples: number of Ray Tune trials.
         tune_storage_path: Ray Tune experiment root directory; `None` uses Ray's default.
+        seed: RNG seed forwarded to every `train_cnn_decoder` trial (see its docstring).
 
     Returns:
         `{'test': test_result, 'val': val_result}`, each a `train_cnn_decoder` result
@@ -363,7 +371,11 @@ def train_cnn_decoder_with_tune(
     search_space = {'lr': tune.loguniform(1e-4, 3e-3), 'wd': 1e-4}
     analysis = tune.run(
         tune.with_parameters(
-            train_cnn_decoder, data_dict=train_val_dict, report_to_tune=True, verbose=True,
+            train_cnn_decoder,
+            data_dict=train_val_dict,
+            report_to_tune=True,
+            verbose=True,
+            seed=seed,
         ),
         resources_per_trial={'cpu': 2, 'gpu': 1},
         config=search_space,
@@ -379,10 +391,18 @@ def train_cnn_decoder_with_tune(
         train_test_dict[eid]['X'].pop(-2)
         train_test_dict[eid]['y'].pop(-2)
     cnn_test_result = train_cnn_decoder(
-        config=best_config, data_dict=train_test_dict, report_to_tune=False, verbose=True,
+        config=best_config,
+        data_dict=train_test_dict,
+        report_to_tune=False,
+        verbose=True,
+        seed=seed,
     )
     # reuse train_val_dict (still [train, val]) for a second fit evaluated on val
     cnn_val_result = train_cnn_decoder(
-        config=best_config, data_dict=train_val_dict, report_to_tune=False, verbose=True,
+        config=best_config,
+        data_dict=train_val_dict,
+        report_to_tune=False,
+        verbose=True,
+        seed=seed,
     )
     return {'test': cnn_test_result, 'val': cnn_val_result}
