@@ -93,7 +93,9 @@ def save_render_only_visuals(
     """Save one render-only PNG per view per sample (no target/grid).
 
     Args:
-        output_dir: directory to write PNG files into (created if missing).
+        output_dir: root directory to write PNG files into (created if missing).
+            Files are written under ``output_dir/{session_id}/png_render_only/`` when
+            ``session_ids`` is given, or ``output_dir/png_render_only/`` otherwise.
         renders: ``[B, V, 3, H, W]`` float tensor in ``[0, 1]``; already mask-applied
             by the caller when segmentation masking is enabled.
         scene_names: one scene name per batch item, used in filenames.
@@ -128,7 +130,11 @@ def save_render_only_visuals(
             if sample_idx < len(scene_names)
             else f'sample_{sample_idx:02d}'
         )
-        sample_dir = output_dir / session_ids[sample_idx] if session_ids is not None else output_dir
+        sample_dir = (
+            output_dir / session_ids[sample_idx] / 'png_render_only'
+            if session_ids is not None
+            else output_dir / 'png_render_only'
+        )
         sample_dir.mkdir(parents=True, exist_ok=True)
         for view_idx in range(view_count):
             filename = (

@@ -1274,7 +1274,7 @@ def infer_sable(
         output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``,
             optional camera-scene ``.glb`` files under ``output_dir/glb/``, optional
             PNG visuals under ``output_dir/png/``, and optional render-only PNGs under
-            ``output_dir/png_render_only/``.
+            ``output_dir/{session_id}/png_render_only/``.
         save_pointclouds: whether to save ``.ply`` files for each batch.
         save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
             camera frustums) for each batch.
@@ -1433,7 +1433,7 @@ def infer_sable(
 
             if save_render_views and render is not None:
                 render_paths = save_render_only_visuals(
-                    output_dir / 'png_render_only',
+                    output_dir,
                     renders=render,
                     scene_names=scene_names,
                     step=batch_idx,
