@@ -96,6 +96,47 @@ def register_parser(subparsers: Any) -> None:
         ),
     )
     sable_group.add_argument(
+        '--no-save-pointclouds',
+        action='store_true',
+        help='Skip saving .ply Gaussian-center point clouds (on by default otherwise)',
+    )
+    sable_group.add_argument(
+        '--save-render-views',
+        action='store_true',
+        help=(
+            'Save one render-only PNG per view per sample (in addition to the combined '
+            'render-vs-target grid from --save-visuals); written under '
+            'output_dir/png_render_only/'
+        ),
+    )
+    sable_group.add_argument(
+        '--compute-metrics',
+        action='store_true',
+        help=(
+            'Compute per-view PSNR/SSIM on the predicted renders during inference and save '
+            'them to output_dir/psnr_ssim_metrics.npz'
+        ),
+    )
+    sable_group.add_argument(
+        '--use-segmentation-mask',
+        action='store_true',
+        help=(
+            'Zero out the background (via precomputed SAM3 masks) in renders and targets '
+            'before metrics/PNG saving. Requires segmentation masks for this dataset/split, '
+            'e.g. from beast/preprocess/sable/precompute_sam3_masks_eval.py.'
+        ),
+    )
+    sable_group.add_argument(
+        '--segmentation-root',
+        type=str,
+        default=None,
+        help=(
+            'Overrides training.use_segmentation.cache_root: root directory containing '
+            'segmentation_masks/{session_id}/{left,right}/mask{frame_idx:08d}.png. Only used '
+            'with --use-segmentation-mask.'
+        ),
+    )
+    sable_group.add_argument(
         '--load-gt-camera-params-for-vis',
         action='store_true',
         help=(
@@ -209,6 +250,10 @@ def _handle_sable(args, model):
         _logger.error('Sable models require --input')
         return
 
+    if args.segmentation_root and not args.use_segmentation_mask:
+        _logger.error('--segmentation-root requires --use-segmentation-mask')
+        return
+
     output_dir = args.output or args.model / 'inference'
 
     if args.extract_latents:
@@ -225,8 +270,13 @@ def _handle_sable(args, model):
         correspondence_cache_root=args.correspondence_cache_root,
         splits=args.splits,
         save_visuals=args.save_visuals,
+        save_render_views=args.save_render_views,
+        save_pointclouds=not args.no_save_pointclouds,
         save_camera_pointcloud_scene=args.save_camera_pointcloud_scene,
         load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
+        compute_metrics=args.compute_metrics,
+        use_segmentation_mask=args.use_segmentation_mask,
+        segmentation_root=args.segmentation_root,
         max_batches=args.max_batches,
         session_names=args.session_names,
         max_files_per_session=args.max_files_per_session,

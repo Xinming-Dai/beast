@@ -166,9 +166,13 @@ class Model:
         correspondence_cache_root: str | Path | None = None,
         splits: list[str] | None = None,
         save_visuals: bool = False,
+        save_render_views: bool = False,
         save_pointclouds: bool = True,
         save_camera_pointcloud_scene: bool = False,
         load_gt_camera_params_for_vis: bool = False,
+        compute_metrics: bool = False,
+        use_segmentation_mask: bool = False,
+        segmentation_root: str | Path | None = None,
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
         max_files_per_session: int | None = None,
@@ -186,6 +190,8 @@ class Model:
                 cache. When ``None``, the value from the saved training config is used.
             splits: dataset splits to run inference on (default: ['train', 'val']).
             save_visuals: whether to also save render-vs-target PNG grids.
+            save_render_views: whether to save one render-only PNG per view per sample,
+                in addition to the combined grid from ``save_visuals``.
             save_pointclouds: whether to save ``.ply`` Gaussian-center point clouds.
             save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
                 camera frustums, with a ground-truth overlay when
@@ -194,6 +200,16 @@ class Model:
                 camera calibration into ``gt_c2w``/``gt_fxfycxcy`` for visualization,
                 overriding the saved training config's
                 ``training.load_gt_camera_params_for_vis``.
+            compute_metrics: whether to compute per-view PSNR/SSIM on the predicted
+                renders and save them to ``output_dir/psnr_ssim_metrics.npz``.
+            use_segmentation_mask: whether to apply segmentation masks (zeroing the
+                background) to renders/targets before metrics and saved PNGs. Requires
+                segmentation masks for this dataset/split; overrides the saved training
+                config's ``training.use_segmentation.enabled``.
+            segmentation_root: overrides ``training.use_segmentation.cache_root``; root
+                directory containing
+                ``segmentation_masks/{session_id}/{cam}/mask{frame_idx:08d}.png``. Only
+                used with ``use_segmentation_mask``.
             max_batches: stop after this many batches; None runs the full dataset.
             session_names: session IDs to load. Accepts a list or a single string.
                 When ``None``, the value from the saved training config is used.
@@ -203,7 +219,8 @@ class Model:
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files',
-            'camera_pointcloud_scene_glb_files', 'vis_files'.
+            'camera_pointcloud_scene_glb_files', 'vis_files', 'render_view_files',
+            'metrics_npz', 'average_psnr', 'average_ssim'.
         """
         from beast.inference import infer_sable as _infer_sable
 
@@ -216,6 +233,12 @@ class Model:
             config['training']['session_names'] = session_names
         if load_gt_camera_params_for_vis:
             config['training']['load_gt_camera_params_for_vis'] = True
+        if use_segmentation_mask:
+            seg_cfg = {**config['training'].get('use_segmentation', {})}
+            seg_cfg['enabled'] = True
+            if segmentation_root is not None:
+                seg_cfg['cache_root'] = str(segmentation_root)
+            config['training']['use_segmentation'] = seg_cfg
         if vda_cache_root is not None:
             config['model'] = {**config.get('model', {})}
             config['model']['vda'] = {**config['model'].get('vda', {})}
@@ -235,8 +258,11 @@ class Model:
             model=self.model,
             output_dir=output_dir,
             save_visuals=save_visuals,
+            save_render_views=save_render_views,
             save_pointclouds=save_pointclouds,
             save_camera_pointcloud_scene=save_camera_pointcloud_scene,
+            compute_metrics=compute_metrics,
+            require_segmentation_mask=use_segmentation_mask,
             max_batches=max_batches,
             include_splits=splits,
             max_files_per_session=max_files_per_session,

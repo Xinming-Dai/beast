@@ -20,6 +20,21 @@ Metrics `.npz` schema (`K` trials, `T` time bins, `V` views):
 - `neural_bin_idx`: `[K, T]`
 - `trial_split`: `[K]`
 - `source_files`: `[K]`
+
+Ordinary-inference `.npz` schema (flat `N = samples * views` records, no trial/bin/neural
+metadata, produced by `save_inference_psnr_ssim_metrics_npz`):
+
+- `session_id`: `[N]`
+- `scene_name`: `[N]`
+- `view_name`: `[N]`
+- `psnr`: `[N]`
+- `ssim`: `[N]`
+- `average_psnr`: scalar mean of `psnr`
+- `average_ssim`: scalar mean of `ssim`
+- `sd_psnr`: scalar standard deviation of `psnr` (`nanstd`)
+- `sd_ssim`: scalar standard deviation of `ssim` (`nanstd`)
+- `se_psnr`: scalar standard error of `psnr` (`nanstd / sqrt(n)`)
+- `se_ssim`: scalar standard error of `ssim` (`nanstd / sqrt(n)`)
 """
 
 from pathlib import Path
@@ -84,6 +99,26 @@ def _ssim_per_image(
     ).to(pred.device)
     ssim = metric(pred.detach().float(), target.detach().float())
     return ssim.reshape(bsz, views)
+
+
+def apply_segmentation_mask(
+    render: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Zero out background pixels in a render/target pair using a foreground mask.
+
+    Args:
+        render: predicted image tensor, e.g. `[B, V, 3, H, W]`.
+        target: ground-truth image tensor, same shape as `render`.
+        mask: foreground mask (`1` = keep, `0` = zero out), broadcastable to `render`'s
+            shape (e.g. `[B, V, 1, H, W]`).
+
+    Returns:
+        `(masked_render, masked_target)`, each the same shape/dtype as the inputs.
+    """
+    mask = mask.to(device=render.device, dtype=render.dtype)
+    return render * mask, target * mask
 
 
 def _image_metrics_by_view(
@@ -234,6 +269,64 @@ def save_psnr_ssim_metrics_npz(
         'trial_split': trial_split,
         'source_files': np.asarray(source_file_rows, dtype=str),
         'view_names': np.asarray(view_names, dtype=str),
+    }
+
+    metrics_npz = Path(metrics_npz)
+    metrics_npz.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(metrics_npz, **arrays)
+    return arrays
+
+
+def save_inference_psnr_ssim_metrics_npz(
+    metrics_npz: Path,
+    *,
+    session_ids: list[str],
+    scene_names: list[str],
+    view_names: list[str],
+    psnr: np.ndarray,
+    ssim: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Save per-sample PSNR/SSIM records from ordinary `beast predict` inference.
+
+    Unlike `save_psnr_ssim_metrics_npz` (`K`-trial/`T`-bin neural-decode schema), this saves
+    one flat record per `(batch item, view)` pair, since ordinary inference batches carry no
+    trial/bin/neural metadata.
+
+    Args:
+        metrics_npz: output path (parent dirs created if missing).
+        session_ids: one session id per record, length `N`.
+        scene_names: one scene name per record, length `N`.
+        view_names: one view label per record (e.g. `'view00'`), length `N`.
+        psnr: `[N]` float32 array.
+        ssim: `[N]` float32 array.
+
+    Returns:
+        dict of the arrays written (same keys as the saved `.npz`).
+
+    Raises:
+        RuntimeError: if `psnr` is empty (nothing to save).
+    """
+    if psnr.size == 0:
+        raise RuntimeError('No metrics were collected.')
+
+    n_psnr = np.sum(~np.isnan(psnr))
+    n_ssim = np.sum(~np.isnan(ssim))
+    sd_psnr = np.nanstd(psnr) if n_psnr > 0 else np.nan
+    sd_ssim = np.nanstd(ssim) if n_ssim > 0 else np.nan
+    se_psnr = sd_psnr / np.sqrt(n_psnr) if n_psnr > 0 else np.nan
+    se_ssim = sd_ssim / np.sqrt(n_ssim) if n_ssim > 0 else np.nan
+    arrays = {
+        'session_id': np.asarray(session_ids, dtype=str),
+        'scene_name': np.asarray(scene_names, dtype=str),
+        'view_name': np.asarray(view_names, dtype=str),
+        'psnr': psnr.astype(np.float32),
+        'ssim': ssim.astype(np.float32),
+        'average_psnr': np.asarray(np.nanmean(psnr), dtype=np.float32),
+        'average_ssim': np.asarray(np.nanmean(ssim), dtype=np.float32),
+        'sd_psnr': np.asarray(sd_psnr, dtype=np.float32),
+        'sd_ssim': np.asarray(sd_ssim, dtype=np.float32),
+        'se_psnr': np.asarray(se_psnr, dtype=np.float32),
+        'se_ssim': np.asarray(se_ssim, dtype=np.float32),
     }
 
     metrics_npz = Path(metrics_npz)
