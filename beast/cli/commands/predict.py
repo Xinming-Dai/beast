@@ -106,7 +106,7 @@ def register_parser(subparsers: Any) -> None:
         help=(
             'Save one render-only PNG per view per sample (in addition to the combined '
             'render-vs-target grid from --save-visuals); written under '
-            'output_dir/png_render_only/'
+            'output_dir/{session_id}/png_render_only/'
         ),
     )
     sable_group.add_argument(
