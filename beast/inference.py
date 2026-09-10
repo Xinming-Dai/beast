@@ -1259,6 +1259,9 @@ def infer_sable(
     save_pointclouds: bool = True,
     save_camera_pointcloud_scene: bool = False,
     save_visuals: bool = False,
+    save_render_views: bool = False,
+    compute_metrics: bool = False,
+    require_segmentation_mask: bool = False,
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
     max_files_per_session: int | None = None,
@@ -1269,12 +1272,21 @@ def infer_sable(
         config: full beast config dict (same as used for training).
         model: trained Sable Lightning model instance.
         output_dir: root directory for outputs; PLY files go under ``output_dir/ply/``,
-            optional camera-scene ``.glb`` files under ``output_dir/glb/``, and optional
-            PNG visuals under ``output_dir/png/``.
+            optional camera-scene ``.glb`` files under ``output_dir/glb/``, optional
+            PNG visuals under ``output_dir/png/``, and optional render-only PNGs under
+            ``output_dir/png_render_only/``.
         save_pointclouds: whether to save ``.ply`` files for each batch.
         save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
             camera frustums) for each batch.
         save_visuals: whether to save render-vs-target PNG grids for each batch.
+        save_render_views: whether to save one render-only PNG per view per sample, in
+            addition to (or instead of) the combined grid from ``save_visuals``.
+        compute_metrics: whether to compute per-view PSNR/SSIM on the predicted renders
+            and save them to ``output_dir/psnr_ssim_metrics.npz``.
+        require_segmentation_mask: if True, raise ``RuntimeError`` when a batch has no
+            ``'mask'`` key instead of silently skipping masking. Segmentation masking
+            itself is applied automatically whenever the dataloader provides a mask
+            (controlled upstream via ``config['training']['use_segmentation']``).
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
             ``'train'``, ``'val'``, and ``'test'``.
@@ -1292,8 +1304,18 @@ def infer_sable(
             - ``'camera_pointcloud_scene_glb_files'``: list of Path objects for all
               saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
+            - ``'render_view_files'``: list of Path objects for all saved render-only PNGs.
+            - ``'metrics_npz'``: str path of the saved metrics ``.npz``, or ``None``.
+            - ``'average_psnr'``: overall mean PSNR across all views/samples, or ``None``.
+            - ``'average_ssim'``: overall mean SSIM across all views/samples, or ``None``.
     """
-    from beast.models.model_utils.train_vis import save_training_visuals
+    from beast.models.model_utils.train_vis import save_render_only_visuals, save_training_visuals
+    from beast.sable_encoding_decoding.render.metrics import (
+        _image_metrics_by_view,
+        apply_segmentation_mask,
+        resolve_metrics_npz_path,
+        save_inference_psnr_ssim_metrics_npz,
+    )
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1306,6 +1328,12 @@ def infer_sable(
     all_ply: list[Path] = []
     all_glb: list[Path] = []
     all_vis: list[Path] = []
+    all_render_views: list[Path] = []
+    metric_session_ids: list[str] = []
+    metric_scene_names: list[str] = []
+    metric_view_names: list[str] = []
+    metric_psnr: list[np.ndarray] = []
+    metric_ssim: list[np.ndarray] = []
     num_batches = 0
     session_counts: dict[str, int] = {}
 
@@ -1354,6 +1382,21 @@ def infer_sable(
 
             result = model.get_model_outputs(batch)
 
+            render = result.get('render')
+            target_image = result.get('target_image')
+            target_mask = result.get('target_mask')
+
+            if require_segmentation_mask and target_mask is None:
+                raise RuntimeError(
+                    "--use-segmentation-mask is set but the batch has no 'mask' key. Pass "
+                    '--segmentation-root (or set training.use_segmentation.cache_root in the '
+                    'model config) and check that masks exist for this session/split, e.g. via '
+                    'beast/preprocess/sable/precompute_sam3_masks_eval.py.',
+                )
+            if target_mask is not None and render is not None and target_image is not None:
+                render, target_image = apply_segmentation_mask(render, target_image, target_mask)
+                result = {**result, 'render': render, 'target_image': target_image}
+
             if save_pointclouds:
                 ply_paths = save_gaussian_pointclouds(
                     result, output_dir, batch_idx,
@@ -1381,6 +1424,36 @@ def infer_sable(
                 )
                 all_vis.extend(vis_paths or [])
 
+            if (save_render_views or compute_metrics) and render is not None:
+                resolved_session_ids = (
+                    session_ids
+                    if session_ids is not None
+                    else [_parse_scene_name(name)[0] for name in scene_names]
+                )
+
+            if save_render_views and render is not None:
+                render_paths = save_render_only_visuals(
+                    output_dir / 'png_render_only',
+                    renders=render,
+                    scene_names=scene_names,
+                    step=batch_idx,
+                    max_samples=render.shape[0],
+                    session_ids=resolved_session_ids,
+                    sample_indices=sample_indices,
+                )
+                all_render_views.extend(render_paths or [])
+
+            if compute_metrics and render is not None and target_image is not None:
+                psnr_bv, ssim_bv = _image_metrics_by_view(render, target_image)
+                keep = sample_indices if sample_indices is not None else range(psnr_bv.shape[0])
+                for sample_idx in keep:
+                    for view_idx in range(psnr_bv.shape[1]):
+                        metric_session_ids.append(resolved_session_ids[sample_idx])
+                        metric_scene_names.append(scene_names[sample_idx])
+                        metric_view_names.append(f'view{view_idx:02d}')
+                        metric_psnr.append(psnr_bv[sample_idx, view_idx])
+                        metric_ssim.append(ssim_bv[sample_idx, view_idx])
+
             num_batches += 1
 
             if max_files_per_session is not None and _all_target_sessions_satisfied():
@@ -1388,9 +1461,34 @@ def infer_sable(
 
     log_step(
         f'infer_sable: processed {num_batches} batches, '
-        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids',
+        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids, '
+        f'{len(all_render_views)} render-only PNGs',
         level='info',
     )
+
+    metrics_npz_path: Path | None = None
+    average_psnr = None
+    average_ssim = None
+    if compute_metrics and metric_psnr:
+        metrics_npz_path = resolve_metrics_npz_path(None, output_dir)
+        metrics_arrays = save_inference_psnr_ssim_metrics_npz(
+            metrics_npz_path,
+            session_ids=metric_session_ids,
+            scene_names=metric_scene_names,
+            view_names=metric_view_names,
+            psnr=np.asarray(metric_psnr, dtype=np.float32),
+            ssim=np.asarray(metric_ssim, dtype=np.float32),
+        )
+        average_psnr = float(metrics_arrays['average_psnr'])
+        average_ssim = float(metrics_arrays['average_ssim'])
+        sd_psnr = float(metrics_arrays['sd_psnr'])
+        sd_ssim = float(metrics_arrays['sd_ssim'])
+        log_step(
+            f'infer_sable: saved metrics for {len(metric_psnr)} (sample, view) records to '
+            f'{metrics_npz_path} (avg_psnr={average_psnr:.3f}, sd_psnr={sd_psnr:.3f}, '
+            f'avg_ssim={average_ssim:.3f}, sd_ssim={sd_ssim:.3f})',
+            level='info',
+        )
 
     return {
         'output_dir': str(output_dir),
@@ -1398,6 +1496,10 @@ def infer_sable(
         'ply_files': all_ply,
         'camera_pointcloud_scene_glb_files': all_glb,
         'vis_files': all_vis,
+        'render_view_files': all_render_views,
+        'metrics_npz': str(metrics_npz_path) if metrics_npz_path is not None else None,
+        'average_psnr': average_psnr,
+        'average_ssim': average_ssim,
     }
 
 

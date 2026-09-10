@@ -80,6 +80,67 @@ def save_training_visuals(
     return saved_paths
 
 
+def save_render_only_visuals(
+    output_dir: Path | str,
+    renders: torch.Tensor,
+    scene_names: list[str],
+    step: int,
+    max_samples: int = 1,
+    max_views: int | None = None,
+    session_ids: list[str] | None = None,
+    sample_indices: list[int] | None = None,
+) -> list[Path]:
+    """Save one render-only PNG per view per sample (no target/grid).
+
+    Args:
+        output_dir: directory to write PNG files into (created if missing).
+        renders: ``[B, V, 3, H, W]`` float tensor in ``[0, 1]``; already mask-applied
+            by the caller when segmentation masking is enabled.
+        scene_names: one scene name per batch item, used in filenames.
+        step: batch/step index, used in filenames.
+        max_samples: how many batch samples to save. Ignored when ``sample_indices``
+            is given.
+        max_views: how many views to save per sample; ``None`` saves all views.
+        session_ids: one session ID per batch item; when given, files are grouped
+            into a per-session subfolder instead of a flat ``output_dir``.
+        sample_indices: batch item indices to save; when given, exactly these
+            samples are saved instead of the first ``max_samples``.
+
+    Returns:
+        list of saved file paths, one per ``(sample, view)``.
+    """
+    output_dir = Path(output_dir)
+
+    if sample_indices is not None:
+        indices = sample_indices
+    else:
+        sample_count = min(int(max_samples), int(renders.shape[0]))
+        indices = list(range(sample_count))
+
+    view_count = (
+        int(renders.shape[1]) if max_views is None else min(int(max_views), int(renders.shape[1]))
+    )
+
+    saved_paths = []
+    for sample_idx in indices:
+        scene_name = (
+            scene_names[sample_idx]
+            if sample_idx < len(scene_names)
+            else f'sample_{sample_idx:02d}'
+        )
+        sample_dir = output_dir / session_ids[sample_idx] if session_ids is not None else output_dir
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        for view_idx in range(view_count):
+            filename = (
+                f'step_{step:06d}_{_sanitize_filename(scene_name)}'
+                f'_sample{sample_idx:02d}_view{view_idx:02d}.png'
+            )
+            path = sample_dir / filename
+            Image.fromarray(_tensor_to_uint8(renders[sample_idx, view_idx])).save(path)
+            saved_paths.append(path)
+    return saved_paths
+
+
 def build_render_target_visual(
     render_views: torch.Tensor,
     target_views: torch.Tensor,

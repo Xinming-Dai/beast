@@ -39,6 +39,7 @@ from beast.sable_encoding_decoding.render.decode_utils import (
     write_render_done_marker,
 )
 from beast.sable_encoding_decoding.render.metrics import (
+    apply_segmentation_mask,
     collect_psnr_ssim_metrics_block,
     resolve_metrics_npz_path,
 )
@@ -809,9 +810,9 @@ def main(argv: list[str] | None = None) -> None:
                 target_mask = torch.stack([masks_all[i, tidx[i]] for i in range(m)], dim=0)
             else:
                 target_mask = masks_all[:m]
-            target_mask = target_mask.to(device=result.render.device, dtype=result.render.dtype)
-            result.render = result.render * target_mask
-            result.target_image = result.target_image * target_mask
+            result.render, result.target_image = apply_segmentation_mask(
+                result.render, result.target_image, target_mask,
+            )
 
         if do_finetune:
             assert optimizer is not None
