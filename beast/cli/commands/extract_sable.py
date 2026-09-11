@@ -5,8 +5,8 @@ import logging
 from typing import Any
 
 from beast.cli.types import config_file
-from beast.preprocess.config_sable import load_sable_config, validate_sable_config
-from beast.preprocess.extraction_sable import run_pipeline
+from beast.preprocess.sable.ibl.config_sable import load_sable_config, validate_sable_config
+from beast.preprocess.sable.ibl.extraction_sable import run_pipeline
 
 _logger = logging.getLogger('BEAST.CLI.EXTRACT_SABLE')
 

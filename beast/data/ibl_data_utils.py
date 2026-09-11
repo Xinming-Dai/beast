@@ -1,7 +1,7 @@
 """IBL neural and behavior data extraction utilities.
 
 Ported from E-RayZer-private's ``ibl_data_utils.py`` (itself built on the IBL ``brainbox``
-pipeline). Used by ``beast.preprocess.sable.extract_sable_neural_data`` to pull spikes,
+pipeline). Used by ``beast.preprocess.sable.ibl.extract_sable_neural_data`` to pull spikes,
 trial metadata, and continuous behaviors for one IBL session from the public IBL database
 via ``ONE``, bin them into fixed-length intervals, and align spikes with behaviors for
 downstream train/val/test splitting.

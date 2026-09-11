@@ -29,7 +29,7 @@ CAMERAS="${CAMERAS:-left right}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting IBL eval frames for eid=$EID"
 
-python -m beast.preprocess.sable.extract_sable_eval_frames \
+python -m beast.preprocess.sable.ibl.extract_sable_eval_frames \
     --eid "$EID" \
     --neural-data-dir "$NEURAL_DATA_DIR" \
     --raw-video-dir "$RAW_VIDEO_DIR" \

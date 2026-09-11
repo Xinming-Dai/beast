@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from beast.logging import log_step
-from beast.preprocess.sable.sable_extract_litpose_correspondences import _load_dlc_frame_map
+from beast.preprocess.sable.ibl.sable_extract_litpose_correspondences import _load_dlc_frame_map
 
 _VIEWS = ('TL', 'TR')
 

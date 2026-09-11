@@ -24,8 +24,8 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-from beast.preprocess.config_sable import SABLEConfig, VideoNamingConfig
 from beast.preprocess.extraction import select_frame_idxs_kmeans
+from beast.preprocess.sable.ibl.config_sable import SABLEConfig, VideoNamingConfig
 from beast.video import downsample_video, get_video_stats, trim_video
 
 _logger = logging.getLogger(__name__)
@@ -833,7 +833,7 @@ def run_pipeline(
 
     if cfg.vda.enabled:
         _logger.info('--- step 5: VDA depth precompute ---')
-        from beast.preprocess.precompute_vda_sable import run_vda_precompute
+        from beast.preprocess.sable.ibl.precompute_vda_sable import run_vda_precompute
         run_vda_precompute(
             dataset_root=dataset_dir,
             vda_cfg=cfg.vda,
@@ -846,7 +846,7 @@ def run_pipeline(
 
     if cfg.segmentation.enabled:
         _logger.info('--- step 6: SAM3 segmentation ---')
-        from beast.preprocess.precompute_sam3_sable import run_sam3_precompute
+        from beast.preprocess.sable.ibl.precompute_sam3_sable import run_sam3_precompute
         run_sam3_precompute(
             dataset_root=dataset_dir,
             seg_cfg=cfg.segmentation,

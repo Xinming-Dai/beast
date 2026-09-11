@@ -1391,7 +1391,7 @@ def infer_sable(
                     "--use-segmentation-mask is set but the batch has no 'mask' key. Pass "
                     '--segmentation-root (or set training.use_segmentation.cache_root in the '
                     'model config) and check that masks exist for this session/split, e.g. via '
-                    'beast/preprocess/sable/precompute_sam3_masks_eval.py.',
+                    'beast/preprocess/sable/ibl/precompute_sam3_masks_eval.py.',
                 )
             if target_mask is not None and render is not None and target_image is not None:
                 render, target_image = apply_segmentation_mask(render, target_image, target_mask)

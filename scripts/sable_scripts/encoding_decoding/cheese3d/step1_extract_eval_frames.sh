@@ -47,6 +47,6 @@ ARGS=(
 )
 [ -n "$CENTER_CAMERA" ] && ARGS+=(--center-camera "$CENTER_CAMERA")
 
-python -m beast.preprocess.cheese3d.extract_cheese3d_eval_frames "${ARGS[@]}"
+python -m beast.preprocess.sable.cheese3d.extract_cheese3d_eval_frames "${ARGS[@]}"
 
 conda deactivate
