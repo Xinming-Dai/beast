@@ -343,6 +343,10 @@ class _PairRecord:
     pair_idx: int
     left_source_frame_index: int
     right_source_frame_index: int
+    split: str | None = None
+    neural_trial_idx: int | None = None
+    neural_bin_idx: int | None = None
+    neural_interval_sec: tuple[float, float] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +411,114 @@ def _discover_sessions(
                 left_source_frame_index=frame_idx,
                 right_source_frame_index=frame_idx,
             ))
+        records.sort(key=lambda r: r.pair_idx)
+        if records:
+            grouped[session_id] = records
+            print(
+                f'[info] discovered session={session_id} frames={len(records)}',
+                flush=True,
+            )
+
+    return grouped
+
+
+_EVAL_SPLIT_NAMES = ('train', 'val', 'test')
+
+
+def _discover_eval_sessions(
+    input_dir: Path,
+    cam_subdir_tmpl: str,
+    eids: set[str] | None,
+    splits: tuple[str, ...] = _EVAL_SPLIT_NAMES,
+) -> dict[str, list[_PairRecord]]:
+    """Discover sessions and frame pairs from the eval frame tree's split directories.
+
+    Expects ``{input_dir}/{cam_subdir_tmpl.format(cam='left'|'right')}/`` to contain one
+    subdirectory per session (name contains a UUID), each holding ``train/``, ``val/``,
+    ``test/`` subdirectories with a ``frame_index_mapping.json`` mapping PNG filenames to
+    ``{cam}_source_frame_index`` (and, on the left mapping, ``neural_trial_idx``/
+    ``neural_bin_idx``/``neural_interval_sec``). Left/right frames within a split are paired
+    by identical filename.
+
+    ``pair_idx`` is set to ``left_source_frame_index`` (not a running counter) so that it
+    matches the raw-frame-index key ``SABLEDataset`` uses to look up correspondence bundles.
+
+    Args:
+        input_dir: root of the eval extracted-frames directory.
+        cam_subdir_tmpl: template for the camera subdirectory (e.g. ``'{cam}Camera.video'``).
+        eids: if not None, only return sessions whose UUID is in this set.
+        splits: which split subdirectories to scan; defaults to all of train/val/test.
+
+    Returns:
+        mapping from session_id to list of _PairRecord, sorted by pair_idx.
+
+    Raises:
+        FileNotFoundError: if either camera's subdirectory does not exist.
+    """
+    cam_dirs: dict[str, dict[str, Path]] = {}
+    for cam in ('left', 'right'):
+        cam_root = input_dir / cam_subdir_tmpl.format(cam=cam)
+        if not cam_root.is_dir():
+            raise FileNotFoundError(f'camera directory not found: {cam_root}')
+        session_dirs: dict[str, Path] = {}
+        for session_dir in sorted(cam_root.iterdir()):
+            if not session_dir.is_dir():
+                continue
+            m = _UUID_RE.search(session_dir.name)
+            if not m:
+                continue
+            session_id = m.group(1)
+            if eids is not None and session_id not in eids:
+                continue
+            session_dirs[session_id] = session_dir
+        cam_dirs[cam] = session_dirs
+
+    grouped: dict[str, list[_PairRecord]] = {}
+    for session_id in sorted(set(cam_dirs['left']) & set(cam_dirs['right'])):
+        left_dir = cam_dirs['left'][session_id]
+        right_dir = cam_dirs['right'][session_id]
+        records: list[_PairRecord] = []
+
+        for split_name in splits:
+            left_split_dir = left_dir / split_name
+            right_split_dir = right_dir / split_name
+            left_mapping_path = left_split_dir / 'frame_index_mapping.json'
+            right_mapping_path = right_split_dir / 'frame_index_mapping.json'
+            if not left_mapping_path.is_file() or not right_mapping_path.is_file():
+                continue
+
+            left_mapping = json.loads(left_mapping_path.read_text(encoding='utf-8'))
+            right_mapping = json.loads(right_mapping_path.read_text(encoding='utf-8'))
+
+            for filename in sorted(set(left_mapping) & set(right_mapping)):
+                entry = left_mapping[filename]
+                left_source_frame_index = int(entry['left_source_frame_index'])
+                right_source_frame_index = int(
+                    right_mapping[filename]['right_source_frame_index']
+                )
+                neural_trial_idx = entry.get('neural_trial_idx')
+                neural_bin_idx = entry.get('neural_bin_idx')
+                neural_interval_sec_raw = entry.get('neural_interval_sec')
+                records.append(_PairRecord(
+                    pair_json=None,
+                    session_id=session_id,
+                    pair_idx=left_source_frame_index,
+                    left_source_frame_index=left_source_frame_index,
+                    right_source_frame_index=right_source_frame_index,
+                    split=split_name,
+                    neural_trial_idx=(
+                        int(neural_trial_idx) if neural_trial_idx is not None else None
+                    ),
+                    neural_bin_idx=(
+                        int(neural_bin_idx) if neural_bin_idx is not None else None
+                    ),
+                    neural_interval_sec=(
+                        (float(neural_interval_sec_raw[0]), float(neural_interval_sec_raw[1]))
+                        if neural_interval_sec_raw is not None
+                        else None
+                    ),
+                ))
+
         records.sort(key=lambda r: r.pair_idx)
         if records:
             grouped[session_id] = records
@@ -598,6 +710,14 @@ def _build_session_rows(
             metadata['shift_nose_leftCamera_applied'] = list(shift_left)
         if shift_right != (0.0, 0.0):
             metadata['shift_nose_rightCamera_applied'] = list(shift_right)
+        if rec.split is not None:
+            metadata['split'] = rec.split
+        if rec.neural_trial_idx is not None:
+            metadata['neural_trial_idx'] = rec.neural_trial_idx
+        if rec.neural_bin_idx is not None:
+            metadata['neural_bin_idx'] = rec.neural_bin_idx
+        if rec.neural_interval_sec is not None:
+            metadata['neural_interval_sec'] = list(rec.neural_interval_sec)
 
         _save_correspondence_bundle(
             out_path,
@@ -626,8 +746,11 @@ def _build_session_rows(
 @dataclass(frozen=True)
 class _SessionJob:
     session_id: str
-    # (pair_idx, left_source_frame_index, right_source_frame_index)
-    pair_entries: tuple[tuple[int, int, int], ...]
+    # (pair_idx, left_source_frame_index, right_source_frame_index, split,
+    #  neural_trial_idx, neural_bin_idx, neural_interval_sec)
+    pair_entries: tuple[
+        tuple[int, int, int, str | None, int | None, int | None, tuple[float, float] | None], ...
+    ]
     csv_dir: str
     output_root: str
     keypoints: tuple[str, ...]
@@ -647,8 +770,13 @@ def _run_session_job(job: _SessionJob) -> list[dict[str, Any]]:
             pair_idx=idx,
             left_source_frame_index=li,
             right_source_frame_index=ri,
+            split=split,
+            neural_trial_idx=neural_trial_idx,
+            neural_bin_idx=neural_bin_idx,
+            neural_interval_sec=neural_interval_sec,
         )
-        for idx, li, ri in job.pair_entries
+        for idx, li, ri, split, neural_trial_idx, neural_bin_idx, neural_interval_sec
+        in job.pair_entries
     ]
     return _build_session_rows(
         session_id=job.session_id,
@@ -751,6 +879,27 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar='EID',
         default=None,
         help='only process these session UUIDs (overrides sessionids from --config)',
+    )
+    p.add_argument(
+        '--layout',
+        choices=('pretrain', 'eval'),
+        default='pretrain',
+        help=(
+            "'pretrain' discovers sessions from a flat img*.png tree (default). "
+            "'eval' discovers sessions from the eval frame tree's per-camera "
+            'train/val/test frame_index_mapping.json files.'
+        ),
+    )
+    p.add_argument(
+        '--splits',
+        nargs='+',
+        choices=_EVAL_SPLIT_NAMES,
+        default=None,
+        metavar='SPLIT',
+        help=(
+            'only used with --layout eval: which split subdirectories to scan '
+            '(default: train, val, and test)'
+        ),
     )
     p.add_argument(
         '--max-workers',
@@ -888,13 +1037,21 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     # Discover sessions
     # ---------------------------------------------------------------------------
-    grouped = _discover_sessions(
-        input_dir=input_dir,
-        anchor_cam=anchor_cam,
-        cam_subdir_tmpl=cam_subdir_tmpl,
-        ext=ext,
-        eids=eids,
-    )
+    if args.layout == 'eval':
+        grouped = _discover_eval_sessions(
+            input_dir=input_dir,
+            cam_subdir_tmpl=cam_subdir_tmpl,
+            eids=eids,
+            splits=tuple(args.splits) if args.splits else _EVAL_SPLIT_NAMES,
+        )
+    else:
+        grouped = _discover_sessions(
+            input_dir=input_dir,
+            anchor_cam=anchor_cam,
+            cam_subdir_tmpl=cam_subdir_tmpl,
+            ext=ext,
+            eids=eids,
+        )
     if not grouped:
         raise ValueError(f'no sessions discovered under {input_dir}')
 
@@ -936,7 +1093,15 @@ def main() -> None:
             _SessionJob(
                 session_id=sid,
                 pair_entries=tuple(
-                    (rec.pair_idx, rec.left_source_frame_index, rec.right_source_frame_index)
+                    (
+                        rec.pair_idx,
+                        rec.left_source_frame_index,
+                        rec.right_source_frame_index,
+                        rec.split,
+                        rec.neural_trial_idx,
+                        rec.neural_bin_idx,
+                        rec.neural_interval_sec,
+                    )
                     for rec in grouped[sid]
                 ),
                 csv_dir=str(csv_dir),
