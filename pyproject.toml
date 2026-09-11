@@ -69,6 +69,12 @@ packages = [{ include = "beast" }]
 beast = "beast.cli.main:main"
 
 [project.optional-dependencies]
+ibl_extraction = [
+    "ibllib",
+    "iblatlas",
+    "iblutil",
+    "one-api",
+]
 vda = [
     "easydict",
 ]
