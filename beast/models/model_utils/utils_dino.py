@@ -10,7 +10,7 @@ class DinoV3(nn.Module):
     def __init__(
         self,
         model_name='facebook/dinov3-vitb16-pretrain-lvd1689m',
-        num_trainable_blocks=2,
+        num_trainable_blocks=0,
     ):
         """Initialize DINOv3.
 
