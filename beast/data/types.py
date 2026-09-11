@@ -12,3 +12,4 @@ class ExampleDict(TypedDict):
     video: str | list[str]
     idx: int | list[int]
     image_path: str | list[str]
+    mask: Float[Tensor, 'one image_height image_width']

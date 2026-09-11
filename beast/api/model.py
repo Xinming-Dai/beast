@@ -360,6 +360,12 @@ class Model:
         save_latents: bool = True,
         save_reconstructions: bool = True,
         save_img_tokens: bool = False,
+        compute_metrics: bool = False,
+        use_segmentation_mask: bool = False,
+        segmentation_root: str | Path | None = None,
+        mask_session_id: str | None = None,
+        mask_camera_role: str | None = None,
+        save_render_views: bool = False,
     ) -> dict[str, Any]:
         """Run inference on a possibly nested directory of images.
 
@@ -372,6 +378,21 @@ class Model:
         save_reconstructions: save reconstructed images
         save_img_tokens: save the per-patch token grid and its matching ids_restore, for later
             decoding a frame from saved tokens
+        compute_metrics: whether to compute per-sample PSNR/SSIM against the input image and
+            save them to output_dir/psnr_ssim_metrics.npz
+        use_segmentation_mask: whether to zero out the background (via segmentation_root masks)
+            in reconstructions and inputs before metrics/PNG saving
+        segmentation_root: root directory holding a mask PNG for every image; required when
+            use_segmentation_mask is True. By default, masks are resolved by mirroring the
+            image's path relative to image_dir; when mask_session_id and mask_camera_role are
+            also given, masks are instead resolved via each image's eval-layout
+            frame_index_mapping.json (see beast.data.datasets.BaseDataset)
+        mask_session_id: session id segment of the eval-layout mask path; required together
+            with mask_camera_role
+        mask_camera_role: 'left' or 'right', for eval-layout mask resolution; required
+            together with mask_session_id
+        save_render_views: whether to save one render-only PNG per sample under
+            output_dir/png_render_only/
 
         Returns
         -------
@@ -381,6 +402,10 @@ class Model:
         image_dir = Path(image_dir)
         if self.model_dir is None:
             raise ValueError('model_dir is None; call train() before predict_images()')
+        if use_segmentation_mask and segmentation_root is None:
+            raise ValueError('segmentation_root must be set when use_segmentation_mask is True')
+        if (mask_session_id is None) != (mask_camera_role is None):
+            raise ValueError('mask_session_id and mask_camera_role must be set together')
         outputs = predict_images(
             model=self.model,
             output_dir=output_dir or self.model_dir / 'image_predictions' / image_dir.stem,
@@ -389,6 +414,12 @@ class Model:
             save_latents=save_latents,
             save_reconstructions=save_reconstructions,
             save_img_tokens=save_img_tokens,
+            compute_metrics=compute_metrics,
+            use_segmentation_mask=use_segmentation_mask,
+            segmentation_root=segmentation_root,
+            mask_session_id=mask_session_id,
+            mask_camera_role=mask_camera_role,
+            save_render_views=save_render_views,
         )
         return outputs
 

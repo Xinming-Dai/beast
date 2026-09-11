@@ -100,6 +100,8 @@ def register_parser(subparsers: Any) -> None:
         action='store_true',
         help='Skip saving .ply Gaussian-center point clouds (on by default otherwise)',
     )
+    # NOTE: the following four flags are shared between Sable and non-Sable (beast/resnet
+    # image-directory predict) models; see _handle_sable and _handle_video_or_images.
     sable_group.add_argument(
         '--save-render-views',
         action='store_true',
@@ -113,8 +115,8 @@ def register_parser(subparsers: Any) -> None:
         '--compute-metrics',
         action='store_true',
         help=(
-            'Compute per-view PSNR/SSIM on the predicted renders during inference and save '
-            'them to output_dir/psnr_ssim_metrics.npz'
+            'Compute per-view/sample PSNR/SSIM on the predicted renders/reconstructions during '
+            'inference and save them to output_dir/psnr_ssim_metrics.npz'
         ),
     )
     sable_group.add_argument(
@@ -144,9 +146,35 @@ def register_parser(subparsers: Any) -> None:
         type=str,
         default=None,
         help=(
-            'Overrides training.use_segmentation.cache_root: root directory containing '
-            'segmentation_masks/{session_id}/{left,right}/mask{frame_idx:08d}.png. Only used '
-            'with --use-segmentation-mask.'
+            'For Sable: overrides training.use_segmentation.cache_root; root directory '
+            'containing segmentation_masks/{session_id}/{left,right}/mask{frame_idx:08d}.png. '
+            'For beast/resnet image-directory predict: root directory holding a mask PNG for '
+            'every image; by default masks are resolved by mirroring the layout under '
+            '--input, or via --mask-session-id/--mask-camera-role for eval-layout frames. '
+            'Only used with --use-segmentation-mask.'
+        ),
+    )
+    sable_group.add_argument(
+        '--mask-session-id',
+        type=str,
+        default=None,
+        help=(
+            'beast/resnet image-directory predict only: session id segment of the '
+            'eval-layout mask path (--segmentation-root/segmentation_masks/'
+            '<mask-session-id>/<mask-camera-role>/mask<frame_idx>.png). Required together '
+            'with --mask-camera-role when --input holds eval-layout frames '
+            '(interval<N>timebin<M>.png + frame_index_mapping.json) rather than raw '
+            'per-frame images. Ignored by Sable.'
+        ),
+    )
+    sable_group.add_argument(
+        '--mask-camera-role',
+        type=str,
+        choices=['left', 'right'],
+        default=None,
+        help=(
+            'beast/resnet image-directory predict only: camera role for eval-layout mask '
+            'resolution; see --mask-session-id. Ignored by Sable.'
         ),
     )
     sable_group.add_argument(
@@ -354,12 +382,26 @@ def _handle_video_or_images(args, model):
         _logger.error('--input is required')
         return
 
+    if args.segmentation_root and not args.use_segmentation_mask:
+        _logger.error('--segmentation-root requires --use-segmentation-mask')
+        return
+
+    if (args.mask_session_id is None) != (args.mask_camera_role is None):
+        _logger.error('--mask-session-id and --mask-camera-role must be set together')
+        return
+
     _logger.info(f'Running inference with model from: {args.model}')
     _logger.info(f'Input: {args.input}')
     _logger.info(f'Output directory: {args.output or args.model}')
-    if not args.save_latents and not args.save_reconstructions:
+    if (
+        not args.save_latents
+        and not args.save_reconstructions
+        and not args.compute_metrics
+        and not args.save_render_views
+    ):
         _logger.warning(
-            'did not detect --save_latents or --save_reconstructions; no outputs will be saved'
+            'did not detect --save_latents, --save_reconstructions, --compute-metrics, or '
+            '--save-render-views; no outputs will be saved'
         )
 
     # Run prediction
@@ -405,4 +447,10 @@ def _handle_video_or_images(args, model):
                 save_latents=args.save_latents,
                 save_reconstructions=args.save_reconstructions,
                 save_img_tokens=args.return_img_tokens,
+                compute_metrics=args.compute_metrics,
+                use_segmentation_mask=args.use_segmentation_mask,
+                segmentation_root=args.segmentation_root,
+                mask_session_id=args.mask_session_id,
+                mask_camera_role=args.mask_camera_role,
+                save_render_views=args.save_render_views,
             )

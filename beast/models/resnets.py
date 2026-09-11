@@ -142,19 +142,21 @@ class ResnetAutoencoder(BaseLightningModel):
 
         Parameters
         ----------
-        batch_dict: dict containing 'image', 'video', 'idx', 'image_path'
+        batch_dict: dict containing 'image', 'video', 'idx', 'image_path', optional 'mask'
         batch_idx: index of the current batch
 
         Returns
         -------
-        dict with 'latents', optional 'reconstructions', and 'metadata'
+        dict with 'latents', optional 'images'/'reconstructions'/'mask', and 'metadata'
 
         """
         results_dict = self.get_model_outputs(
             batch_dict,
-            return_images=False,
+            return_images=self.compute_metrics,
             return_reconstructions=self.return_reconstructions,
         )
+        if 'mask' in batch_dict:
+            results_dict['mask'] = batch_dict['mask']
         results_dict['metadata'] = {
             'video': batch_dict['video'],
             'idx': batch_dict['idx'],

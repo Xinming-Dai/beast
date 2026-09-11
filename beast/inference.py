@@ -57,6 +57,18 @@ class ImagePredictionHandler:
         # for normalization
         self.mean = torch.Tensor(_IMAGENET_MEAN).view(1, 1, 3)
         self.std = torch.Tensor(_IMAGENET_STD).view(1, 1, 3)
+        # (1, 3, 1, 1) counterparts for un-normalizing batched (B, C, H, W) tensors
+        self.mean_bchw = torch.Tensor(_IMAGENET_MEAN).view(1, 3, 1, 1)
+        self.std_bchw = torch.Tensor(_IMAGENET_STD).view(1, 3, 1, 1)
+
+        # flat per-(sample) metrics accumulators, filled across all batches when
+        # compute_metrics is enabled and flushed to a single .npz in process_predictions
+        self._metric_session_ids: list[str] = []
+        self._metric_scene_names: list[str] = []
+        self._metric_view_names: list[str] = []
+        self._metric_psnr: list[np.ndarray] = []
+        self._metric_ssim: list[np.ndarray] = []
+        self._render_view_files: list[Path] = []
 
     def tensor_to_image(self, tensor: torch.Tensor) -> Image.Image:
         """Convert tensor (C, H, W) to PIL Image."""
@@ -84,6 +96,11 @@ class ImagePredictionHandler:
         #     return Image.fromarray(np_array, mode='L')
         # else:
         return Image.fromarray(np_array, mode='RGB')
+
+    def unnormalize_batch(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Invert the ImageNet normalization on a (B, C, H, W) tensor, clamped to [0, 1]."""
+        tensor = tensor * self.std_bchw.to(tensor.device) + self.mean_bchw.to(tensor.device)
+        return torch.clamp(tensor, 0.0, 1.0)
 
     def save_reconstruction(
         self,
@@ -164,11 +181,14 @@ class ImagePredictionHandler:
         save_reconstructions: bool = True,
         save_latents: bool = False,
         save_img_tokens: bool = False,
+        compute_metrics: bool = False,
+        save_render_views: bool = False,
     ) -> dict[str, list]:
         """Process a batch of predictions and save them."""
         latents = predictions['latents']
-        # only present when the model was run with return_reconstructions=True
-        reconstructions = predictions['reconstructions'] if save_reconstructions else None
+        # present whenever the model was run with return_reconstructions=True, i.e. whenever
+        # save_reconstructions, compute_metrics, or save_render_views was requested
+        reconstructions = predictions.get('reconstructions')
         # only present when the model was run with return_img_tokens=True
         img_tokens = predictions['img_tokens'] if save_img_tokens else None
         ids_restore = predictions['ids_restore'] if save_img_tokens else None
@@ -224,7 +244,72 @@ class ImagePredictionHandler:
             saved_files['metadata'].append(metadata_entry)
             self.metadata.append(metadata_entry)
 
+        if compute_metrics or save_render_views:
+            self._process_batch_metrics(
+                predictions,
+                batch_metadata,
+                reconstructions,
+                compute_metrics=compute_metrics,
+                save_render_views=save_render_views,
+            )
+
         return saved_files
+
+    def _process_batch_metrics(
+        self,
+        predictions: dict,
+        batch_metadata: dict,
+        reconstructions: torch.Tensor | None,
+        compute_metrics: bool,
+        save_render_views: bool,
+    ) -> None:
+        """Compute/save PSNR/SSIM and render-only PNGs for one batch of predictions.
+
+        Accumulates flat per-sample metric records onto self._metric_* (flushed to a single
+        .npz once, in process_predictions, after all batches are processed).
+        """
+        from beast.models.model_utils.train_vis import save_render_only_visuals
+        from beast.sable_encoding_decoding.render.metrics import (
+            _image_metrics_by_view,
+            apply_segmentation_mask,
+        )
+
+        images = predictions.get('images')
+        if images is None or reconstructions is None:
+            raise RuntimeError(
+                'compute_metrics/save_render_views requires the model to return images and '
+                'reconstructions; ensure model.compute_metrics and model.return_reconstructions '
+                'were set before trainer.predict() was called.'
+            )
+
+        render = self.unnormalize_batch(reconstructions).unsqueeze(1)  # (B, 1, 3, H, W)
+        target = self.unnormalize_batch(images).unsqueeze(1)  # (B, 1, 3, H, W)
+        mask = predictions.get('mask')
+        if mask is not None:
+            render, target = apply_segmentation_mask(render, target, mask.unsqueeze(1))
+
+        video_names = list(batch_metadata['video'])
+        scene_names = [Path(p).stem for p in batch_metadata['image_paths']]
+
+        if save_render_views:
+            render_paths = save_render_only_visuals(
+                self.output_dir / 'png_render_only',
+                renders=render,
+                scene_names=scene_names,
+                step=0,
+                max_samples=render.shape[0],
+                session_ids=video_names,
+            )
+            self._render_view_files.extend(render_paths)
+
+        if compute_metrics:
+            psnr_bv, ssim_bv = _image_metrics_by_view(render, target)  # each (B, 1)
+            for sample_idx in range(psnr_bv.shape[0]):
+                self._metric_session_ids.append(video_names[sample_idx])
+                self._metric_scene_names.append(scene_names[sample_idx])
+                self._metric_view_names.append('view00')
+                self._metric_psnr.append(psnr_bv[sample_idx, 0])
+                self._metric_ssim.append(ssim_bv[sample_idx, 0])
 
     def process_predictions(
         self,
@@ -232,6 +317,8 @@ class ImagePredictionHandler:
         save_reconstructions: bool = True,
         save_latents: bool = False,
         save_img_tokens: bool = False,
+        compute_metrics: bool = False,
+        save_render_views: bool = False,
     ) -> dict[str, Any]:
         """Process all predictions from trainer.predict() and save results.
 
@@ -241,6 +328,10 @@ class ImagePredictionHandler:
         save_reconstructions: Whether to save reconstruction images
         save_latents: Whether to save latent representations
         save_img_tokens: Whether to save the per-patch token grid and its ids_restore
+        compute_metrics: Whether to accumulate PSNR/SSIM against the input image and write
+            output_dir/psnr_ssim_metrics.npz once all batches are processed
+        save_render_views: Whether to save one render-only PNG per sample under
+            output_dir/png_render_only/
 
         Returns
         -------
@@ -266,6 +357,8 @@ class ImagePredictionHandler:
                 save_reconstructions=save_reconstructions,
                 save_latents=save_latents,
                 save_img_tokens=save_img_tokens,
+                compute_metrics=compute_metrics,
+                save_render_views=save_render_views,
             )
 
             # Accumulate results
@@ -298,6 +391,29 @@ class ImagePredictionHandler:
             results['img_tokens_dir'] = str(self.output_dir / 'img_tokens')
             results['ids_restore_dir'] = str(self.output_dir / 'ids_restore')
 
+        if save_render_views:
+            results['render_view_files'] = [str(p) for p in self._render_view_files]
+            results['render_views_saved'] = len(self._render_view_files)
+
+        if compute_metrics and self._metric_psnr:
+            from beast.sable_encoding_decoding.render.metrics import (
+                resolve_metrics_npz_path,
+                save_inference_psnr_ssim_metrics_npz,
+            )
+
+            metrics_npz_path = resolve_metrics_npz_path(None, self.output_dir)
+            metrics_arrays = save_inference_psnr_ssim_metrics_npz(
+                metrics_npz_path,
+                session_ids=self._metric_session_ids,
+                scene_names=self._metric_scene_names,
+                view_names=self._metric_view_names,
+                psnr=np.asarray(self._metric_psnr, dtype=np.float32),
+                ssim=np.asarray(self._metric_ssim, dtype=np.float32),
+            )
+            results['metrics_npz'] = str(metrics_npz_path)
+            results['average_psnr'] = float(metrics_arrays['average_psnr'])
+            results['average_ssim'] = float(metrics_arrays['average_ssim'])
+
         _logger.info(f"Processed {results['num_images_processed']} images")
         if save_reconstructions:
             _logger.info(f"Saved {results['reconstructions_saved']} reconstructions")
@@ -305,6 +421,14 @@ class ImagePredictionHandler:
             _logger.info(f"Saved {results['latents_saved']} latent representations")
         if save_img_tokens:
             _logger.info(f"Saved {results['img_tokens_saved']} img_tokens + ids_restore pairs")
+        if save_render_views:
+            _logger.info(f"Saved {results['render_views_saved']} render-only PNGs")
+        if compute_metrics and 'metrics_npz' in results:
+            _logger.info(
+                f"PSNR/SSIM metrics saved to: {results['metrics_npz']} "
+                f"(average_psnr={results['average_psnr']:.4f}, "
+                f"average_ssim={results['average_ssim']:.4f})"
+            )
         _logger.info(f'Results saved to: {self.output_dir}')
         _logger.info(f'Metadata saved to: {metadata_path}')
 
@@ -532,6 +656,12 @@ def predict_images(
     save_reconstructions: bool = True,
     save_img_tokens: bool = False,
     num_channels: int = 3,
+    compute_metrics: bool = False,
+    use_segmentation_mask: bool = False,
+    segmentation_root: str | Path | None = None,
+    mask_session_id: str | None = None,
+    mask_camera_role: str | None = None,
+    save_render_views: bool = False,
 ) -> dict[str, Any]:
     """Run inference on images using a trained model and save results.
 
@@ -554,6 +684,21 @@ def predict_images(
         'ids_restore' from `predict_step`, e.g. `beast.models.vits.VisionTransformer`)
     num_channels: number of image channels; 1 loads as grayscale then converts to RGB, 3 loads
         as RGB
+    compute_metrics: whether to compute per-sample PSNR/SSIM against the input image and save
+        them to output_dir/psnr_ssim_metrics.npz
+    use_segmentation_mask: whether to zero out the background (via segmentation_root masks) in
+        reconstructions and inputs before metrics/PNG saving
+    segmentation_root: root directory holding a mask PNG for every image; required when
+        use_segmentation_mask is True. By default, masks are resolved by mirroring the
+        image's path relative to source_dir; when mask_session_id and mask_camera_role are
+        also given, masks are instead resolved via each image's eval-layout
+        frame_index_mapping.json (see beast.data.datasets.BaseDataset)
+    mask_session_id: session id segment of the eval-layout mask path; required together with
+        mask_camera_role
+    mask_camera_role: 'left' or 'right', for eval-layout mask resolution; required together
+        with mask_session_id
+    save_render_views: whether to save one render-only PNG per sample under
+        output_dir/png_render_only/
 
     Returns
     -------
@@ -568,6 +713,11 @@ def predict_images(
         - 'img_tokens_saved': Number of img_tokens/ids_restore pairs saved (if enabled)
         - 'img_tokens_dir': Path to img_tokens directory (if enabled)
         - 'ids_restore_dir': Path to ids_restore directory (if enabled)
+        - 'render_view_files': List of saved render-only PNG paths (if enabled)
+        - 'render_views_saved': Number of render-only PNGs saved (if enabled)
+        - 'metrics_npz': Path to the saved PSNR/SSIM metrics file (if enabled)
+        - 'average_psnr': Mean PSNR across all samples (if enabled)
+        - 'average_ssim': Mean SSIM across all samples (if enabled)
 
     """
 
@@ -582,6 +732,9 @@ def predict_images(
         data_dir=source_dir,
         imgaug_pipeline=None,
         num_channels=num_channels,
+        segmentation_root=segmentation_root if use_segmentation_mask else None,
+        mask_session_id=mask_session_id if use_segmentation_mask else None,
+        mask_camera_role=mask_camera_role if use_segmentation_mask else None,
     )
 
     # dataloader
@@ -593,7 +746,8 @@ def predict_images(
     )
 
     # configure model predict behavior before handing off to trainer
-    model.return_reconstructions = save_reconstructions
+    model.return_reconstructions = save_reconstructions or compute_metrics or save_render_views
+    model.compute_metrics = compute_metrics or save_render_views
     if save_img_tokens:
         model.config['model']['model_params']['return_img_tokens'] = True
 
@@ -609,6 +763,8 @@ def predict_images(
         save_reconstructions=save_reconstructions,
         save_latents=save_latents,
         save_img_tokens=save_img_tokens,
+        compute_metrics=compute_metrics,
+        save_render_views=save_render_views,
     )
 
     return results

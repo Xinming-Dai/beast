@@ -223,13 +223,13 @@ class VisionTransformer(BaseLightningModel):
 
         Parameters
         ----------
-        batch_dict: dict containing 'image', 'video', 'idx', 'image_path'
+        batch_dict: dict containing 'image', 'video', 'idx', 'image_path', optional 'mask'
         batch_idx: index of the current batch
 
         Returns
         -------
-        dict with 'latents' (CLS tokens), optional 'reconstructions', 'img_tokens',
-        'ids_restore', and 'metadata'
+        dict with 'latents' (CLS tokens), optional 'images'/'reconstructions'/'mask',
+        'img_tokens', 'ids_restore', and 'metadata'
 
         """
         return_img_tokens = self.config['model']['model_params'].get('return_img_tokens', False)
@@ -238,10 +238,12 @@ class VisionTransformer(BaseLightningModel):
         # get model outputs
         results_dict = self.get_model_outputs(
             batch_dict,
-            return_images=False,
+            return_images=self.compute_metrics,
             return_reconstructions=self.return_reconstructions,
             return_img_tokens=return_img_tokens,
         )
+        if 'mask' in batch_dict:
+            results_dict['mask'] = batch_dict['mask']
         if return_img_tokens:
             results_dict['img_tokens'] = results_dict['img_tokens'].clone()
             results_dict['ids_restore'] = results_dict['ids_restore'].clone()
