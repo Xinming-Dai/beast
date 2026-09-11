@@ -28,6 +28,7 @@ class BaseLightningModel(ABC, pl.LightningModule):
         self.seed = config['model']['seed']
         torch.manual_seed(self.seed)
         self.return_reconstructions = True
+        self.compute_metrics = False
 
         self.save_hyperparameters(config)
         # Child classes implement architecture setup
