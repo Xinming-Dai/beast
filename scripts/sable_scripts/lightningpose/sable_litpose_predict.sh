@@ -20,7 +20,7 @@ export PATH="${PATH}:/sw/external/python/anaconda3/bin"
 BEAST_REPO=/u/xdai3/project3d/SBALE_repo/beast
 ROOT=/work/hdd/bfsr/xdai3/IBL-2view
 LIGHTNING_POSE_MODEL_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/lightning_pose/multiview_transformer_3235_0
-SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/run_litpose_predict_sable.py
+SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/ibl/run_litpose_predict_sable.py
 CONFIG=/u/xdai3/project3d/SBALE_repo/beast/configs/multiview/extraction_pipeline_sable.yaml
 
 SESSION_IDS=(

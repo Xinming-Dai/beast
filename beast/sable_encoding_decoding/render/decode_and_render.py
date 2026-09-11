@@ -370,7 +370,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             'predicted frames right after they are computed, so PSNR/SSIM, saved render '
             'visuals, and saved gaussian pointclouds all reflect only the foreground. '
             'Requires segmentation masks for this dataset/split, e.g. from '
-            'beast/preprocess/sable/precompute_sam3_masks_eval.py. Masks are resized '
+            'beast/preprocess/sable/ibl/precompute_sam3_masks_eval.py. Masks are resized '
             "(nearest-neighbor) to the model's image_size, matching the ground-truth "
             'frame stretch.'
         ),
@@ -802,7 +802,7 @@ def main(argv: list[str] | None = None) -> None:
                     "--use-segmentation-mask is set but the dataloader batch has no 'mask' "
                     'key. Pass --segmentation-root (or set training.use_segmentation.cache_root '
                     'in the model config) and check that masks exist for this session/split, '
-                    'e.g. via beast/preprocess/sable/precompute_sam3_masks_eval.py.',
+                    'e.g. via beast/preprocess/sable/ibl/precompute_sam3_masks_eval.py.',
                 )
             masks_all = data['mask']
             if 'target_indices' in data:

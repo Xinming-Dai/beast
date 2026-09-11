@@ -15,7 +15,7 @@ import torch
 from PIL import Image
 
 from beast.logging import log_step
-from beast.preprocess.config_sable import SegmentationConfig
+from beast.preprocess.sable.ibl.config_sable import SegmentationConfig
 from beast.preprocess.segment.sam3 import load_sam3_image_model, segment_image_with_text_prompt
 
 

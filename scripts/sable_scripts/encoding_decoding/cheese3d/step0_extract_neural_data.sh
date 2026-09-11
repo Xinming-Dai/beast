@@ -38,6 +38,6 @@ ARGS=(
 )
 [ -n "$NUM_TRIALS" ] && ARGS+=(--num-trials "$NUM_TRIALS")
 
-python -m beast.preprocess.cheese3d.extract_cheese3d_neural_data "${ARGS[@]}"
+python -m beast.preprocess.sable.cheese3d.extract_cheese3d_neural_data "${ARGS[@]}"
 
 conda deactivate

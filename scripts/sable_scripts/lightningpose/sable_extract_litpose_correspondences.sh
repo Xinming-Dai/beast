@@ -12,7 +12,7 @@ exec 2>&1
 source ~/.bashrc
 
 CONFIG=/u/xdai3/project3d/SBALE_repo/beast/configs/multiview/extraction_pipeline_sable.yaml
-SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/sable_extract_litpose_correspondences.py
+SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/ibl/sable_extract_litpose_correspondences.py
 
 echo "=== executing ==="
 python "${SCRIPT}" \

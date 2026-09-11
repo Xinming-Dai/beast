@@ -30,7 +30,7 @@ FR_THRESH="${FR_THRESH:-0.2}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting IBL neural data for eid=$EID"
 
-python -m beast.preprocess.sable.extract_sable_neural_data \
+python -m beast.preprocess.sable.ibl.extract_sable_neural_data \
     --eid "$EID" \
     --one-cache-path "$ONE_CACHE_PATH" \
     --video-timestamps-dir "$VIDEO_TIMESTAMPS_DIR" \

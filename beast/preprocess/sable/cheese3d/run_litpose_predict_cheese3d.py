@@ -31,7 +31,7 @@ Run this script in an environment where Lightning Pose is available, either by p
 
 Usage::
 
-    python beast/preprocess/sable/run_litpose_predict_cheese3d.py \\
+    python beast/preprocess/sable/cheese3d/run_litpose_predict_cheese3d.py \\
       --root /work/hdd/bfsr/xdai3/cheese3d/videos \\
       --model-dir /path/to/cheese3d_lightning_pose_model \\
       --litpose-repo /u/xdai3/project3d/lightning-pose \\

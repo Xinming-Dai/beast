@@ -23,7 +23,7 @@ BEAST_REPO=/u/xdai3/project3d/SBALE_repo/beast
 LIGHTNING_POSE_REPO=/u/xdai3/project3d/lightning-pose
 ROOT=/work/hdd/bfsr/xdai3/cheese3d/videos
 LIGHTNING_POSE_MODEL_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/lightning_pose/outputs_cheese-3d_test_450_LP3D/mvt_3d_loss_450_0
-SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/run_litpose_predict_cheese3d.py
+SCRIPT=/u/xdai3/project3d/SBALE_repo/beast/beast/preprocess/sable/cheese3d/run_litpose_predict_cheese3d.py
 
 SESSION_IDS=(
     # "20231031_B20_chew_bl_000",

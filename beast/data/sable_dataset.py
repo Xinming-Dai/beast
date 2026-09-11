@@ -645,7 +645,7 @@ class SABLEDataset(Dataset):
             include_splits: on-disk split subdirectories to include (``train``,
                 ``val``, ``test``); ``None`` includes all of them.
             segmentation_root: root directory of precomputed SAM3 masks written by
-                ``beast/preprocess/sable/precompute_sam3_masks_eval.py``, i.e.
+                ``beast/preprocess/sable/ibl/precompute_sam3_masks_eval.py``, i.e.
                 ``{segmentation_root}/segmentation_masks/{session_id}/{left,right}/
                 mask{frame_idx:08d}.png``. ``None`` disables mask loading (records get
                 ``left_mask_path=right_mask_path=None``). Mask files are not required to

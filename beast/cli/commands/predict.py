@@ -123,7 +123,7 @@ def register_parser(subparsers: Any) -> None:
         help=(
             'Zero out the background (via precomputed SAM3 masks) in renders and targets '
             'before metrics/PNG saving. Requires segmentation masks for this dataset/split, '
-            'e.g. from beast/preprocess/sable/precompute_sam3_masks_eval.py.'
+            'e.g. from beast/preprocess/sable/ibl/precompute_sam3_masks_eval.py.'
         ),
     )
     sable_group.add_argument(

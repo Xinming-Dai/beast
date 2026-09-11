@@ -30,7 +30,7 @@ MIN_LIKELIHOOD="${MIN_LIKELIHOOD:-0.0}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting Cheese3D behavior traces for eid=$EID"
 
-python -m beast.preprocess.cheese3d.extract_cheese3d_behavior_traces \
+python -m beast.preprocess.sable.cheese3d.extract_cheese3d_behavior_traces \
     --frame-manifest "$FRAME_MANIFEST" \
     --lp-csv-tl "$LP_CSV_TL" \
     --lp-csv-tr "$LP_CSV_TR" \

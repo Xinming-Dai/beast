@@ -11,7 +11,7 @@ or by activating the ``lp`` conda environment (``--litpose-bin litpose``).
 Usage::
 
     # pass session IDs directly (no config needed)
-    python beast/preprocess/sable/run_litpose_predict_sable.py \\
+    python beast/preprocess/sable/ibl/run_litpose_predict_sable.py \\
       --root /work/hdd/bfsr/xdai3/IBL-2view \\
       --model-dir /path/to/lightning_pose_model \\
       --litpose-repo /u/xdai3/project3d/lightning-pose \\
@@ -19,7 +19,7 @@ Usage::
       [--skip-existing] [--dry-run] [-- --skip_viz]
 
     # use config for cameras / naming conventions
-    python beast/preprocess/sable/run_litpose_predict_sable.py \\
+    python beast/preprocess/sable/ibl/run_litpose_predict_sable.py \\
       --root /work/hdd/bfsr/xdai3/IBL-2view \\
       --model-dir /path/to/lightning_pose_model \\
       --config configs/multiview/extraction_pipeline_sable.yaml \\
@@ -296,8 +296,8 @@ def main() -> None:
     litpose_repo = args.litpose_repo.expanduser().resolve() if args.litpose_repo is not None else None
 
     if args.config is not None:
-        from beast.preprocess.config_sable import load_sable_config
-        from beast.preprocess.extraction_sable import _video_path, discover_sessions
+        from beast.preprocess.sable.ibl.config_sable import load_sable_config
+        from beast.preprocess.sable.ibl.extraction_sable import _video_path, discover_sessions
         cfg = load_sable_config(args.config)
         cameras = list(cfg.cameras)
         video_naming = cfg.video_naming
