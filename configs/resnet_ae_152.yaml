@@ -13,7 +13,7 @@ model:
 training:
   seed: 0
   imgaug: default
-  train_batch_size: 32       # per GPU, reduced from base config due to larger model memory footprint
+  train_batch_size: 24       # per GPU, reduced from base config due to larger model memory footprint
   val_batch_size: 128
   test_batch_size: 32
   num_epochs: 280
@@ -40,3 +40,11 @@ optimizer:
 # data configuration
 data:
   data_dir: /PATH/TO/DATA
+  session_names:
+    - 9b528ad0-4599-4a55-9148-96cc1d93fb24
+    - 51e53aff-1d5d-4182-a684-aba783d50ae5
+    - 0802ced5-33a3-405e-8336-b65ebc5cb07c
+    - 88224abb-5746-431f-9c17-17d7ef806e6a
+    - a4a74102-2af5-45dc-9e41-ef7f5aed88be
+    - ecb5520d-1358-434c-95ec-93687ecd1396
+    - f312aaec-3b6f-44b3-86b4-3a0c119c0438
