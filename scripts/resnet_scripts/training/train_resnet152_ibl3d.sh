@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:59:00
+#SBATCH -t 0-6:59:00
 #SBATCH -J resnet152_ibl
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/training/train_resnet152_ibl3d_%j.log
 #SBATCH --export=ALL
@@ -26,7 +26,7 @@ STAGE=finetune
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 EID="${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}"
 
-CHECKPOINT_BASE="${CHECKPOINT_DIR:-projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/$EID}"
+CHECKPOINT_BASE="${CHECKPOINT_DIR:-projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/ibl_pretrain_restricted_sessions}"
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}"
@@ -69,7 +69,7 @@ cd "$REPO_ROOT"
 
 OVERRIDES=(
     "data.data_dir=$DATASET_PATH"
-    "data.session_names=$EID"
+    # "data.session_names=$EID"
 )
 
 beast train \
