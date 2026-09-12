@@ -3,7 +3,7 @@
 #SBATCH --job-name="resnet_pca_compress"
 #SBATCH --partition=cpu
 #SBATCH -c 1
-#SBATCH --mem 120G
+#SBATCH --mem 5G
 #SBATCH -t 0-00:59:00
 #SBATCH --export=ALL
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/encoding_decoding/decoding/step1_run_pca_and_save_%j.log

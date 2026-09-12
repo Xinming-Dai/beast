@@ -3,7 +3,7 @@
 #SBATCH --job-name="resnet_pca_decompress"
 #SBATCH --partition=cpu
 #SBATCH -c 1
-#SBATCH --mem 10G
+#SBATCH --mem 5G
 #SBATCH -t 0-00:20:00
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/encoding_decoding/decoding/step3_unproject_%j.log
 #SBATCH --export=ALL

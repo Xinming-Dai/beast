@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
+#SBATCH --mem=7G
 #SBATCH -t 0-00:30:00
 #SBATCH -J resnet_img_token_decoding
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/resnet_scripts/encoding_decoding/decoding/step2_run_decoding_%j.log
