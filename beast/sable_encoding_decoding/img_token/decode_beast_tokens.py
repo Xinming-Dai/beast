@@ -64,6 +64,7 @@ from beast.sable_encoding_decoding.img_token.trials_assembly import (
 from beast.sable_encoding_decoding.render.decode_utils import _print_combined_metrics_summary
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
+    reassemble_flat_row_metrics,
     resolve_metrics_npz_path,
     save_psnr_ssim_metrics_npz,
 )
@@ -723,15 +724,21 @@ def main(argv: list[str] | None = None) -> None:
     log_step(f'Decoded {num_decoded} frames to: {args.out_dir}', level='info')
 
     if psnr_blocks:
+        psnr, ssim, neural_trial_idx_out, neural_bin_idx_out, trial_split_out = (
+            reassemble_flat_row_metrics(
+                psnr_blocks, ssim_blocks, trial_blocks, bin_blocks, split_blocks,
+                k_trials=k, t_bins=t, views=v,
+            )
+        )
         metrics_path = resolve_metrics_npz_path(None, args.out_dir)
         saved_metrics = save_psnr_ssim_metrics_npz(
             metrics_path,
-            psnr_blocks=psnr_blocks,
-            ssim_blocks=ssim_blocks,
-            neural_trial_blocks=trial_blocks,
-            neural_bin_blocks=bin_blocks,
-            trial_split_blocks=split_blocks,
-            source_file_rows=[str(metrics_source)] * sum(b.shape[0] for b in trial_blocks),
+            psnr_blocks=[psnr],
+            ssim_blocks=[ssim],
+            neural_trial_blocks=[neural_trial_idx_out],
+            neural_bin_blocks=[neural_bin_idx_out],
+            trial_split_blocks=[trial_split_out],
+            source_file_rows=[str(metrics_source)] * k,
         )
         log_step(f'Saved PSNR/SSIM metrics to: {metrics_path}', level='info')
         _print_combined_metrics_summary(metrics_path, saved_metrics)

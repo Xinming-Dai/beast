@@ -295,6 +295,44 @@ def collect_psnr_ssim_metrics_block(
     )
 
 
+def reassemble_flat_row_metrics(
+    psnr_blocks: list[np.ndarray],
+    ssim_blocks: list[np.ndarray],
+    neural_trial_blocks: list[np.ndarray],
+    neural_bin_blocks: list[np.ndarray],
+    trial_split_blocks: list[np.ndarray],
+    *,
+    k_trials: int,
+    t_bins: int,
+    views: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Reshape per-row (single-view) metric chunks collected over a flat K*T*V decode loop back
+    into the canonical `[K, T, V]` block.
+
+    Callers that decode each `(trial, bin, view)` row independently (one row per single-camera
+    decode) accumulate `psnr`/`ssim` chunks shaped `[chunk, 1, 1]` — via
+    `collect_psnr_ssim_metrics_block(..., k_trials=chunk, t_bins=1)` — and matching per-row
+    `neural_trial_idx`/`neural_bin_idx`/`trial_split` chunks, over a loop that flattens `(K, T,
+    V)` into one batch axis in row-major order. This concatenates those chunks back into that
+    flat `K*T*V` axis and reshapes to `[K, T, V]` (metrics) / `[K]` / `[K, T]` / `[K]`
+    (metadata), recovering the structure `.reshape(k*t*v, ...)` collapsed.
+
+    Returns:
+        `(psnr, ssim, neural_trial_idx, neural_bin_idx, trial_split)` shaped `[K, T, V]`, `[K,
+        T, V]`, `[K]`, `[K, T]`, `[K]`.
+    """
+    psnr = np.concatenate(psnr_blocks, axis=0).reshape(k_trials, t_bins, views)
+    ssim = np.concatenate(ssim_blocks, axis=0).reshape(k_trials, t_bins, views)
+    trial_idx = np.concatenate(neural_trial_blocks, axis=0).reshape(
+        k_trials, t_bins, views,
+    )[:, 0, 0]
+    bin_idx = np.concatenate(neural_bin_blocks, axis=0).reshape(k_trials, t_bins, views)[:, :, 0]
+    trial_split = np.concatenate(trial_split_blocks, axis=0).reshape(
+        k_trials, t_bins, views,
+    )[:, 0, 0]
+    return psnr, ssim, trial_idx, bin_idx, trial_split
+
+
 def save_psnr_ssim_metrics_npz(
     metrics_npz: Path,
     *,
