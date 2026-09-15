@@ -61,7 +61,12 @@ from beast.sable_encoding_decoding.img_token.target_frames import (
 from beast.sable_encoding_decoding.img_token.trials_assembly import (
     assemble_z_trials_time_from_inference_batches,
 )
-from beast.sable_encoding_decoding.render.decode_utils import _print_combined_metrics_summary
+from beast.sable_encoding_decoding.render.decode_utils import (
+    _print_combined_metrics_summary,
+    filter_img_tokens_npz_paths_by_neural_trial,
+    parse_neural_trial_index_arg,
+    reconstruction_output_location,
+)
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
     reassemble_flat_row_metrics,
@@ -219,12 +224,16 @@ def load_ids_restore_lookup_from_sidecar(
 
 def load_estimated_tokens_dir(
     estimated_dir: Path,
+    neural_trial_index: frozenset[int] | None = None,
 ) -> tuple[np.ndarray, list[str], np.ndarray, list[Path]]:
     """Load step3's per-trial `img_tokens_estimated_neuraltrial*.npz` files from a directory.
 
     Args:
         estimated_dir: step3 `unproject.py` output directory (a single split dir, or a root
             containing several split subdirectories — searched recursively).
+        neural_trial_index: if given, keep only files whose `neural_trial_idx` is in this set
+            (see `beast.sable_encoding_decoding.render.decode_utils.
+            filter_img_tokens_npz_paths_by_neural_trial`).
 
     Returns:
         Tuple `(img_tokens, trial_split_labels, neural_trial_idx, source_paths)`:
@@ -238,6 +247,10 @@ def load_estimated_tokens_dir(
     paths = sorted_img_tokens_npz_paths(Path(estimated_dir))
     if not paths:
         raise FileNotFoundError(f'No img_tokens_estimated*.npz found under {estimated_dir}')
+    if neural_trial_index is not None:
+        paths = filter_img_tokens_npz_paths_by_neural_trial(
+            paths, allowed_indices=neural_trial_index,
+        )
 
     z_rows, split_labels, trial_ids = [], [], []
     for path in paths:
@@ -477,6 +490,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     estimated.add_argument(
         '--eid', type=str, default=None, help='estimated mode: session id (mask subdirectory)',
     )
+    estimated.add_argument(
+        '--neural-trial-index',
+        type=parse_neural_trial_index_arg,
+        default=None,
+        metavar='IDS',
+        help='estimated mode: comma-separated neural_trial_idx values to keep',
+    )
     ap.add_argument(
         '--splits',
         type=str,
@@ -539,6 +559,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if have_target_frames and not have_estimated:
         ap.error('--target-frame-mapping-left/-right are estimated-mode only')
+    if args.neural_trial_index is not None and not have_estimated:
+        ap.error('--neural-trial-index is estimated-mode only')
     if args.use_segmentation_mask and (
         args.segmentation_root is None or args.eid is None or not have_target_frames
     ):
@@ -563,7 +585,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.estimated_dir is not None:
         log_step(f'Loading estimated img_tokens from: {args.estimated_dir}', level='info')
         img_tokens, trial_split_labels, neural_trial_idx, _paths = load_estimated_tokens_dir(
-            args.estimated_dir,
+            args.estimated_dir, neural_trial_index=args.neural_trial_index,
         )
         log_step(
             f'Loading ids_restore lookup from sidecar: {args.ids_restore_sidecar}', level='info',
@@ -690,9 +712,8 @@ def main(argv: list[str] | None = None) -> None:
             if not args.metrics_only:
                 for i in range(render.shape[0]):
                     row = start + i
-                    handler.save_reconstruction(
-                        render[i], 'decoded', row, Path(f'row{row:06d}.png'),
-                    )
+                    batch_dir, filename = reconstruction_output_location(row, t, v)
+                    handler.save_reconstruction(render[i], batch_dir, row, filename)
             num_decoded += render.shape[0]
 
             if target is not None:

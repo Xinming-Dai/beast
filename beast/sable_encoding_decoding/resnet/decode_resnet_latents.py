@@ -25,7 +25,11 @@ from beast.sable_encoding_decoding.img_token.target_frames import (
     load_target_images_for_trials,
     load_target_masks_for_trials,
 )
-from beast.sable_encoding_decoding.render.decode_utils import _print_combined_metrics_summary
+from beast.sable_encoding_decoding.render.decode_utils import (
+    _print_combined_metrics_summary,
+    parse_neural_trial_index_arg,
+    reconstruction_output_location,
+)
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
     reassemble_flat_row_metrics,
@@ -71,6 +75,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument('--out-dir', type=Path, required=True, help='directory for decoded frames')
     ap.add_argument('--batch-size', type=int, default=64, help='frames per decode batch')
+    ap.add_argument(
+        '--neural-trial-index',
+        type=parse_neural_trial_index_arg,
+        default=None,
+        metavar='IDS',
+        help='comma-separated neural_trial_idx values to keep',
+    )
     ap.add_argument('--device', type=str, default='cuda:0', help='torch device for decoding')
     ap.add_argument(
         '--target-frame-mapping-left',
@@ -143,7 +154,7 @@ def main(argv: list[str] | None = None) -> None:
 
     log_step(f'Loading estimated resnet latents from: {args.estimated_dir}', level='info')
     z, trial_split_labels, neural_trial_idx, _paths = load_estimated_tokens_dir(
-        args.estimated_dir,
+        args.estimated_dir, neural_trial_index=args.neural_trial_index,
     )
     k, t, v, d = z.shape
 
@@ -226,9 +237,8 @@ def main(argv: list[str] | None = None) -> None:
             if not args.metrics_only:
                 for i in range(render.shape[0]):
                     row = start + i
-                    handler.save_reconstruction(
-                        render[i], 'decoded', row, Path(f'row{row:06d}.png'),
-                    )
+                    batch_dir, filename = reconstruction_output_location(row, t, v)
+                    handler.save_reconstruction(render[i], batch_dir, row, filename)
             num_decoded += render.shape[0]
 
             if target is not None:
