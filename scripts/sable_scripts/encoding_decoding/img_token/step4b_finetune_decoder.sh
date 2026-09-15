@@ -63,8 +63,12 @@ cd "$REPO_ROOT"
 # on the val split's neural-decoded (CNN-predicted) img tokens against real images, then scores
 # PSNR/SSIM on the test split with the finetuned weights. Mirrors the original E-RayZer
 # step5_erayzer_decoder_finetune.sh.
-MODEL_ROOT=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395                   # dir with config.yaml + *best.ckpt
-EID=f312aaec-3b6f-44b3-86b4-3a0c119c0438
+
+EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
+# EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
+# EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+JOB_ID="${JOB_ID:-21047248}"
+MODEL_ROOT="/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID"                  # dir with config.yaml + *best.ckpt
 LR="1e-4"
 
 SUBDIR=latents/img_tokens_compressed/$EID
@@ -85,7 +89,7 @@ FINETUNE_ARGS=(
     --z-source "$ESTIMATED_ROOT/val"
     --camera-npz "$CAMERA_NPZ"
     --out-dir "$OUT_DIR"
-    --model-dir "$MODEL_ROOT"
+    --model-dir "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID"
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
     --correspondence-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/litpose_correspondences/processed_correspondences"
@@ -120,7 +124,7 @@ EVAL_ARGS=(
 )
 [ -n "$VDA_CACHE_ROOT" ] && EVAL_ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && EVAL_ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
-[ "$USE_MASK" = true ] && ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT")
+[ "$USE_MASK" = true ] && EVAL_ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT")
 
 python -m beast.sable_encoding_decoding.render.decode_and_render "${EVAL_ARGS[@]}"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done finetuning decoder and scoring test for eid=$EID"
