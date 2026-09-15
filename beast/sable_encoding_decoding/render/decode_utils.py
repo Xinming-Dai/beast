@@ -336,6 +336,23 @@ def delete_metrics_shards_for_sources(out_dir: Path, npz_paths: list[Path]) -> i
     return removed
 
 
+def reconstruction_output_location(row: int, t_bins: int, v_views: int) -> tuple[str, Path]:
+    """Map a flat (K*T*V) decode row index back to a batch folder and sample filename.
+
+    Args:
+        row: flat index into the (K, T, V) decode batch, as produced by flattening
+            `(k_trials, t_bins, v_views)` into a single leading dim before decoding.
+        t_bins: number of time bins per trial (T).
+        v_views: number of camera views per bin (V).
+
+    Returns:
+        Tuple of `(batch_dir_name, filename)`, e.g. `('batch_0000', Path('sample00_view00.png'))`.
+    """
+    trial_idx, rem = divmod(row, t_bins * v_views)
+    bin_idx, view_idx = divmod(rem, v_views)
+    return f'batch_{trial_idx:04d}', Path(f'sample{bin_idx:02d}_view{view_idx:02d}.png')
+
+
 def render_done_marker_path(out_dir: Path, batch_idx: int) -> Path:
     """Return the render-completion marker path for one batch."""
     return Path(out_dir).resolve() / f'batch_{batch_idx:04d}' / '.decode_saved_img_tokens_complete'
