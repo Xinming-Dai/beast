@@ -17,6 +17,7 @@ def save_training_visuals(
     max_views: int = 2,
     session_ids: list[str] | None = None,
     sample_indices: list[int] | None = None,
+    filenames: list[str] | None = None,
 ) -> list[Path]:
     """Save a side-by-side render/target PNG for each sample in the batch.
 
@@ -32,9 +33,15 @@ def save_training_visuals(
             into a per-session subfolder instead of a flat ``output_dir``.
         sample_indices: batch item indices to save; when given, exactly these
             samples are saved instead of the first ``max_samples``.
+        filenames: one filename per batch item, indexed by batch position; when given,
+            sample ``i`` is written as ``filenames[i]`` (sanitized, ``.png`` appended if
+            missing) instead of the default ``step_{step}_{scene_name}_sample{i}.png``.
 
     Returns:
         list of saved file paths.
+
+    Raises:
+        ValueError: if ``filenames`` is given but has no entry for a sample being saved.
     """
     renders = getattr(result, 'render', None)
     targets = getattr(result, 'target_image', None)
@@ -56,6 +63,14 @@ def save_training_visuals(
         sample_count = min(int(max_samples), int(renders.shape[0]), int(targets.shape[0]))
         indices = list(range(sample_count))
 
+    if filenames is not None:
+        missing = [i for i in indices if i >= len(filenames)]
+        if missing:
+            raise ValueError(
+                f'filenames has {len(filenames)} entries but sample indices {missing[:5]} '
+                'need one each',
+            )
+
     saved_paths = []
     for sample_idx in indices:
         scene_name = (
@@ -73,7 +88,13 @@ def save_training_visuals(
         )
         sample_dir = output_dir / session_ids[sample_idx] if session_ids is not None else output_dir
         sample_dir.mkdir(parents=True, exist_ok=True)
-        filename = f'step_{step:06d}_{_sanitize_filename(scene_name)}_sample{sample_idx:02d}.png'
+        if filenames is not None:
+            stem, suffix = Path(filenames[sample_idx]).stem, Path(filenames[sample_idx]).suffix
+            filename = f'{_sanitize_filename(stem)}{suffix or ".png"}'
+        else:
+            filename = (
+                f'step_{step:06d}_{_sanitize_filename(scene_name)}_sample{sample_idx:02d}.png'
+            )
         path = sample_dir / filename
         image.save(path)
         saved_paths.append(path)
