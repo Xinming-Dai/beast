@@ -35,8 +35,15 @@ metadata, produced by `save_inference_psnr_ssim_metrics_npz`):
 - `sd_ssim`: scalar standard deviation of `ssim` (`nanstd`)
 - `se_psnr`: scalar standard error of `psnr` (`nanstd / sqrt(n)`)
 - `se_ssim`: scalar standard error of `ssim` (`nanstd / sqrt(n)`)
+
+Ordinary inference emits the `K/T/V` schema instead when given a neural-data root
+(`beast predict --neural-input-dir`): `NeuralTrialMetricsAccumulator` sizes `K` and `T` from
+each session's aligned neural `.npz`, so the metrics line up index-for-index with the neural
+trials, and writes one file per session.
 """
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -315,6 +322,293 @@ def save_psnr_ssim_metrics_npz(
     metrics_npz.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(metrics_npz, **arrays)
     return arrays
+
+
+def neural_aligned_npz_path(neural_input_dir: Path, session_id: str) -> Path:
+    """Return the aligned neural `.npz` of one session under a neural-data root.
+
+    The root is laid out as `{neural_input_dir}/{session_id}/{session_id}_aligned.npz`, the
+    same layout the neural encoding/decoding scripts read via `--neural_input_dir`.
+
+    Args:
+        neural_input_dir: neural-data root directory.
+        session_id: session/EID name.
+
+    Returns:
+        Path of the session's aligned neural `.npz` (not checked for existence).
+    """
+    return Path(neural_input_dir) / session_id / f'{session_id}_aligned.npz'
+
+
+def load_neural_split_layout(
+    neural_aligned_npz: Path,
+    split: str,
+) -> tuple[int, int, np.ndarray | None]:
+    """Return `(K, T, intervals)` for one split of an aligned neural `.npz`.
+
+    Args:
+        neural_aligned_npz: aligned neural file carrying `{split}_spikes` shaped `[K, T, N]`
+            and optionally `{split}_intervals` shaped `[K, 2]`.
+        split: split name (`'train'`, `'val'`, or `'test'`).
+
+    Returns:
+        Trials `K`, bins per trial `T`, and the `[K, 2]` trial intervals in seconds, or
+        `None` for the intervals when the file has none.
+
+    Raises:
+        FileNotFoundError: if `neural_aligned_npz` does not exist.
+        KeyError: if `{split}_spikes` is missing.
+        ValueError: if `{split}_spikes` is not rank 3 or the intervals do not have `K` rows.
+    """
+    neural_aligned_npz = Path(neural_aligned_npz)
+    if not neural_aligned_npz.is_file():
+        raise FileNotFoundError(f'aligned neural .npz not found: {neural_aligned_npz}')
+    spikes_key = f'{split}_spikes'
+    intervals_key = f'{split}_intervals'
+    with np.load(neural_aligned_npz, allow_pickle=True) as d:
+        if spikes_key not in d.files:
+            raise KeyError(
+                f'{neural_aligned_npz}: missing {spikes_key!r}; got {sorted(d.files)}',
+            )
+        spikes_shape = tuple(d[spikes_key].shape)
+        intervals = (
+            np.asarray(d[intervals_key], dtype=np.float64) if intervals_key in d.files else None
+        )
+    if len(spikes_shape) != 3:
+        raise ValueError(
+            f'{neural_aligned_npz}: {spikes_key} must be [K, T, N]; got shape {spikes_shape}',
+        )
+    k_trials, t_bins = int(spikes_shape[0]), int(spikes_shape[1])
+    if intervals is not None and intervals.shape != (k_trials, 2):
+        raise ValueError(
+            f'{neural_aligned_npz}: {intervals_key} must be [K={k_trials}, 2]; got shape '
+            f'{intervals.shape}',
+        )
+    return k_trials, t_bins, intervals
+
+
+def _view_names_for(num_views: int) -> tuple[str, ...]:
+    """Return `('left', 'right')` for two views, else generic `view{idx:02d}` labels."""
+    if num_views == 2:
+        return ('left', 'right')
+    return tuple(f'view{idx:02d}' for idx in range(num_views))
+
+
+@dataclass
+class _NeuralMetricsBlock:
+    """Dense `[K, T, V]` PSNR/SSIM for one `(session, split)`, NaN where never scored."""
+
+    source_file: str
+    intervals: np.ndarray | None
+    psnr: np.ndarray
+    ssim: np.ndarray
+
+    @property
+    def k_trials(self) -> int:
+        """Number of neural trials `K`."""
+        return int(self.psnr.shape[0])
+
+    @property
+    def t_bins(self) -> int:
+        """Number of neural bins per trial `T`."""
+        return int(self.psnr.shape[1])
+
+    @property
+    def num_views(self) -> int:
+        """Number of scored views `V`."""
+        return int(self.psnr.shape[2])
+
+
+class NeuralTrialMetricsAccumulator:
+    """Accumulate per-view PSNR/SSIM into dense `[K, T, V]` blocks aligned to neural trials.
+
+    `K` and `T` come from each session's aligned neural `.npz` (see
+    `load_neural_split_layout`), so every block lines up index-for-index with that split's
+    `{split}_spikes`; `(trial, bin)` cells that are never scored stay NaN. Rows are placed by
+    their `(session_id, split, neural_trial_idx, neural_bin_idx)` identity, never by
+    dataloader position.
+    """
+
+    def __init__(self, neural_input_dir: Path, *, interval_atol: float = 1e-3) -> None:
+        """Initialize.
+
+        Args:
+            neural_input_dir: neural-data root, see `neural_aligned_npz_path`.
+            interval_atol: absolute tolerance (seconds) when checking a row's
+                `neural_interval_sec` against the neural file's trial intervals.
+        """
+        self._neural_input_dir = Path(neural_input_dir)
+        self._interval_atol = float(interval_atol)
+        self._blocks: dict[tuple[str, str], _NeuralMetricsBlock] = {}
+
+    def _block(self, session_id: str, split: str, num_views: int) -> _NeuralMetricsBlock:
+        """Return the block for `(session_id, split)`, allocating it from the neural file."""
+        key = (session_id, split)
+        block = self._blocks.get(key)
+        if block is None:
+            npz_path = neural_aligned_npz_path(self._neural_input_dir, session_id)
+            k_trials, t_bins, intervals = load_neural_split_layout(npz_path, split)
+            block = _NeuralMetricsBlock(
+                source_file=str(npz_path),
+                intervals=intervals,
+                psnr=np.full((k_trials, t_bins, num_views), np.nan, dtype=np.float32),
+                ssim=np.full((k_trials, t_bins, num_views), np.nan, dtype=np.float32),
+            )
+            self._blocks[key] = block
+        elif block.num_views != num_views:
+            raise ValueError(
+                f'session {session_id!r} split {split!r}: got {num_views} views but earlier '
+                f'rows had {block.num_views}',
+            )
+        return block
+
+    def add(
+        self,
+        *,
+        session_id: str,
+        split: str,
+        neural_trial_idx: int,
+        neural_bin_idx: int,
+        psnr: np.ndarray,
+        ssim: np.ndarray,
+        neural_interval_sec: np.ndarray | None = None,
+    ) -> None:
+        """Record one scored frame's per-view PSNR/SSIM at its neural `(trial, bin)` cell.
+
+        Args:
+            session_id: session/EID the frame belongs to.
+            split: split label of the frame (`'train'`, `'val'`, or `'test'`).
+            neural_trial_idx: trial index local to `split`, i.e. the row of `{split}_spikes`.
+            neural_bin_idx: bin index within the trial.
+            psnr: per-view PSNR, shape `[V]`.
+            ssim: per-view SSIM, shape `[V]`.
+            neural_interval_sec: optional `[2]` trial interval carried by the frame, checked
+                against the neural file's `{split}_intervals` when both are available.
+
+        Raises:
+            ValueError: if the row carries no neural metadata (negative ids), the ids fall
+                outside `[K, T]`, the cell was already scored, the view count changed, or the
+                interval disagrees with the neural file.
+        """
+        psnr = np.asarray(psnr, dtype=np.float32).reshape(-1)
+        ssim = np.asarray(ssim, dtype=np.float32).reshape(-1)
+        if psnr.shape != ssim.shape:
+            raise ValueError(f'psnr has {psnr.shape[0]} views but ssim has {ssim.shape[0]}')
+        split = str(split).lower()
+        trial = int(neural_trial_idx)
+        bin_i = int(neural_bin_idx)
+        if trial < 0 or bin_i < 0:
+            raise ValueError(
+                f'session {session_id!r}: frame carries no neural trial/bin metadata '
+                f'(neural_trial_idx={trial}, neural_bin_idx={bin_i}); the dataset must use the '
+                'eval layout whose frame_index_mapping.json carries the neural fields',
+            )
+        block = self._block(session_id, split, psnr.shape[0])
+        if trial >= block.k_trials or bin_i >= block.t_bins:
+            raise ValueError(
+                f'session {session_id!r} split {split!r}: (neural_trial_idx={trial}, '
+                f'neural_bin_idx={bin_i}) is outside the neural layout K={block.k_trials}, '
+                f'T={block.t_bins} from {block.source_file}',
+            )
+        if not np.all(np.isnan(block.psnr[trial, bin_i])):
+            raise ValueError(
+                f'session {session_id!r} split {split!r}: (neural_trial_idx={trial}, '
+                f'neural_bin_idx={bin_i}) was scored twice',
+            )
+        if neural_interval_sec is not None and block.intervals is not None:
+            got = np.asarray(neural_interval_sec, dtype=np.float64).reshape(-1)
+            want = block.intervals[trial]
+            if got.shape == want.shape and not np.allclose(
+                got, want, atol=self._interval_atol, rtol=0.0,
+            ):
+                raise ValueError(
+                    f'session {session_id!r} split {split!r} neural_trial_idx={trial}: frame '
+                    f'interval {got.tolist()} != neural interval {want.tolist()} from '
+                    f'{block.source_file}; the frames and neural data are misaligned',
+                )
+        block.psnr[trial, bin_i] = psnr
+        block.ssim[trial, bin_i] = ssim
+
+    def num_scored(self) -> int:
+        """Return how many `(session, split, trial, bin)` cells have been scored."""
+        return int(sum(
+            np.sum(~np.isnan(block.psnr[:, :, 0])) for block in self._blocks.values()
+        ))
+
+    def num_unscored(self) -> int:
+        """Return how many `(session, split, trial, bin)` cells are still NaN."""
+        return int(sum(
+            np.sum(np.isnan(block.psnr[:, :, 0])) for block in self._blocks.values()
+        ))
+
+    def overall_average(self) -> tuple[float, float]:
+        """Return `(mean PSNR, mean SSIM)` over every scored cell and view, NaN if none."""
+        if self.num_scored() == 0:
+            return float('nan'), float('nan')
+        psnr = np.concatenate([block.psnr.reshape(-1) for block in self._blocks.values()])
+        ssim = np.concatenate([block.ssim.reshape(-1) for block in self._blocks.values()])
+        return float(np.nanmean(psnr)), float(np.nanmean(ssim))
+
+    def save(
+        self,
+        output_dir: Path,
+        *,
+        splits_order: Sequence[str] | None = None,
+    ) -> dict[str, Path]:
+        """Write one `{output_dir}/{session_id}/psnr_ssim_metrics.npz` per session.
+
+        Splits of the same session are stacked along `K` in `splits_order` (splits not listed
+        follow in first-seen order); `trial_split` records which split each `K` row came from,
+        and `source_files` names the aligned neural `.npz` behind each row.
+
+        Args:
+            output_dir: inference output root.
+            splits_order: preferred split order along `K`, e.g. the `--splits` argument.
+
+        Returns:
+            `{session_id: metrics path}` for every session with at least one block.
+
+        Raises:
+            ValueError: if a session's splits disagree on `T` or on the number of views.
+        """
+        output_dir = Path(output_dir)
+        preferred = [str(s).lower() for s in (splits_order or [])]
+        by_session: dict[str, dict[str, _NeuralMetricsBlock]] = {}
+        for (session_id, split), block in self._blocks.items():
+            by_session.setdefault(session_id, {})[split] = block
+
+        saved: dict[str, Path] = {}
+        for session_id in sorted(by_session):
+            blocks = by_session[session_id]
+            ordered = [s for s in preferred if s in blocks]
+            ordered += [s for s in blocks if s not in ordered]
+            t_bins = {blocks[s].t_bins for s in ordered}
+            num_views = {blocks[s].num_views for s in ordered}
+            if len(t_bins) != 1 or len(num_views) != 1:
+                raise ValueError(
+                    f'session {session_id!r}: splits {ordered} disagree on T={sorted(t_bins)} '
+                    f'or V={sorted(num_views)}; cannot stack them along K',
+                )
+            path = output_dir / session_id / 'psnr_ssim_metrics.npz'
+            save_psnr_ssim_metrics_npz(
+                path,
+                psnr_blocks=[blocks[s].psnr for s in ordered],
+                ssim_blocks=[blocks[s].ssim for s in ordered],
+                neural_trial_blocks=[
+                    np.arange(blocks[s].k_trials, dtype=np.int64) for s in ordered
+                ],
+                neural_bin_blocks=[
+                    np.tile(np.arange(blocks[s].t_bins, dtype=np.int64), (blocks[s].k_trials, 1))
+                    for s in ordered
+                ],
+                trial_split_blocks=[np.full(blocks[s].k_trials, s, dtype=str) for s in ordered],
+                source_file_rows=[
+                    blocks[s].source_file for s in ordered for _ in range(blocks[s].k_trials)
+                ],
+                view_names=_view_names_for(next(iter(num_views))),
+            )
+            saved[session_id] = path
+        return saved
 
 
 def save_inference_psnr_ssim_metrics_npz(

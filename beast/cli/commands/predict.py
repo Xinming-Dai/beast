@@ -118,6 +118,19 @@ def register_parser(subparsers: Any) -> None:
         ),
     )
     sable_group.add_argument(
+        '--neural-input-dir',
+        type=Path,
+        default=None,
+        help=(
+            'Root of per-session aligned neural data, laid out as '
+            '{neural_input_dir}/{session_id}/{session_id}_aligned.npz. With '
+            '--compute-metrics, PSNR/SSIM are organized per session as '
+            '[K neural trials, T neural bins, V views] aligned to that file and written to '
+            'output_dir/{session_id}/psnr_ssim_metrics.npz instead of the flat '
+            'output_dir/psnr_ssim_metrics.npz. Requires the eval dataset layout.'
+        ),
+    )
+    sable_group.add_argument(
         '--use-segmentation-mask',
         action='store_true',
         help=(
@@ -254,6 +267,10 @@ def _handle_sable(args, model):
         _logger.error('--segmentation-root requires --use-segmentation-mask')
         return
 
+    if args.neural_input_dir is not None and not args.compute_metrics:
+        _logger.error('--neural-input-dir requires --compute-metrics')
+        return
+
     output_dir = args.output or args.model / 'inference'
 
     if args.extract_latents:
@@ -280,6 +297,7 @@ def _handle_sable(args, model):
         max_batches=args.max_batches,
         session_names=args.session_names,
         max_files_per_session=args.max_files_per_session,
+        neural_input_dir=args.neural_input_dir,
     )
 
 

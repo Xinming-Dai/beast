@@ -176,6 +176,7 @@ class Model:
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
         max_files_per_session: int | None = None,
+        neural_input_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         """Run Sable inference over a scene dataset and save PLY point clouds.
 
@@ -216,11 +217,17 @@ class Model:
             max_files_per_session: cap on the number of PLY/GLB files saved per
                 session; when set, outputs are grouped into per-session subfolders.
                 ``None`` (default) saves every item into the flat, unlimited layout.
+            neural_input_dir: neural-data root laid out as
+                ``{neural_input_dir}/{session_id}/{session_id}_aligned.npz``. With
+                ``compute_metrics``, organizes PSNR/SSIM per session as
+                ``[K neural trials, T neural bins, V views]`` aligned to that file and
+                writes ``output_dir/{session_id}/psnr_ssim_metrics.npz`` instead of the
+                flat ``output_dir/psnr_ssim_metrics.npz``.
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files',
             'camera_pointcloud_scene_glb_files', 'vis_files', 'render_view_files',
-            'metrics_npz', 'average_psnr', 'average_ssim'.
+            'metrics_npz', 'neural_metrics_npz', 'average_psnr', 'average_ssim'.
         """
         from beast.inference import infer_sable as _infer_sable
 
@@ -266,6 +273,7 @@ class Model:
             max_batches=max_batches,
             include_splits=splits,
             max_files_per_session=max_files_per_session,
+            neural_input_dir=neural_input_dir,
         )
 
     def extract_sable_latents(
