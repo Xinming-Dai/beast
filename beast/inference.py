@@ -70,8 +70,16 @@ class ImagePredictionHandler:
         self._metric_ssim: list[np.ndarray] = []
         self._render_view_files: list[Path] = []
 
-    def tensor_to_image(self, tensor: torch.Tensor) -> Image.Image:
-        """Convert tensor (C, H, W) to PIL Image."""
+    def tensor_to_image(self, tensor: torch.Tensor, *, normalized: bool = True) -> Image.Image:
+        """Convert tensor (C, H, W) to PIL Image.
+
+        Args:
+            tensor: image tensor, `(C, H, W)` or `(B, C, H, W)`.
+            normalized: whether `tensor` is still in ImageNet mean/std-normalized space and needs
+                `tensor * std + mean` applied to get back to `[0, 1]`. Pass `False` when the
+                tensor has already been un-normalized (e.g. via `unnormalize_batch`), so it is
+                only clamped and scaled to `[0, 255]`.
+        """
         # Handle different tensor formats
         if tensor.dim() == 4:  # (B, C, H, W) - take first batch item
             tensor = tensor[0]
@@ -81,8 +89,9 @@ class ImagePredictionHandler:
             tensor = tensor.permute(1, 2, 0)
 
         # ensure values are in [0, 255] range
-        # This gets you back to [0, 1]
-        tensor = tensor * self.std.to(tensor.device) + self.mean.to(tensor.device)
+        if normalized:
+            # this gets you back to [0, 1]
+            tensor = tensor * self.std.to(tensor.device) + self.mean.to(tensor.device)
         # after getting to [0, 1], scale to [0, 255]
         tensor = torch.clamp(tensor, 0, 1)  # Ensure [0, 1] range
         tensor = tensor * 255.0
@@ -108,8 +117,19 @@ class ImagePredictionHandler:
         video: str,
         idx: int,
         original_path: Path,
+        *,
+        normalized: bool = True,
     ) -> Path:
-        """Save a single reconstruction maintaining directory structure."""
+        """Save a single reconstruction maintaining directory structure.
+
+        Args:
+            reconstruction: image tensor, `(C, H, W)` or `(B, C, H, W)`.
+            video: subdirectory name under `output_dir` to save into.
+            idx: sample index within the batch.
+            original_path: source path whose filename is reused for the saved image.
+            normalized: forwarded to `tensor_to_image` — `False` when `reconstruction` is already
+                un-normalized to `[0, 1]`.
+        """
         # Create output subdirectory matching source structure
         output_subdir = self.output_dir / video
         output_subdir.mkdir(parents=True, exist_ok=True)
@@ -119,7 +139,7 @@ class ImagePredictionHandler:
         output_path = output_subdir / original_filename
 
         # Convert tensor to image and save
-        image = self.tensor_to_image(reconstruction)
+        image = self.tensor_to_image(reconstruction, normalized=normalized)
         image.save(output_path)
 
         return output_path
