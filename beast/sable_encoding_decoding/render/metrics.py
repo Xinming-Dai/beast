@@ -83,10 +83,10 @@ def resize_image_batch(
 ) -> torch.Tensor:
     """Resize a `[B, V, C, H, W]` batch to `image_size x image_size`.
 
-    Used to score renders produced at one resolution (e.g. SABLE's 320x320) at another
-    (e.g. the 224x224 used by the beast/resnet baselines) so PSNR/SSIM are comparable across
-    models. Bilinear resizing is antialiased, matching the PIL-style downsampling the baselines
-    apply to their ground-truth frames; use `mode='nearest'` for binary masks.
+    Used to score renders produced at one resolution (e.g. beast/resnet's 224x224) at another
+    (e.g. SABLE's 320x320) so PSNR/SSIM are comparable across models. Bilinear resizing is
+    antialiased, matching the PIL-style resampling applied to ground-truth frames; use
+    `mode='nearest'` for binary masks.
 
     Args:
         x: tensor shaped `[B, V, C, H, W]`.
