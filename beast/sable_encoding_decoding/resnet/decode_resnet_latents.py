@@ -7,6 +7,10 @@ through the PCA-compress / neural-decode / unproject steps unchanged (see
 `beast.sable_encoding_decoding.img_token.unproject`). The camera axis (left/right) is already a
 plain leading dim of size 2 in resnet's saved latents (`L=1` token per camera), so — unlike
 beast's shard-layout `2*L` merged axis — no un-merge step is needed either.
+
+`--image-size` resizes the decoded frames to another square size (e.g. 320, SABLE's native
+resolution) before saving, masking and scoring, and loads targets/masks at that size when metrics
+are on, so saved frames and metrics are comparable across baselines.
 """
 
 import argparse
@@ -33,6 +37,7 @@ from beast.sable_encoding_decoding.render.decode_utils import (
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
     reassemble_flat_row_metrics,
+    resize_image_batch,
     resolve_metrics_npz_path,
     save_psnr_ssim_metrics_npz,
 )
@@ -115,6 +120,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument('--eid', type=str, default=None, help='session id (mask subdirectory)')
     ap.add_argument(
+        '--image-size',
+        type=int,
+        default=None,
+        help=(
+            'resize the decoded frames (bilinear) to this square size before masking, saving '
+            'and PSNR/SSIM, and load ground-truth frames/masks at it, e.g. 320 to match SABLE; '
+            "default: the model's image_size."
+        ),
+    )
+    ap.add_argument(
         '--metrics-only',
         action='store_true',
         help=(
@@ -173,10 +188,14 @@ def main(argv: list[str] | None = None) -> None:
     trial_idx_flat = bin_idx_flat = split_flat = None
     metrics_source = args.estimated_dir
     if args.target_frame_mapping_left is not None:
-        image_size = int(loaded.config['model']['model_params']['image_size'])
+        # targets/masks are loaded at the scoring size; renders are resized to it below
+        image_size = args.image_size or int(
+            loaded.config['model']['model_params']['image_size'],
+        )
         unique_splits = sorted(set(trial_split_labels))
         mapping_left = {
-            sp: load_frame_index_mapping(args.target_frame_mapping_left, sp) for sp in unique_splits
+            sp: load_frame_index_mapping(args.target_frame_mapping_left, sp)
+            for sp in unique_splits
         }
         mapping_right = {
             sp: load_frame_index_mapping(args.target_frame_mapping_right, sp)
@@ -229,6 +248,18 @@ def main(argv: list[str] | None = None) -> None:
             # un-normalize before masking, so masked-out pixels are pixel-black (0), not the
             # ImageNet mean color, and render/target share the same [0, 1] scale downstream
             render = handler.unnormalize_batch(decode_latents_batch(model, z_batch))
+
+            if args.image_size is not None:
+                if start == 0:
+                    log_step(
+                        f'Resizing decoded frames from {tuple(render.shape[-2:])} to '
+                        f'{args.image_size}x{args.image_size} before '
+                        'masking/saving/PSNR-SSIM',
+                        level='info',
+                    )
+                render = resize_image_batch(
+                    render.unsqueeze(1), args.image_size,
+                ).squeeze(1)
 
             if target_masks is not None:
                 mask_batch = torch.from_numpy(target_masks[start:end]).to(

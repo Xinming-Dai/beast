@@ -35,6 +35,9 @@ PSNR/SSIM metrics are supported in combined-npz mode via a precomputed `--target
 in estimated mode via `--target-frame-mapping-left` / `--target-frame-mapping-right` (raw frames
 resolved per trial/bin through the eval-layout camera input dirs' `frame_index_mapping.json`, see
 `beast.sable_encoding_decoding.img_token.target_frames`). Not supported in shard mode.
+`--image-size` resizes the decoded frames to another square size (e.g. 320, SABLE's native
+resolution) before saving, masking and scoring, and loads targets/masks at that size when metrics
+are on, so saved frames and metrics are comparable across baselines.
 """
 
 import argparse
@@ -70,6 +73,7 @@ from beast.sable_encoding_decoding.render.decode_utils import (
 from beast.sable_encoding_decoding.render.metrics import (
     collect_psnr_ssim_metrics_block,
     reassemble_flat_row_metrics,
+    resize_image_batch,
     resolve_metrics_npz_path,
     save_psnr_ssim_metrics_npz,
 )
@@ -206,7 +210,9 @@ def load_ids_restore_lookup_from_sidecar(
             if key in d.files:
                 restore_by_split[split] = np.asarray(d[key], dtype=np.float32).astype(np.int64)
         if not restore_by_split:
-            raise KeyError(f"{path}: no '{{split}}_ids_restore' array found; got {sorted(d.files)}")
+            raise KeyError(
+                f"{path}: no '{{split}}_ids_restore' array found; got {sorted(d.files)}",
+            )
 
         split_row_counter: dict[str, int] = {}
         lookup: dict[tuple[str, int], np.ndarray] = {}
@@ -491,6 +497,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--eid', type=str, default=None, help='estimated mode: session id (mask subdirectory)',
     )
     estimated.add_argument(
+        '--image-size',
+        type=int,
+        default=None,
+        help=(
+            'estimated mode: resize the decoded frames (bilinear) to this square size before '
+            'masking, saving and PSNR/SSIM, and load ground-truth frames/masks at it, e.g. 320 '
+            "to match SABLE; default: the model's image_size."
+        ),
+    )
+    estimated.add_argument(
         '--neural-trial-index',
         type=parse_neural_trial_index_arg,
         default=None,
@@ -573,6 +589,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '--metrics-only requires --target-images-npz or '
             '--target-frame-mapping-left/-right (nothing to score otherwise)',
         )
+    if args.image_size is not None and not have_estimated:
+        ap.error('--image-size is estimated-mode only')
     return args
 
 
@@ -644,7 +662,10 @@ def main(argv: list[str] | None = None) -> None:
             target = image.reshape(k * t * v, *image.shape[-3:])
     elif args.target_frame_mapping_left is not None:
         assert trial_split_labels is not None and neural_trial_idx is not None
-        image_size = int(loaded.config['model']['model_params']['image_size'])
+        # targets/masks are loaded at the scoring size; renders are resized to it below
+        image_size = args.image_size or int(
+            loaded.config['model']['model_params']['image_size'],
+        )
         unique_splits = sorted(set(trial_split_labels))
         mapping_left = {
             sp: load_frame_index_mapping(args.target_frame_mapping_left, sp)
@@ -704,6 +725,18 @@ def main(argv: list[str] | None = None) -> None:
             # un-normalize before masking, so masked-out pixels are pixel-black (0), not the
             # ImageNet mean color, and render/target share the same [0, 1] scale downstream
             render = handler.unnormalize_batch(result['render'])
+
+            if args.image_size is not None:
+                if start == 0:
+                    log_step(
+                        f'Resizing decoded frames from {tuple(render.shape[-2:])} to '
+                        f'{args.image_size}x{args.image_size} before '
+                        'masking/saving/PSNR-SSIM',
+                        level='info',
+                    )
+                render = resize_image_batch(
+                    render.unsqueeze(1), args.image_size,
+                ).squeeze(1)
 
             if target_masks is not None:
                 mask_batch = torch.from_numpy(target_masks[start:end]).to(
