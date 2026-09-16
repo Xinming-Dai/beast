@@ -12,6 +12,10 @@ dataset orders records by sorted filename (`interval{N}timebin{M}.png`, unpadded
 neither trial- nor bin-ordered, so positional pairing would score each render against the
 wrong frame. Positional pairing (`--sync-batch-index` + file index) is only used as a fallback
 for datasets without trial/bin metadata.
+
+When rows are matched by identity, each saved render visual is named
+`<eid>_neuraltrial{trial:04d}_bin{bin:02d}.png` (see `neural_visual_filenames`), so the neural
+trial and bin can be read straight off the filename and files list in bin order.
 """
 
 import argparse
@@ -343,6 +347,36 @@ def build_record_lookup(dataset: Any) -> dict[tuple[str, int, int], int]:
             )
         lookup[key] = idx
     return lookup
+
+
+def neural_visual_filenames(
+    session_id: str,
+    trial_idx: np.ndarray,
+    bin_idx: np.ndarray,
+) -> list[str]:
+    """Build one render-visual filename per token row from its neural trial and bin ids.
+
+    Args:
+        session_id: session/EID name used as the filename prefix.
+        trial_idx: per-row neural trial id, shape `[N]`.
+        bin_idx: per-row neural bin id, shape `[N]`.
+
+    Returns:
+        `[f'{session_id}_neuraltrial{trial:04d}_bin{bin:02d}.png', ...]` of length `N`.
+
+    Raises:
+        ValueError: if `trial_idx` and `bin_idx` have different lengths.
+    """
+    trials = np.asarray(trial_idx).reshape(-1)
+    bins = np.asarray(bin_idx).reshape(-1)
+    if len(trials) != len(bins):
+        raise ValueError(
+            f'trial_idx has {len(trials)} rows but bin_idx has {len(bins)}; expected equal',
+        )
+    return [
+        f'{session_id}_neuraltrial{int(t):04d}_bin{int(b):02d}.png'
+        for t, b in zip(trials, bins, strict=True)
+    ]
 
 
 def fetch_batch_for_tokens(
@@ -1055,6 +1089,18 @@ def main(argv: list[str] | None = None) -> None:
             f'Saved gaussian pointclouds for batch {batch_idx} to {batch_out_dir}', level='info',
         )
 
+        # name visuals by neural identity when rows were matched by it; the dataset's own
+        # scene_name carries a sorted-filename position (pair_N) that is not the bin index
+        vis_filenames = None
+        if align_by_metadata:
+            session_id = (
+                args.eid
+                if getattr(args, 'eid', None) is not None
+                else str(batch['scene_name'][0]).rsplit('_pair_', 1)[0]
+            )
+            vis_filenames = neural_visual_filenames(
+                session_id, row_trial_idx[:m], row_bin_idx[:m],
+            )
         vis_paths = save_training_visuals(
             vis_dir,
             result=result,
@@ -1062,6 +1108,7 @@ def main(argv: list[str] | None = None) -> None:
             step=batch_idx,
             max_samples=m,
             max_views=args.max_render_views,
+            filenames=vis_filenames,
         )
         total_vis += len(vis_paths)
         log_step(
