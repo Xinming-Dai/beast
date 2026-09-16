@@ -226,7 +226,9 @@ def main(argv: list[str] | None = None) -> None:
             end = min(start + args.batch_size, flat_z.shape[0])
             z_batch = torch.from_numpy(flat_z[start:end]).to(args.device)
 
-            render = decode_latents_batch(model, z_batch)
+            # un-normalize before masking, so masked-out pixels are pixel-black (0), not the
+            # ImageNet mean color, and render/target share the same [0, 1] scale downstream
+            render = handler.unnormalize_batch(decode_latents_batch(model, z_batch))
 
             if target_masks is not None:
                 mask_batch = torch.from_numpy(target_masks[start:end]).to(
@@ -238,7 +240,9 @@ def main(argv: list[str] | None = None) -> None:
                 for i in range(render.shape[0]):
                     row = start + i
                     batch_dir, filename = reconstruction_output_location(row, t, v)
-                    handler.save_reconstruction(render[i], batch_dir, row, filename)
+                    handler.save_reconstruction(
+                        render[i], batch_dir, row, filename, normalized=False,
+                    )
             num_decoded += render.shape[0]
 
             if target is not None:
