@@ -4,12 +4,22 @@ Camera tensors (`c2w_input_out`, `fxfycxcy_input_out`, `c2w_target_out`, `fxfycx
 are read directly from the `.npz` when present. For estimated tokens that do not carry cameras,
 `--camera-npz` can point to the img_tokens camera sidecar; cameras are then selected by
 `trial_split` + `neural_trial_idx` + `neural_bin_idx`/time-bin order.
+
+Ground-truth frames are fetched from the eval dataset by `(trial_split, neural_trial_idx,
+neural_bin_idx)` whenever the dataset records carry that metadata (eval layout), so token rows
+and target images are matched by identity rather than by dataloader position. The eval-layout
+dataset orders records by sorted filename (`interval{N}timebin{M}.png`, unpadded), which is
+neither trial- nor bin-ordered, so positional pairing would score each render against the
+wrong frame. Positional pairing (`--sync-batch-index` + file index) is only used as a fallback
+for datasets without trial/bin metadata.
 """
 
 import argparse
 import copy
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -41,6 +51,7 @@ from beast.sable_encoding_decoding.render.decode_utils import (
 from beast.sable_encoding_decoding.render.metrics import (
     apply_segmentation_mask,
     collect_psnr_ssim_metrics_block,
+    resize_image_batch,
     resolve_metrics_npz_path,
 )
 from beast.train_sable import _resolve_dataset_class
@@ -300,6 +311,108 @@ def _apply_dataloader_overrides(config: dict, args: argparse.Namespace) -> None:
             seg_cfg['cache_root'] = args.segmentation_root
 
 
+def build_record_lookup(dataset: Any) -> dict[tuple[str, int, int], int]:
+    """Index a dataset's records by `(trial_split, neural_trial_idx, neural_bin_idx)`.
+
+    Args:
+        dataset: a `SABLEDataset`-style dataset exposing `_records`, each record carrying
+            optional `split`, `neural_trial_idx`, and `neural_bin_idx` attributes.
+
+    Returns:
+        `{(split, neural_trial_idx, neural_bin_idx): record index}` over the records that
+        carry both ids. Empty when the dataset has no such metadata (training layout), in
+        which case callers must fall back to positional alignment.
+
+    Raises:
+        ValueError: if two records share the same `(split, neural_trial_idx, neural_bin_idx)`.
+    """
+    records = getattr(dataset, '_records', None)
+    if not records:
+        return {}
+    lookup: dict[tuple[str, int, int], int] = {}
+    for idx, rec in enumerate(records):
+        tid = getattr(rec, 'neural_trial_idx', None)
+        bid = getattr(rec, 'neural_bin_idx', None)
+        if tid is None or bid is None:
+            continue
+        key = (str(getattr(rec, 'split', None) or '').lower(), int(tid), int(bid))
+        if key in lookup:
+            raise ValueError(
+                f'Duplicate dataset record for (split, neural_trial_idx, neural_bin_idx)={key}: '
+                f'rows {lookup[key]} and {idx}',
+            )
+        lookup[key] = idx
+    return lookup
+
+
+def fetch_batch_for_tokens(
+    dataset: Any,
+    lookup: dict[tuple[str, int, int], int],
+    splits: list[str],
+    trial_idx: np.ndarray,
+    bin_idx: np.ndarray,
+    *,
+    num_workers: int = 0,
+    collate_fn: Callable[[list[Any]], dict[str, Any]] = collate_with_correspondence_padding,
+) -> dict[str, Any]:
+    """Load the dataset rows matching a token file's `(split, trial, bin)` rows, in z order.
+
+    Args:
+        dataset: indexable dataset whose items are dicts carrying `neural_trial_idx` and
+            `neural_bin_idx`.
+        lookup: `build_record_lookup(dataset)` output.
+        splits: per-row split label, length `K*T`.
+        trial_idx: per-row neural trial id, shape `[K*T]`.
+        bin_idx: per-row neural bin id, shape `[K*T]`.
+        num_workers: dataloader workers used to load the rows.
+        collate_fn: collate function producing the batch dict (injectable for tests).
+
+    Returns:
+        One collated batch whose row order equals the requested `(split, trial, bin)` order.
+
+    Raises:
+        KeyError: if any requested `(split, trial, bin)` has no dataset record.
+        RuntimeError: if the loaded rows' `neural_trial_idx`/`neural_bin_idx` do not match the
+            requested ids (dataset returned the wrong rows).
+    """
+    keys = [
+        (str(s).lower(), int(t), int(b))
+        for s, t, b in zip(splits, trial_idx, bin_idx, strict=True)
+    ]
+    missing = [k for k in keys if k not in lookup]
+    if missing:
+        raise KeyError(
+            f'{len(missing)} token row(s) have no dataset record by (split, neural_trial_idx, '
+            f'neural_bin_idx); first few: {missing[:5]}',
+        )
+    indices = [lookup[k] for k in keys]
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.Subset(dataset, indices),
+        batch_size=len(indices),
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
+    batch = next(iter(loader))
+
+    want_trials = np.asarray([k[1] for k in keys], dtype=np.int64)
+    want_bins = np.asarray([k[2] for k in keys], dtype=np.int64)
+    got_trials = np.asarray(batch['neural_trial_idx']).reshape(-1)
+    got_bins = np.asarray(batch['neural_bin_idx']).reshape(-1)
+    if (
+        got_trials.shape != want_trials.shape
+        or not np.array_equal(got_trials, want_trials)
+        or not np.array_equal(got_bins, want_bins)
+    ):
+        raise RuntimeError(
+            'Fetched dataset rows do not match the requested (neural_trial_idx, neural_bin_idx) '
+            f'order: requested trials {want_trials[:5]} bins {want_bins[:5]}, got trials '
+            f'{got_trials[:5]} bins {got_bins[:5]}',
+        )
+    return batch
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for the decode-and-render entry point.
 
@@ -409,8 +522,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            'Dataloader batch index for the first --z-source .npz. If --z-source is a directory, '
-            'the i-th sorted *.npz uses batch index sync_batch_index + i.'
+            'Positional-alignment fallback only (datasets without neural trial/bin metadata): '
+            'dataloader batch index for the first --z-source .npz; the i-th sorted *.npz uses '
+            'batch index sync_batch_index + i. Ignored when rows are matched by '
+            '(trial_split, neural_trial_idx, neural_bin_idx).'
         ),
     )
     nt_group = p.add_mutually_exclusive_group()
@@ -452,6 +567,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help='Output .npz for --metrics-only (default: <out-dir>/psnr_ssim_metrics.npz).',
+    )
+    p.add_argument(
+        '--metrics-image-size',
+        type=int,
+        default=None,
+        help=(
+            'With --metrics-only: resize render, target (bilinear, antialiased) and mask '
+            '(nearest) to this square size before PSNR/SSIM, e.g. 224 to match the '
+            'beast/resnet baselines. Default: score at the native render resolution.'
+        ),
     )
     p.add_argument(
         '--finetune-ckpt-out',
@@ -600,27 +725,58 @@ def main(argv: list[str] | None = None) -> None:
     )
     include_splits = args.include_splits if args.include_splits is not None else ['train', 'val']
     dataset = dataset_cls(config, include_splits=include_splits)
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=int(training.get('batch_size_per_gpu', 1)),
-        shuffle=False,
-        num_workers=int(training.get('num_workers', 4)),
-        collate_fn=collate_with_correspondence_padding,
-        drop_last=False,
-    )
-    log_step('Built inference dataloader.', level='info')
-
-    total_vis = 0
-    dataloader_iter = iter(dataloader)
+    num_workers = int(training.get('num_workers', 4))
     start_batch_idx = int(args.sync_batch_index)
-    for skipped_idx in range(start_batch_idx):
+
+    # match token rows to dataset rows by identity whenever the records carry trial/bin ids;
+    # the eval-layout dataset is sorted by unpadded filename, so positional pairing is wrong
+    record_lookup = build_record_lookup(dataset)
+    align_by_metadata = bool(record_lookup)
+    dataloader_iter = None
+    if align_by_metadata:
+        log_step(
+            'Matching token rows to dataset rows by (trial_split, neural_trial_idx, '
+            f'neural_bin_idx): {len(record_lookup)} indexed dataset rows.',
+            level='info',
+        )
+    else:
+        log_step(
+            'Dataset records carry no neural trial/bin metadata; falling back to positional '
+            'alignment (--sync-batch-index + file index). Make sure the dataloader order '
+            'matches the token files.',
+            level='warning',
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=int(training.get('batch_size_per_gpu', 1)),
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate_with_correspondence_padding,
+            drop_last=False,
+        )
+        log_step('Built inference dataloader.', level='info')
+        dataloader_iter = iter(dataloader)
+        for skipped_idx in range(start_batch_idx):
+            try:
+                next(dataloader_iter)
+            except StopIteration as exc:
+                raise IndexError(
+                    f'Dataloader ended before --sync-batch-index={start_batch_idx} '
+                    f'(stopped while skipping batch {skipped_idx}).',
+                ) from exc
+
+    def _next_positional_batch(batch_idx: int) -> dict[str, Any]:
+        """Advance the positional dataloader by one batch (fallback alignment only)."""
+        assert dataloader_iter is not None
         try:
-            next(dataloader_iter)
+            return next(dataloader_iter)
         except StopIteration as exc:
             raise IndexError(
-                f'Dataloader ended before --sync-batch-index={start_batch_idx} '
-                f'(stopped while skipping batch {skipped_idx}).',
+                f'Dataloader ended before batch_idx={batch_idx}; {n_npz} .npz file(s) '
+                f'require consecutive batches starting at {start_batch_idx}.',
             ) from exc
+
+    total_vis = 0
     allow_resume = not args.no_resume
     for file_i, npz_path in enumerate(npz_paths):
         batch_idx = start_batch_idx + file_i
@@ -631,13 +787,8 @@ def main(argv: list[str] | None = None) -> None:
                 f'{metrics_shard_path(out_dir, npz_path).name}',
                 level='info',
             )
-            try:
-                next(dataloader_iter)
-            except StopIteration as exc:
-                raise IndexError(
-                    f'Dataloader ended before batch_idx={batch_idx}; {n_npz} .npz file(s) '
-                    f'require consecutive batches starting at {start_batch_idx}.',
-                ) from exc
+            if dataloader_iter is not None:
+                _next_positional_batch(batch_idx)
             continue
 
         if (
@@ -650,13 +801,8 @@ def main(argv: list[str] | None = None) -> None:
                 f'batch_{batch_idx:04d}',
                 level='info',
             )
-            try:
-                next(dataloader_iter)
-            except StopIteration as exc:
-                raise IndexError(
-                    f'Dataloader ended before batch_idx={batch_idx}; {n_npz} .npz file(s) '
-                    f'require consecutive batches starting at {start_batch_idx}.',
-                ) from exc
+            if dataloader_iter is not None:
+                _next_positional_batch(batch_idx)
             continue
 
         log_step(f'[{file_i + 1}/{n_npz}] Loading and decoding: {npz_path}', level='info')
@@ -669,16 +815,29 @@ def main(argv: list[str] | None = None) -> None:
         k, t_bins, l_tok, d_feat = z.shape
         flat = k * t_bins
 
-        log_step(
-            f'[{file_i + 1}/{n_npz}] dataloader: next batch_idx={batch_idx} ...', level='info',
-        )
-        try:
-            batch = next(dataloader_iter)
-        except StopIteration as exc:
-            raise IndexError(
-                f'Dataloader ended before batch_idx={batch_idx}; {n_npz} .npz file(s) '
-                f'require consecutive batches starting at {start_batch_idx}.',
-            ) from exc
+        if align_by_metadata:
+            row_splits, row_trial_idx, row_bin_idx = _load_token_index_metadata(
+                npz_path, k_trials=k, t_bins=t_bins,
+            )
+            log_step(
+                f'[{file_i + 1}/{n_npz}] dataset: fetching {flat} rows by (split, trial, bin) '
+                f'for trial(s) {sorted(set(int(t) for t in row_trial_idx))} ...',
+                level='info',
+            )
+            batch = fetch_batch_for_tokens(
+                dataset,
+                record_lookup,
+                row_splits,
+                row_trial_idx,
+                row_bin_idx,
+                num_workers=num_workers,
+            )
+        else:
+            log_step(
+                f'[{file_i + 1}/{n_npz}] dataloader: next batch_idx={batch_idx} ...',
+                level='info',
+            )
+            batch = _next_positional_batch(batch_idx)
         # move batch to device (plain dict comprehension; no move_batch_to_device helper in beast)
         batch = {k_: v.to(device) if torch.is_tensor(v) else v for k_, v in batch.items()}
         log_step(f'[{file_i + 1}/{n_npz}] batch moved to {device}', level='info')
@@ -796,6 +955,18 @@ def main(argv: list[str] | None = None) -> None:
         else:
             result.target_image = data['image'][:m]
 
+        # score at a common resolution across baselines (mask is resized below, before use)
+        resize_for_metrics = args.metrics_only and args.metrics_image_size is not None
+        if resize_for_metrics:
+            if file_i == 0:
+                log_step(
+                    f'Resizing render/target (and mask) from {tuple(result.render.shape[-2:])} '
+                    f'to {args.metrics_image_size}x{args.metrics_image_size} before PSNR/SSIM.',
+                    level='info',
+                )
+            result.render = resize_image_batch(result.render, args.metrics_image_size)
+            result.target_image = resize_image_batch(result.target_image, args.metrics_image_size)
+
         if args.use_segmentation_mask:
             if 'mask' not in data:
                 raise RuntimeError(
@@ -810,6 +981,10 @@ def main(argv: list[str] | None = None) -> None:
                 target_mask = torch.stack([masks_all[i, tidx[i]] for i in range(m)], dim=0)
             else:
                 target_mask = masks_all[:m]
+            if resize_for_metrics:
+                target_mask = resize_image_batch(
+                    target_mask, args.metrics_image_size, mode='nearest',
+                )
             result.render, result.target_image = apply_segmentation_mask(
                 result.render, result.target_image, target_mask,
             )
