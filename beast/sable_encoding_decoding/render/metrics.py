@@ -41,6 +41,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 
 
@@ -65,6 +66,45 @@ def _flatten_image_batch(
         bsz,
         views,
     )
+
+
+def resize_image_batch(
+    x: torch.Tensor,
+    image_size: int,
+    *,
+    mode: str = 'bilinear',
+) -> torch.Tensor:
+    """Resize a `[B, V, C, H, W]` batch to `image_size x image_size`.
+
+    Used to score renders produced at one resolution (e.g. SABLE's 320x320) at another
+    (e.g. the 224x224 used by the beast/resnet baselines) so PSNR/SSIM are comparable across
+    models. Bilinear resizing is antialiased, matching the PIL-style downsampling the baselines
+    apply to their ground-truth frames; use `mode='nearest'` for binary masks.
+
+    Args:
+        x: tensor shaped `[B, V, C, H, W]`.
+        image_size: target side length.
+        mode: `F.interpolate` mode, `'bilinear'` (antialiased) or `'nearest'`.
+
+    Returns:
+        float32 tensor shaped `[B, V, C, image_size, image_size]`; `x` itself (dtype unchanged)
+        when already that size.
+
+    Raises:
+        ValueError: if `x` is not rank 5.
+    """
+    if x.ndim != 5:
+        raise ValueError(f'resize_image_batch expects [B,V,C,H,W]; got {tuple(x.shape)}')
+    bsz, views, channels, height, width = x.shape
+    if height == image_size and width == image_size:
+        return x
+    # interpolate in float32: antialiased resampling is not supported for every half dtype
+    flat = x.reshape(bsz * views, channels, height, width).float()
+    kwargs: dict[str, bool] = {'antialias': True, 'align_corners': False}
+    if mode == 'nearest':
+        kwargs = {}
+    resized = F.interpolate(flat, size=(image_size, image_size), mode=mode, **kwargs)
+    return resized.reshape(bsz, views, channels, image_size, image_size)
 
 
 def _psnr_per_image(
