@@ -1265,6 +1265,7 @@ def infer_sable(
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
     max_files_per_session: int | None = None,
+    neural_input_dir: str | Path | None = None,
 ) -> dict:
     """Run Sable inference over an IBL dataset and optionally save PLY point clouds.
 
@@ -1295,6 +1296,15 @@ def infer_sable(
             (``output_dir/ply/{session_id}/`` and ``output_dir/glb/{session_id}/``) and
             batches whose items are all past quota skip the forward pass entirely.
             ``None`` (default) saves every item into the flat, unlimited layout.
+        neural_input_dir: neural-data root laid out as
+            ``{neural_input_dir}/{session_id}/{session_id}_aligned.npz``. When set together
+            with ``compute_metrics``, PSNR/SSIM are organized per session as
+            ``[K neural trials, T neural bins, V views]`` (sized from the session's
+            ``{split}_spikes``, rows placed by each frame's ``neural_trial_idx`` /
+            ``neural_bin_idx``) and written to
+            ``output_dir/{session_id}/psnr_ssim_metrics.npz`` instead of the flat
+            ``output_dir/psnr_ssim_metrics.npz``. Requires the eval dataset layout, whose
+            frames carry that neural metadata.
 
     Returns:
         dict with keys:
@@ -1305,12 +1315,20 @@ def infer_sable(
               saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
             - ``'render_view_files'``: list of Path objects for all saved render-only PNGs.
-            - ``'metrics_npz'``: str path of the saved metrics ``.npz``, or ``None``.
+            - ``'metrics_npz'``: str path of the saved flat metrics ``.npz``, or ``None``
+              (always ``None`` when ``neural_input_dir`` is set).
+            - ``'neural_metrics_npz'``: ``{session_id: str path}`` of the per-session
+              ``[K, T, V]`` metrics files; empty unless ``neural_input_dir`` is set.
             - ``'average_psnr'``: overall mean PSNR across all views/samples, or ``None``.
             - ``'average_ssim'``: overall mean SSIM across all views/samples, or ``None``.
+
+    Raises:
+        ValueError: if ``neural_input_dir`` is set but the dataset batches carry no neural
+            trial/bin metadata.
     """
     from beast.models.model_utils.train_vis import save_render_only_visuals, save_training_visuals
     from beast.sable_encoding_decoding.render.metrics import (
+        NeuralTrialMetricsAccumulator,
         _image_metrics_by_view,
         apply_segmentation_mask,
         resolve_metrics_npz_path,
@@ -1334,6 +1352,14 @@ def infer_sable(
     metric_view_names: list[str] = []
     metric_psnr: list[np.ndarray] = []
     metric_ssim: list[np.ndarray] = []
+    neural_metrics: NeuralTrialMetricsAccumulator | None = None
+    if compute_metrics and neural_input_dir is not None:
+        neural_metrics = NeuralTrialMetricsAccumulator(Path(neural_input_dir))
+        log_step(
+            'infer_sable: organizing metrics as [K trials, T bins, V views] per session from '
+            f'neural data under {neural_input_dir}',
+            level='info',
+        )
     num_batches = 0
     session_counts: dict[str, int] = {}
 
@@ -1446,13 +1472,28 @@ def infer_sable(
             if compute_metrics and render is not None and target_image is not None:
                 psnr_bv, ssim_bv = _image_metrics_by_view(render, target_image)
                 keep = sample_indices if sample_indices is not None else range(psnr_bv.shape[0])
-                for sample_idx in keep:
-                    for view_idx in range(psnr_bv.shape[1]):
-                        metric_session_ids.append(resolved_session_ids[sample_idx])
-                        metric_scene_names.append(scene_names[sample_idx])
-                        metric_view_names.append(f'view{view_idx:02d}')
-                        metric_psnr.append(psnr_bv[sample_idx, view_idx])
-                        metric_ssim.append(ssim_bv[sample_idx, view_idx])
+                if neural_metrics is not None:
+                    row_splits, row_trials, row_bins, row_intervals = _batch_neural_rows(batch)
+                    for sample_idx in keep:
+                        neural_metrics.add(
+                            session_id=resolved_session_ids[sample_idx],
+                            split=row_splits[sample_idx],
+                            neural_trial_idx=row_trials[sample_idx],
+                            neural_bin_idx=row_bins[sample_idx],
+                            psnr=psnr_bv[sample_idx],
+                            ssim=ssim_bv[sample_idx],
+                            neural_interval_sec=(
+                                row_intervals[sample_idx] if row_intervals is not None else None
+                            ),
+                        )
+                else:
+                    for sample_idx in keep:
+                        for view_idx in range(psnr_bv.shape[1]):
+                            metric_session_ids.append(resolved_session_ids[sample_idx])
+                            metric_scene_names.append(scene_names[sample_idx])
+                            metric_view_names.append(f'view{view_idx:02d}')
+                            metric_psnr.append(psnr_bv[sample_idx, view_idx])
+                            metric_ssim.append(ssim_bv[sample_idx, view_idx])
 
             num_batches += 1
 
@@ -1467,9 +1508,36 @@ def infer_sable(
     )
 
     metrics_npz_path: Path | None = None
+    neural_metrics_npz: dict[str, str] = {}
     average_psnr = None
     average_ssim = None
-    if compute_metrics and metric_psnr:
+    if neural_metrics is not None:
+        if neural_metrics.num_scored() == 0:
+            log_step(
+                'infer_sable: no frames were scored; no neural [K, T, V] metrics written',
+                level='warning',
+            )
+        else:
+            saved = neural_metrics.save(
+                output_dir, splits_order=include_splits or ['train', 'val', 'test'],
+            )
+            neural_metrics_npz = {sid: str(path) for sid, path in saved.items()}
+            average_psnr, average_ssim = neural_metrics.overall_average()
+            num_unscored = neural_metrics.num_unscored()
+            if num_unscored:
+                log_step(
+                    f'infer_sable: {num_unscored} neural (trial, bin) cells were never scored '
+                    'and are NaN in the saved metrics',
+                    level='warning',
+                )
+            log_step(
+                f'infer_sable: saved [K, T, V] metrics for {neural_metrics.num_scored()} '
+                f'(trial, bin) rows across {len(saved)} session(s) to '
+                f'{", ".join(neural_metrics_npz.values())} (avg_psnr={average_psnr:.3f}, '
+                f'avg_ssim={average_ssim:.3f})',
+                level='info',
+            )
+    elif compute_metrics and metric_psnr:
         metrics_npz_path = resolve_metrics_npz_path(None, output_dir)
         metrics_arrays = save_inference_psnr_ssim_metrics_npz(
             metrics_npz_path,
@@ -1498,9 +1566,45 @@ def infer_sable(
         'vis_files': all_vis,
         'render_view_files': all_render_views,
         'metrics_npz': str(metrics_npz_path) if metrics_npz_path is not None else None,
+        'neural_metrics_npz': neural_metrics_npz,
         'average_psnr': average_psnr,
         'average_ssim': average_ssim,
     }
+
+
+def _batch_neural_rows(
+    batch: dict[str, Any],
+) -> tuple[list[str], list[int], list[int], np.ndarray | None]:
+    """Pull each row's split, neural trial/bin ids, and trial interval out of a Sable batch.
+
+    Args:
+        batch: collated dataset batch carrying ``'split'``, ``'neural_trial_idx'``,
+            ``'neural_bin_idx'``, and optionally ``'neural_interval_sec'``.
+
+    Returns:
+        tuple ``(splits, neural_trial_idx, neural_bin_idx, neural_interval_sec)`` with one
+        entry per row; ``neural_interval_sec`` is ``[B, 2]`` or ``None`` when absent.
+
+    Raises:
+        ValueError: if the batch lacks the split or neural trial/bin keys (i.e. the dataset
+            layout carries no neural-alignment metadata).
+    """
+    missing = [k for k in ('split', 'neural_trial_idx', 'neural_bin_idx') if k not in batch]
+    if missing:
+        raise ValueError(
+            f'neural_input_dir requires batches with {missing}; the dataset must use the eval '
+            'layout whose frame_index_mapping.json carries neural_trial_idx/neural_bin_idx',
+        )
+    splits = [str(s) for s in batch['split']]
+    neural_trial_idx = [int(x) for x in torch.as_tensor(batch['neural_trial_idx']).reshape(-1)]
+    neural_bin_idx = [int(x) for x in torch.as_tensor(batch['neural_bin_idx']).reshape(-1)]
+    intervals = batch.get('neural_interval_sec')
+    neural_interval_sec = (
+        torch.as_tensor(intervals).detach().cpu().numpy().reshape(len(splits), -1)
+        if intervals is not None
+        else None
+    )
+    return splits, neural_trial_idx, neural_bin_idx, neural_interval_sec
 
 
 # maps a latent type name to the `data`/`config['model']` gate key read by
