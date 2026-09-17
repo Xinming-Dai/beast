@@ -20,8 +20,6 @@ EID_SET: set[str] = {
     "f312aaec-3b6f-44b3-86b4-3a0c119c0438",
 }
 
-METHOD_LIST: list[str] = ['Keypoints', 'PCA','beast', 'ResNet', 'sable_frame', 'sable_dino']
-
 DEFAULT_METHODS: list[str] = ["random_baseline", "keypoints", "pca", "resnet", "beast", "sable_dino"]
 DEFAULT_METHOD_LABELS: list[str] = ["Random", "Keypoints", "PCA", "ResNet AE", "BEAST", "SABLE"]
 
@@ -34,7 +32,9 @@ ENCODING_BASE_COLORS: dict[str, str] = {
     "pca": "#7FCDBB",
     "resnet": "#4DAF4A",
     "beast": "#BDBDBD",
+    "sable_concat": "#F28E2B",
     "sable_dino": "#F28E2B",
+    "sable_frame": "#F28E2B",
 }
 
 

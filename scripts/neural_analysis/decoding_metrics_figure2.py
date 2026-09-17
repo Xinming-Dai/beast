@@ -7,13 +7,13 @@ Folder structure:
 figure2/
 ├── resnet/
 │   ├── <eid>/
-│   │   └── psnr_ssim_metrics.npz
+│   │   └── psnr_ssim_metrics*.npz
 ├── beast/
 ...
 ```
 
 Under each method folder, paths use :func:`iter_eid_metrics_npys` (recursive EID
-directory discovery, one ``psnr_ssim_metrics.npz`` per EID).
+directory discovery, matching any ``psnr_ssim_metrics*.npz`` per EID).
 
 ```bash
 python scripts/neural_analysis/decoding_metrics_figure2.py \
@@ -44,7 +44,7 @@ from scripts.neural_analysis.plot_helpers import (
 BASE_FIGSIZE: tuple[float, float] = (2.8, 2.0)
 FIGURE_SIZE_SCALE: float = 0.8
 
-RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_zero_shot_decoding")
+RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_decoding")
 DEFAULT_METHODS: list[str] = ["resnet", "beast", "sable"]
 DEFAULT_METHOD_LABELS: list[str] = ["ResNet AE", "BEAST", "SABLE"]
 METRIC_BASE_COLORS: dict[str, str] = {
@@ -60,7 +60,7 @@ def _figsize() -> tuple[float, float]:
 
 
 def _allowed_eid_set(eids: list[str] | None) -> frozenset[str] | None:
-    """None / empty = no name filter (any folder containing psnr_ssim_metrics.npz)."""
+    """None / empty = no name filter (any folder containing psnr_ssim_metrics*.npz)."""
     if not eids:
         return None
     return frozenset(normalize_eid(e) for e in eids)
@@ -70,27 +70,27 @@ def iter_eid_metrics_npys(
     method_dir: Path,
     allowed_eids: frozenset[str] | None,
 ):
-    """Yield ``psnr_ssim_metrics.npz`` paths for matching EID folders.
+    """Yield ``psnr_ssim_metrics*.npz`` paths for matching EID folders.
 
     If ``allowed_eids`` is set, only directories whose **name** is in that set (compared
-    via :func:`normalize_eid`) are searched. Exactly one ``psnr_ssim_metrics.npz`` file
+    via :func:`normalize_eid`) are searched. Exactly one ``psnr_ssim_metrics*.npz`` file
     is expected under each matching EID directory. If ``allowed_eids`` is ``None``, every
     matching file under ``method_dir`` is included.
     """
     if not method_dir.is_dir():
         return
     if allowed_eids is None:
-        yield from method_dir.rglob("psnr_ssim_metrics.npz")
+        yield from method_dir.rglob("psnr_ssim_metrics*.npz")
         return
 
     seen: set[Path] = set()
     for d in method_dir.rglob("*"):
         if not d.is_dir() or normalize_eid(d.name) not in allowed_eids:
             continue
-        matches = sorted(met for met in d.rglob("psnr_ssim_metrics.npz") if met.is_file())
+        matches = sorted(met for met in d.rglob("psnr_ssim_metrics*.npz") if met.is_file())
         if len(matches) > 1:
             raise ValueError(
-                f"Expected one psnr_ssim_metrics.npz under EID directory {d}, "
+                f"Expected one psnr_ssim_metrics*.npz under EID directory {d}, "
                 f"found {len(matches)}: {[str(p) for p in matches]}"
             )
         if matches and matches[0] not in seen:

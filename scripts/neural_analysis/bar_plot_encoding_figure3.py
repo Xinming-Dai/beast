@@ -44,8 +44,7 @@ from scripts.neural_analysis.plot_helpers import (
 )
 from scripts.neural_analysis.scatter_plot_figure3 import bps_vector_from_npy
 
-RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_zero_shot_encoding")
-
+RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/ibl/SABLE_encoding")
 
 def _as_scalar_bps(x: object) -> float:
     a = np.asarray(x)
@@ -191,11 +190,15 @@ def collect_method_stats(
     return means_rrr, means_cnn, se_rrr, se_cnn
 
 
-def _label_position(value: float, label_offset: float) -> tuple[float, str]:
-    """Label sits above positive bars and below negative/near-zero bars."""
+def _label_position(value: float, se: float, label_offset: float) -> tuple[float, str]:
+    """Label sits above positive bars and below negative/near-zero bars.
+
+    the offset is measured from the tip of the error bar rather than the bar itself, so the
+    label doesn't collide with a tall whisker.
+    """
     if value >= 0:
-        return value + label_offset, "bottom"
-    return value - label_offset, "top"
+        return value + se + label_offset, "bottom"
+    return value - se - label_offset, "top"
 
 
 def plot_encoding_bars(
@@ -226,12 +229,24 @@ def plot_encoding_bars(
     x = np.arange(n, dtype=np.float64) * bar_center_spacing
     fig, ax = plt.subplots(figsize=(0.68 * n, 2.0), dpi=200)
 
-    relevant_means = np.concatenate([
-        means_rrr[np.isfinite(means_rrr)] if plot_encoders in {"rrr", "both"} else np.array([]),
-        means_cnn[np.isfinite(means_cnn)] if plot_encoders in {"cnn", "both"} else np.array([]),
-    ])
-    y_max = float(relevant_means.max()) if relevant_means.size else 1.0
-    y_min_data = float(relevant_means.min()) if relevant_means.size else 0.0
+    def _finite_pairs(
+        means: np.ndarray,
+        ses: np.ndarray,
+        include: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if not include:
+            return np.array([]), np.array([])
+        mask = np.isfinite(means)
+        return means[mask] + ses[mask], means[mask] - ses[mask]
+
+    rrr_hi, rrr_lo = _finite_pairs(means_rrr, se_rrr, plot_encoders in {"rrr", "both"})
+    cnn_hi, cnn_lo = _finite_pairs(means_cnn, se_cnn, plot_encoders in {"cnn", "both"})
+    relevant_hi = np.concatenate([rrr_hi, cnn_hi])
+    relevant_lo = np.concatenate([rrr_lo, cnn_lo])
+    # use mean +/- se (the actual rendered extent of bar plus error bar), not just the mean,
+    # so a method with a wide error bar (e.g. random_baseline) isn't clipped by the axis limits.
+    y_max = float(relevant_hi.max()) if relevant_hi.size else 1.0
+    y_min_data = float(relevant_lo.min()) if relevant_lo.size else 0.0
     y_lim = y_max * 1.30
     # leave headroom below zero (plus room for a below-bar label) whenever a bar dips negative,
     # so a near-zero value's bar and text label don't collide with the zero line.
@@ -257,7 +272,7 @@ def plot_encoding_bars(
                 label=rrr_label if first_rrr_legend else None,
             )
             first_rrr_legend = False
-            y_text, va_text = _label_position(means_rrr[i], label_offset)
+            y_text, va_text = _label_position(means_rrr[i], se_rrr[i], label_offset)
             ax.text(xpos, y_text, f"{means_rrr[i]:.3f}", ha="center", va=va_text, fontsize=11)
         if plot_encoders in {"cnn", "both"} and np.isfinite(means_cnn[i]):
             xpos = x[i] + width / 2 if plot_encoders == "both" else x[i]
@@ -274,7 +289,7 @@ def plot_encoding_bars(
                 label=tcn_label if first_cnn_legend else None,
             )
             first_cnn_legend = False
-            y_text, va_text = _label_position(means_cnn[i], label_offset)
+            y_text, va_text = _label_position(means_cnn[i], se_cnn[i], label_offset)
             ax.text(xpos, y_text, f"{means_cnn[i]:.3f}", ha="center", va=va_text, fontsize=11)
 
     fontweight = "medium"
@@ -282,7 +297,7 @@ def plot_encoding_bars(
     ax.set_xticklabels(method_labels, rotation=20, ha="right", fontsize=12, fontweight=fontweight)
     ax.set_ylabel(y_label or "Avg BPS", fontsize=12, fontweight=fontweight)
     ax.tick_params(axis="y", labelsize=11, width=1.5, length=7, direction="out")
-    ax.tick_params(axis="x", length=0, width=2.25, pad=1)
+    ax.tick_params(axis="x", length=0, width=2.25, pad=8)
     plt.setp(ax.get_yticklabels(), fontweight=fontweight)
     plt.setp(ax.get_xticklabels(), fontweight=fontweight)
 
