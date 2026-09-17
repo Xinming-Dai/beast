@@ -43,8 +43,8 @@ from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 from scripts.neural_analysis.plot_helpers import (
     AXIS_LABEL_FONT_KWARGS,
     AXIS_TICK_LABEL_FONT_KWARGS,
+    DEFAULT_METHODS,
     EID_SET,
-    METHOD_LIST,
     PANEL_LABEL_FONT_KWARGS,
     _default_output_path_helper,
     bps_per_neuron,
@@ -483,7 +483,7 @@ def main() -> None:
         "--methods",
         nargs=2,
         required=True,
-        choices=METHOD_LIST,
+        choices=DEFAULT_METHODS,
         metavar=("METHOD1", "METHOD2"),
         help="Two method folder names. METHOD1 is grey, METHOD2 is green.",
     )

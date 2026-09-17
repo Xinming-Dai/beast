@@ -33,8 +33,8 @@ import numpy as np
 from scripts.neural_analysis.plot_helpers import (
     AXIS_LABEL_FONT_KWARGS,
     AXIS_TICK_LABEL_FONT_KWARGS,
+    DEFAULT_METHODS,
     EID_SET,
-    METHOD_LIST,
     PANEL_LABEL_FONT_KWARGS,
     _default_output_path_helper,
     iter_eid_encoding_npys,
@@ -236,9 +236,9 @@ def plot_bps_scatter(
 
 def main() -> None:
     default_eid = sorted(EID_SET)[0]
-    default_methods = list(METHOD_LIST)
+    default_methods = list(DEFAULT_METHODS)
     if len(default_methods) < 2:
-        raise RuntimeError("METHOD_LIST must contain at least two method folder names")
+        raise RuntimeError("DEFAULT_METHODS must contain at least two method folder names")
 
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
