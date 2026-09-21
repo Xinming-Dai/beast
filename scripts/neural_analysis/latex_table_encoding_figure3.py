@@ -43,8 +43,16 @@ def format_cells(
     ses: np.ndarray,
     *,
     decimals: int,
+    show_se: bool = True,
 ) -> list[str]:
-    """Per-method 'mean $\\pm$ se' cells, with the max-mean cell bolded."""
+    """Per-method 'mean $\\pm$ se' cells, with the max-mean cell bolded.
+
+    Args:
+        means: Per-method means (nan for a missing method).
+        ses: Per-method standard errors, same shape as ``means``.
+        decimals: Decimal places for mean/SE.
+        show_se: When False, emit the bare mean without the ``$\\pm$ se`` suffix.
+    """
     if means.shape != ses.shape:
         raise ValueError(f"means and ses must have the same shape; got {means.shape} vs {ses.shape}")
     finite = np.isfinite(means)
@@ -55,7 +63,9 @@ def format_cells(
         if not np.isfinite(mean):
             cells.append("--")
             continue
-        text = f"{mean:.{decimals}f} $\\pm$ {se:.{decimals}f}"
+        text = f"{mean:.{decimals}f}"
+        if show_se:
+            text = f"{text} $\\pm$ {se:.{decimals}f}"
         if i == best_idx:
             text = f"\\textbf{{{text}}}"
         cells.append(text)
