@@ -14,12 +14,12 @@ The method folder names differ from ``DEFAULT_METHODS`` in ``plot_helpers.py`` (
 SABLE folder is named differently in the two trees), so the method lists and display labels
 are defined at the top of this module. The table style mirrors
 :mod:`latex_table_encoding_figure3`. By default methods are rows and the three metrics
-(encoding BPS, decoding PSNR, decoding SSIM) are columns, which keeps the table narrow;
+(decoding PSNR, decoding SSIM, encoding BPS) are columns, which keeps the table narrow;
 ``--layout metrics-as-rows`` transposes it so methods run across the header:
 
 ```bash
 python scripts/neural_analysis/latex_table_model_size_ablation.py \
-    --results-dir /path/to/model_size_ablation --bps-source stored
+    --results-dir /path/to/model_size_ablation 
 ```
 """
 
@@ -161,9 +161,17 @@ def main() -> None:
         default='methods-as-rows',
         help='Methods down the first column (default) or across the header',
     )
-    p.add_argument('--encoding-label', default='Encoding (bps)', help='Encoding metric label')
-    p.add_argument('--psnr-label', default='Decoding (PSNR)', help='PSNR metric label')
-    p.add_argument('--ssim-label', default='Decoding (SSIM)', help='SSIM metric label')
+    p.add_argument(
+        '--encoding-label',
+        default='Encoding (bps) $\\uparrow$',
+        help='Encoding metric label',
+    )
+    p.add_argument(
+        '--psnr-label', default='Decoding (PSNR) $\\uparrow$', help='PSNR metric label',
+    )
+    p.add_argument(
+        '--ssim-label', default='Decoding (SSIM) $\\uparrow$', help='SSIM metric label',
+    )
     p.add_argument('--caption', default=None, help='Table caption')
     p.add_argument('--label', default='tab:model-size-ablation', help='LaTeX \\label{} key')
     p.add_argument('--decimals', type=int, default=3, help='Decimal places for mean/SE')
@@ -200,8 +208,8 @@ def main() -> None:
     ssim_cells = format_cells(means_ssim, se_ssim, decimals=args.decimals, show_se=show_se)
 
     method_labels = list(args.method_labels)
-    metric_labels = [args.encoding_label, args.psnr_label, args.ssim_label]
-    metric_cells = [encoding_cells, psnr_cells, ssim_cells]
+    metric_labels = [args.psnr_label, args.ssim_label, args.encoding_label]
+    metric_cells = [psnr_cells, ssim_cells, encoding_cells]
     if args.layout == 'methods-as-rows':
         header = ['Method', *metric_labels]
         rows = [
