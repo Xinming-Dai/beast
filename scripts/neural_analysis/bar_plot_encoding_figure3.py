@@ -273,7 +273,7 @@ def plot_encoding_bars(
             )
             first_rrr_legend = False
             y_text, va_text = _label_position(means_rrr[i], se_rrr[i], label_offset)
-            ax.text(xpos, y_text, f"{means_rrr[i]:.3f}", ha="center", va=va_text, fontsize=11)
+            ax.text(x[i], y_text, f"{means_rrr[i]:.3f}", ha="center", va=va_text, fontsize=11)
         if plot_encoders in {"cnn", "both"} and np.isfinite(means_cnn[i]):
             xpos = x[i] + width / 2 if plot_encoders == "both" else x[i]
             ax.bar(
@@ -290,16 +290,18 @@ def plot_encoding_bars(
             )
             first_cnn_legend = False
             y_text, va_text = _label_position(means_cnn[i], se_cnn[i], label_offset)
-            ax.text(xpos, y_text, f"{means_cnn[i]:.3f}", ha="center", va=va_text, fontsize=11)
+            ax.text(x[i], y_text, f"{means_cnn[i]:.3f}", ha="center", va=va_text, fontsize=11)
 
     fontweight = "medium"
     ax.set_xticks(x)
-    ax.set_xticklabels(method_labels, rotation=20, ha="right", fontsize=12, fontweight=fontweight)
+    ax.set_xticklabels(method_labels, rotation=35, ha="center", fontsize=12, fontweight=fontweight)
     ax.set_ylabel(y_label or "Avg BPS", fontsize=12, fontweight=fontweight)
     ax.tick_params(axis="y", labelsize=11, width=1.5, length=7, direction="out")
-    ax.tick_params(axis="x", length=0, width=2.25, pad=8)
+    ax.tick_params(axis="x", length=0, width=2.25, pad=2)
     plt.setp(ax.get_yticklabels(), fontweight=fontweight)
     plt.setp(ax.get_xticklabels(), fontweight=fontweight)
+    for tick_label, (c_rrr, _c_cnn) in zip(ax.get_xticklabels(), color_pairs):
+        tick_label.set_color(c_rrr)
 
     ax.set_ylim(y_min, y_lim)
     ax.grid(False)
