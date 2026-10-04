@@ -200,3 +200,6 @@ configs/multiview/beast3d_cheese3d_ft.yaml
 checkpoints/
 # 3D model
 metric_checkpoint/
+
+# Personal Claude Code instructions
+CLAUDE.local.md
