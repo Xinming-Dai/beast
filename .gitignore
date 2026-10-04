@@ -187,3 +187,6 @@ app.log
 
 # 3D model
 metric_checkpoint/
+
+# Personal Claude Code instructions
+CLAUDE.local.md
