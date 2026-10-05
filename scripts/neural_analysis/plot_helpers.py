@@ -31,7 +31,7 @@ ENCODING_BASE_COLORS: dict[str, str] = {
     "keypoints": "#F8766D",
     "pca": "#7FCDBB",
     "resnet": "#4DAF4A",
-    "beast": "#BDBDBD",
+    "beast": "#9E9E9E",
     "sable_concat": "#F28E2B",
     "sable_dino": "#F28E2B",
     "sable_frame": "#F28E2B",
