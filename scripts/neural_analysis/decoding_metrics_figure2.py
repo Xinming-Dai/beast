@@ -196,6 +196,8 @@ def plot_metric_bars(
     ax.tick_params(axis="x", length=0, width=2.25)
     plt.setp(ax.get_yticklabels(), fontweight=fontweight)
     plt.setp(ax.get_xticklabels(), fontweight=fontweight)
+    for tick_label, color in zip(ax.get_xticklabels(), colors):
+        tick_label.set_color(color)
 
     ax.set_ylim(0.0, y_lim)
     ax.grid(False)
