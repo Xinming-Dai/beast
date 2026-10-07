@@ -5,9 +5,9 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=48G
-#SBATCH -t 0-00:10:00
-#SBATCH -J erz_infer_multisession
+#SBATCH --mem=30G
+#SBATCH -t 0-00:15:00
+#SBATCH -J erz_infer
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_multisession_%j.log
 #SBATCH --export=ALL
 
@@ -16,28 +16,28 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-JOB_ID="${JOB_ID:-20434515}"
+JOB_ID="${JOB_ID:-21047248}"
 
-STAGE=finetune
+STAGE=eval
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/$STAGE}"
 
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID}"
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID}"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference}"
 
-SPLITS="${SPLITS:-val}"
+SPLITS="${SPLITS:-test}"
 SAVE_VISUALS="${SAVE_VISUALS:-1}"
 SAVE_GLB="${SAVE_GLB:-1}"
 MAX_BATCHES="${MAX_BATCHES:-}"
 
 # Space-separated override of the sessions to run inference on. Leave unset to use
 # every session the model was trained on (training.session_names from config.yaml).
-SESSION_NAMES="${SESSION_NAMES:-}"
+SESSION_NAMES="${SESSION_NAMES:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 
 # Max PLY + GLB files saved per session; outputs are grouped under ply/<session>/ and
 # glb/<session>/ so it's clear which session each file came from.
-MAX_FILES_PER_SESSION="${MAX_FILES_PER_SESSION:-10}"
+MAX_FILES_PER_SESSION="${MAX_FILES_PER_SESSION:-60}"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then

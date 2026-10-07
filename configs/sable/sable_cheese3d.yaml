@@ -5,7 +5,7 @@ model:
   model_class: sable
   seed: 0
   gaussians:
-    init_gs: true
+    init_gs: false
     n_gaussians: 1
     range_setting:
       type: linear_depth
@@ -56,7 +56,7 @@ model:
   use_deferred_rendering: false
   use_gsplat: true
   patch_masking:
-    ratio: 0.75
+    ratio: 0.5
     pixel_mask: true
     gaussian_mask: false
   merge_pcd:
@@ -97,6 +97,7 @@ training:
     - 20231031_B31_chew_temperature_000
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
+  cheese3d_center_camera: TC
   use_camera_params: false
   load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
   use_segmentation:
@@ -115,7 +116,7 @@ training:
   val_score_depth_weight: 1.0
   save_val_best_checkpoint: true
 
-  batch_size_per_gpu: 16
+  batch_size_per_gpu: 24
   grad_accum_steps: 1
   num_workers: 8
   prefetch_factor: 4
@@ -127,12 +128,12 @@ training:
 
   checkpoint_dir: path/to/ckpt_folder
   checkpoint_every: 10000
-  checkpoint_steps: [20000]
+  checkpoint_steps: [10000]
 
   resume_ckpt: path/to/eryzer_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 20000
-  print_every: 10
+  max_fwdbwd_passes: 10000
+  print_every: 100
   save_visuals: true
   save_pointclouds: true
   save_camera_pointcloud_scene: true
@@ -156,9 +157,9 @@ training:
   random_shuffle: false
 
   training_regime: all_views_reconstruction
-  num_views: 2
-  num_input_views: 2
-  num_target_views: 2
+  num_views: 3
+  num_input_views: 3
+  num_target_views: 3
 
   view_selector:
     type: all

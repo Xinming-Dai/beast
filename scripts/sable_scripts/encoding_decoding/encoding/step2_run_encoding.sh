@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
-#SBATCH -t 0-0:59:00
+#SBATCH --mem=20G
+#SBATCH -t 0-00:59:00
 #SBATCH -J encoding
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/encoding/step2_run_encoding_%j.log
 #SBATCH --export=ALL
@@ -28,11 +28,12 @@ cd "$REPO_ROOT"
 # Neural encoding: predicts neural activity from Sable latents (RRR/CNN, via Ray Tune).
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data   # root dir of neural (spike) data
 
-
-JOB_ID="20503395"                                         
-LATENT_INPUT_DIR=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/$JOB_ID/latents
+JOB_ID="21047248"
+EID="5dcee0eb-b34d-4652-acc3-d10afc6eae68"
+# EID="3e6a97d3-3991-49e2-b346-6948cb4580fb"
+LATENT_INPUT_DIR=/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/latents
 LATENT_KIND="${1:-${LATENT_KIND:-frame}}"                  # frame | dino | combined
-EID="${2:-${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}}"
+
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural encoding for eid=$EID with latent_kind=$LATENT_KIND"
 echo "LATENT_INPUT_DIR=$LATENT_INPUT_DIR"

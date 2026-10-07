@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH -c 1
 #SBATCH --mem 10G
-#SBATCH -t 0-00:20:00
+#SBATCH -t 0-00:59:00
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step3_unproject_%j.log
 #SBATCH --export=ALL
 
@@ -21,8 +21,11 @@ cd "$REPO_ROOT"
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,EID=...,LATENT_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step3_unproject.sh
+# EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
+# EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-MODEL_ROOT=/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/781b35fd-e1f0-4d14-b2bb-95b7263082bb/20014553/latents
+JOB_ID="${JOB_ID:-21047248}"
+MODEL_ROOT="/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/latents"
 LATENT_ROOT=$MODEL_ROOT/img_tokens_compressed/$EID
 DECODING_NPY=$LATENT_ROOT/decoding_results_img_tokens_compressed.npy
 PCA_NPZ=$LATENT_ROOT/img_tokens_pca_joint.npz

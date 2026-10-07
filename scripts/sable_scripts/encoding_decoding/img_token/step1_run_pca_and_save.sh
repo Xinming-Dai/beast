@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH -c 1
 #SBATCH --mem 120G
-#SBATCH -t 0-02:00:00
+#SBATCH -t 0-00:59:00
 #SBATCH --export=ALL
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step1_run_pca_and_save_%j.log
 
@@ -28,11 +28,12 @@ cd "$REPO_ROOT"
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step1_run_pca_and_save.sh
-MODEL_ROOT="${MODEL_ROOT:-/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_multisession/20503395/latents}"                    # output paths
+JOB_ID="21576301"
+MODEL_ROOT="${MODEL_ROOT:-/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/latents}"                    # output paths
 INPUT_DIR="$MODEL_ROOT/img_tokens"                          # inference dir of img_tokens_batch*.npz shards
 STAGE="${STAGE:-all}"                                       # 1 | 2 | all
 N_FEAT_KEEP=6                                               # PCA components to keep
-SESSION_NAMES="${SESSION_NAMES:-}"                          # space-separated session/EID names; empty = auto-discover all
+SESSION_NAMES="${1:-${SESSION_NAMES:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}}"                           # space-separated session/EID names; empty = auto-discover all
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running img-token PCA fit/apply, stage=$STAGE"
 

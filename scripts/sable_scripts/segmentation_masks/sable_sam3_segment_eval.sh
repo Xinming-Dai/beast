@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH -t 0-07:59:00
+#SBATCH --mem=8G
+#SBATCH -t 0-03:59:00
 #SBATCH -J sam3_segment_eval
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/segmentation_masks/sam3_segment_eval_%j.log
 #SBATCH --export=ALL
@@ -27,11 +27,8 @@ OUTPUT_ROOT=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames_for_eyz/
 
 
 SESSION_IDS=(
-    # "f312aaec-3b6f-44b3-86b4-3a0c119c0438"
-    # "4b00df29-3769-43be-bb40-128b1cba6d35"
-    "72cb5550-43b4-4ef0-add5-e4adfdfb5e02"
-    "781b35fd-e1f0-4d14-b2bb-95b7263082bb"
-    "ecb5520d-1358-434c-95ec-93687ecd1396"
+    "3e6a97d3-3991-49e2-b346-6948cb4580fb"
+    "5dcee0eb-b34d-4652-acc3-d10afc6eae68"
 )
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Starting SAM3 segmentation mask evaluation for sessions: ${SESSION_IDS[*]}"
 PYTHONPATH="${BEAST_REPO}:${PYTHONPATH}" python -u "${SCRIPT}" \

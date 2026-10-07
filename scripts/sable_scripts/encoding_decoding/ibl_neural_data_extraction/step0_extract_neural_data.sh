@@ -2,7 +2,7 @@
 #SBATCH -A bfsr-delta-cpu
 #SBATCH -p cpu
 #SBATCH -c 1
-#SBATCH --mem 7G
+#SBATCH --mem 13G
 #SBATCH -t 0-00:59:00
 #SBATCH -J extract_sable_neural_data
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/ibl_neural_data_extraction/step0_extract_neural_data_%j.log

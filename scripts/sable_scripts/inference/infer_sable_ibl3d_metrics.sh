@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=30G
-#SBATCH -t 0-04:59:00
+#SBATCH -t 0-01:59:00
 #SBATCH -J erz_infer_metrics
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/inference/infer_sable_ibl3d_metrics_%j.log
 #SBATCH --export=ALL
@@ -16,22 +16,22 @@
 # render and the target before scoring, saves every masked render-only PNG, and computes
 # PSNR/SSIM across all of them. No PLY point clouds or GLB scenes are saved.
 #
-# When NEURAL_INPUT_DIR is set, EIDs with neural token latents under it get their metrics from
-# decode_and_render.py's K/T/V neural-trial pipeline instead (one call per EID, same as
-# step4_decode_and_render.sh), written to OUTPUT_DIR/{EID}/psnr_ssim_metrics.npz; the flat
-# beast-predict metrics are skipped in that case to avoid a redundant/inconsistent second file.
+# When NEURAL_INPUT_DIR is set (and COMPUTE_METRICS=1), `beast predict --neural-input-dir`
+# organizes the metrics per EID as [K neural trials, T neural bins, V views], aligned to
+# NEURAL_INPUT_DIR/{EID}/{EID}_aligned.npz, and writes them to
+# OUTPUT_DIR/{EID}/psnr_ssim_metrics.npz. Leave NEURAL_INPUT_DIR empty to get the flat
+# per-(sample, view) OUTPUT_DIR/psnr_ssim_metrics.npz instead.
 
 exec 2>&1
 source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-JOB_ID="${JOB_ID:-21047248}"
+JOB_ID="${JOB_ID:-21954620_session3}"
 
 STAGE=eval
 PRECACHED_VIDEO_ROOT="/work/hdd/bfsr/xdai3/IBL_data/synchronized"
 DATASET_PATH="${DATASET_PATH:-$PRECACHED_VIDEO_ROOT/extracted_frames/$STAGE}"
-OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference_metrics}"
 
 SPLITS="${SPLITS:-test}"
 # 0 and 1 are boolean flags
@@ -47,13 +47,13 @@ SEGMENTATION_ROOT="${SEGMENTATION_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_f
 VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/$STAGE/depth_map}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/$STAGE/litpose_correspondences/processed_correspondences}"
 NEURAL_BATCH_SIZE="${NEURAL_BATCH_SIZE:-60}"
-SESSION_NAMES="${SESSION_NAMES:-4b00df29-3769-43be-bb40-128b1cba6d35 72cb5550-43b4-4ef0-add5-e4adfdfb5e02 781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+SESSION_NAMES="${SESSION_NAMES:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02 781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
 MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID}"
+OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference_metrics}"
 
-# Root directory of per-EID neural token latents, laid out like step4_decode_and_render.sh's
-# LATENT_ROOT (i.e. contains latents/img_tokens_compressed/{EID}/...). Leave unset to skip the
-# neural K/T/V pathway entirely and only run the flat beast-predict metrics below.
+# Root of per-EID aligned neural data ({EID}/{EID}_aligned.npz, the same root the neural
+# encoding/decoding scripts use as NEURAL_INPUT_DIR). Set to '' to write flat metrics instead.
 NEURAL_INPUT_DIR="${NEURAL_INPUT_DIR:-/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data}"
 
 # Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
@@ -123,10 +123,11 @@ PREDICT_ARGS=(
 [ "$SAVE_VISUALS" = "1" ]       && PREDICT_ARGS+=(--save-visuals)
 [ "$SAVE_PLY" != "1" ]          && PREDICT_ARGS+=(--no-save-pointclouds)
 [ "$SAVE_RENDER_VIEWS" = "1" ]  && PREDICT_ARGS+=(--save-render-views)
-[ -n "$NEURAL_INPUT_DIR" ]      && PREDICT_ARGS+=(--neural-input-dir "$NEURAL_INPUT_DIR")
-# Skip the flat metrics npz when NEURAL_INPUT_DIR is set: EIDs with neural data get their metrics
-# from decode_and_render.py's K/T/V pipeline below instead.
-[ "$COMPUTE_METRICS" = "1" ] && [ -z "$NEURAL_INPUT_DIR" ] && PREDICT_ARGS+=(--compute-metrics)
+if [ "$COMPUTE_METRICS" = "1" ]; then
+    PREDICT_ARGS+=(--compute-metrics)
+    # organize metrics as [K trials, T bins, V views] per EID, aligned to the neural data
+    [ -n "$NEURAL_INPUT_DIR" ] && PREDICT_ARGS+=(--neural-input-dir "$NEURAL_INPUT_DIR")
+fi
 if [ "$USE_SEGMENTATION_MASK" = "1" ]; then
     PREDICT_ARGS+=(--use-segmentation-mask)
     [ -n "$SEGMENTATION_ROOT" ] && PREDICT_ARGS+=(--segmentation-root "$SEGMENTATION_ROOT")
@@ -134,49 +135,6 @@ fi
 [ -n "$MAX_BATCHES" ]           && PREDICT_ARGS+=(--max-batches "$MAX_BATCHES")
 
 beast predict "${PREDICT_ARGS[@]}"
-
-if [ -n "$NEURAL_INPUT_DIR" ]; then
-    if [ -z "$SESSION_NAMES" ]; then
-        echo "ERROR: NEURAL_INPUT_DIR is set but SESSION_NAMES is empty; the neural pathway needs" \
-             "an explicit --eid per decode_and_render.py call, so it can't fall back to" \
-             "training.session_names from the saved config. Set SESSION_NAMES explicitly."
-        exit 1
-    fi
-    echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting neural K/T/V metrics..."
-    for EID in $SESSION_NAMES; do
-        SUBDIR="latents/img_tokens_compressed/$EID"
-        Z_SOURCE="$NEURAL_INPUT_DIR/$SUBDIR/img_tokens_compressed_estimated/$EID/$SPLITS"
-        CAMERA_NPZ="$NEURAL_INPUT_DIR/$SUBDIR/img_tokens_camera_parameters.npz"
-
-        if [ ! -d "$Z_SOURCE" ]; then
-            echo "WARNING: no neural token dir for $EID at $Z_SOURCE, skipping neural metrics for this EID"
-            continue
-        fi
-
-        echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Neural metrics for $EID from $Z_SOURCE"
-
-        NEURAL_ARGS=(
-            --z-source "$Z_SOURCE"
-            --camera-npz "$CAMERA_NPZ"
-            --out-dir "$OUTPUT_DIR/$EID"
-            --model-dir "$MODEL_DIR"
-            --dataset-path "$DATASET_PATH"
-            --vda-cache-root "$VDA_CACHE_ROOT"
-            --correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT"
-            --batch-size "$NEURAL_BATCH_SIZE"
-            --include-splits "$SPLITS"
-            --metrics-only
-            --eid "$EID"
-        )
-        if [ "$USE_SEGMENTATION_MASK" = "1" ]; then
-            NEURAL_ARGS+=(--use-segmentation-mask)
-            [ -n "$SEGMENTATION_ROOT" ] && NEURAL_ARGS+=(--segmentation-root "$SEGMENTATION_ROOT")
-        fi
-
-        python -m beast.sable_encoding_decoding.render.decode_and_render "${NEURAL_ARGS[@]}"
-    done
-    echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Done with neural K/T/V metrics."
-fi
 
 echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Done."
 

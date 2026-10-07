@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH -t 0-00:20:00
+#SBATCH -t 0-00:40:00
 #SBATCH -J finetune_decoder
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/img_token/step4b_finetune_decoder_%j.log
 #SBATCH --export=ALL
@@ -64,9 +64,9 @@ cd "$REPO_ROOT"
 # PSNR/SSIM on the test split with the finetuned weights. Mirrors the original E-RayZer
 # step5_erayzer_decoder_finetune.sh.
 
-EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
+# EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
 # EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
-# EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 JOB_ID="${JOB_ID:-21047248}"
 MODEL_ROOT="/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID"                  # dir with config.yaml + *best.ckpt
 LR="1e-4"
@@ -75,20 +75,21 @@ SUBDIR=latents/img_tokens_compressed/$EID
 ESTIMATED_ROOT="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID"
 CAMERA_NPZ="$MODEL_ROOT/$SUBDIR/img_tokens_camera_parameters.npz"
 PRECACHED_VIDEO_ROOT="/work/hdd/bfsr/xdai3/IBL_data/synchronized"
-USE_MASK=true
+USE_MASK=false
 SEGMENTATION_ROOT="$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval"
 
 # finetune decoder on val split for one epoch
 FINETUNE_DIR="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID/finetuned_decoder_${LR}"
-OUT_DIR="$FINETUNE_DIR/decode_saved_latents"
-mkdir -p "$FINETUNE_DIR" "$OUT_DIR"
+FINETUNE_OUT_DIR="$FINETUNE_DIR/decode_saved_latents_finetune"
+EVAL_OUT_DIR="$FINETUNE_DIR/decode_saved_latents"
+mkdir -p "$FINETUNE_DIR" "$FINETUNE_OUT_DIR" "$EVAL_OUT_DIR"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Finetuning decoder on val split for eid=$EID"
 
 FINETUNE_ARGS=(
     --z-source "$ESTIMATED_ROOT/val"
     --camera-npz "$CAMERA_NPZ"
-    --out-dir "$OUT_DIR"
+    --out-dir "$FINETUNE_OUT_DIR"
     --model-dir "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID"
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
@@ -112,7 +113,7 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] Scoring test split with finetuned decoder f
 EVAL_ARGS=(
     --z-source "$ESTIMATED_ROOT/test"
     --camera-npz "$CAMERA_NPZ"
-    --out-dir "$OUT_DIR"
+    --out-dir "$EVAL_OUT_DIR"
     --model-dir "$FINETUNE_DIR"
     --dataset-path "$PRECACHED_VIDEO_ROOT/extracted_frames/eval"
     --vda-cache-root "$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval/depth_map"
