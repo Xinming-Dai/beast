@@ -5,7 +5,7 @@ model:
   model_class: sable
   seed: 0
   gaussians:
-    init_gs: false
+    init_gs: false # changed to false for model ablation 
     n_gaussians: 1
     range_setting:
       type: linear_depth
@@ -52,23 +52,19 @@ model:
     metric: false
     debug_save: false
     debug_dir: null
-    mask_depth: true   # after depth normalisation, push background pixels to Z=-0.5 (far end)
   use_deferred_rendering: false
   use_gsplat: true
   patch_masking:
     ratio: 0.5
     pixel_mask: true
     gaussian_mask: false
+  session_token:
+    num_sessions: 7  # must match len(training.session_names)
   merge_pcd:
     num_points: 3
     debug_merged_pcd: false
-    debug_merged_pcd_num_batches: 16
+    debug_merged_pcd_num_batches: 24
     correspondence_cache_root: null
-    affine_transformation:
-      - [ 0.4414802,   0.15673411, -0.88347589, -0.05953322]
-      - [-0.06357379,  0.98761488,  0.14344067,  0.05882564]
-      - [ 0.89501598, -0.0071603,   0.4459766,  -0.01130054]
-      - [ 0.,          0.,          0.,          1.        ]
 
 optimizer:
   type: AdamW
@@ -82,33 +78,20 @@ optimizer:
   scheduler: cosine
 
 training:
-  dataset_name: beast.data.sable_dataset.Cheese3DDataset
-  dataset_path: /work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam
-  session_names:
-    - 20231031_B20_chew_bl_000
-    - 20231031_B20_chew_bl_000
-    - 20231031_B21_chew_bl_000
-    - 20231031_B26_chew_bl_000
-    - 20231031_B31_chew_bl_000
-    - 20231031_B6_chew_temperature_000
-    - 20231031_B20_chew_temperature_000
-    - 20231031_B21_chew_temperature_000
-    - 20231031_B26_chew_temperature_000
-    - 20231031_B31_chew_temperature_000
-  cheese3d_left_camera: TL
-  cheese3d_right_camera: TR
-  cheese3d_center_camera: TC
-  use_camera_params: false
-  load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
-  use_segmentation:
-    enabled: true
-    cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
-  mask_geom_loss: true   # apply segmentation mask to gs_reg_loss; penalise only foreground (mouse) points
-  mask_l2_loss: true    # restrict L2 photometric loss to foreground (mouse) pixels only
+  dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
+  dataset_path: null  
+  session_names: # Multisession
+    - 9b528ad0-4599-4a55-9148-96cc1d93fb24
+    - 51e53aff-1d5d-4182-a684-aba783d50ae5
+    - 0802ced5-33a3-405e-8336-b65ebc5cb07c
+    - 88224abb-5746-431f-9c17-17d7ef806e6a
+    - a4a74102-2af5-45dc-9e41-ef7f5aed88be
+    - ecb5520d-1358-434c-95ec-93687ecd1396
+    - f312aaec-3b6f-44b3-86b4-3a0c119c0438
 
   # Validation
-  val_split_ratio: 0.1
-  val_every: 100
+  val_split_ratio: 0.06
+  val_every: 500
 
   # Combined validation metric
   val_score_frame_weight: 1.0
@@ -127,18 +110,18 @@ training:
   use_tf32: true
 
   checkpoint_dir: path/to/ckpt_folder
-  checkpoint_every: 10000
-  checkpoint_steps: [10000]
+  checkpoint_every: 50000
+  checkpoint_steps: [50000]
 
-  resume_ckpt: path/to/eryzer_dl3dv.pt
+  resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
-  max_fwdbwd_passes: 10000
-  print_every: 100
+  max_fwdbwd_passes: 50000
+  print_every: 10
   save_visuals: true
   save_pointclouds: true
   save_camera_pointcloud_scene: true
   vis_num_samples: 1
-  vis_max_views: 3
+  vis_max_views: 2
   render_video: false
 
   grad_checkpoint_every: 1
@@ -157,9 +140,9 @@ training:
   random_shuffle: false
 
   training_regime: all_views_reconstruction
-  num_views: 3
-  num_input_views: 3
-  num_target_views: 3
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
 
   view_selector:
     type: all

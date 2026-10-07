@@ -5,7 +5,7 @@ model:
   model_class: sable
   seed: 0
   gaussians:
-    init_gs: false
+    init_gs: true
     n_gaussians: 1
     range_setting:
       type: linear_depth
@@ -52,16 +52,16 @@ model:
     metric: false
     debug_save: false
     debug_dir: null
-    mask_depth: true   # after depth normalisation, push background pixels to Z=-0.5 (far end)
+    mask_depth: false   # after depth normalisation, push background pixels to Z=-0.5 (far end)
   use_deferred_rendering: false
   use_gsplat: true
   patch_masking:
-    ratio: 0.5
+    ratio: 0.75
     pixel_mask: true
-    gaussian_mask: false
+    gaussian_mask: true
   merge_pcd:
     num_points: 3
-    debug_merged_pcd: false
+    debug_merged_pcd: true
     debug_merged_pcd_num_batches: 16
     correspondence_cache_root: null
     affine_transformation:
@@ -76,7 +76,7 @@ optimizer:
   wd: 0.05
   beta1: 0.9
   beta2: 0.95
-  warmup: 3000
+  warmup: 1500
   div_factor: 1.0
   final_div_factor: 1.0
   scheduler: cosine
@@ -84,6 +84,8 @@ optimizer:
 training:
   dataset_name: beast.data.sable_dataset.Cheese3DDataset
   dataset_path: /work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam
+
+  # Cheese3D-specific dataset settings
   session_names:
     - 20231031_B20_chew_bl_000
     - 20231031_B20_chew_bl_000
@@ -96,10 +98,8 @@ training:
     - 20231031_B26_chew_temperature_000
     - 20231031_B31_chew_temperature_000
   cheese3d_left_camera: TL
-  cheese3d_right_camera: TR
-  cheese3d_center_camera: TC
+  cheese3d_right_camera: TC
   use_camera_params: false
-  load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
   use_segmentation:
     enabled: true
     cache_root: /work/hdd/bfsr/xdai3/cheese3d_cam/segmentation_masks
@@ -116,7 +116,7 @@ training:
   val_score_depth_weight: 1.0
   save_val_best_checkpoint: true
 
-  batch_size_per_gpu: 24
+  batch_size_per_gpu: 16
   grad_accum_steps: 1
   num_workers: 8
   prefetch_factor: 4
@@ -130,13 +130,12 @@ training:
   checkpoint_every: 10000
   checkpoint_steps: [10000]
 
-  resume_ckpt: path/to/eryzer_dl3dv.pt
+  resume_ckpt: path/to/sable_dl3dv.pt
   reset_training_state: true
   max_fwdbwd_passes: 10000
-  print_every: 100
+  print_every: 10
   save_visuals: true
   save_pointclouds: true
-  save_camera_pointcloud_scene: true
   vis_num_samples: 1
   vis_max_views: 3
   render_video: false
@@ -157,9 +156,9 @@ training:
   random_shuffle: false
 
   training_regime: all_views_reconstruction
-  num_views: 3
-  num_input_views: 3
-  num_target_views: 3
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
 
   view_selector:
     type: all
