@@ -5,6 +5,7 @@ Ray Tune itself is only imported here, never executed as part of this module's t
 """
 
 import copy
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -58,7 +59,8 @@ def train_rrr_encoder(
     """Train an RRR encoder (rates from latents) for each session in `data_dict`.
 
     Args:
-        config: hyperparameters; must contain `lr`.
+        config: hyperparameters; must contain `lr`. Optional `n_comp` (default 3), `l2`
+            (default 100) and `smooth_w` (default 2, gaussian smoothing sigma in seconds).
         data_dict: mapping `eid -> {'X': [train, val], 'y': [train, val], 'setup': {}}`;
             mutated in place (normalized, bias column appended, gaussian-smoothed).
         report_to_tune: if `True`, report `bps`/`r2` of the last session to Ray Tune
@@ -70,9 +72,9 @@ def train_rrr_encoder(
         `report_to_tune=True`.
     """
     lr = config['lr']
-    l2 = 100
-    n_comp = 3
-    smooth_w = 2  # smooth window 2 seconds
+    l2 = config.get('l2', 100)
+    n_comp = config.get('n_comp', 3)
+    smooth_w = config.get('smooth_w', 2)  # smooth window 2 seconds
     ground_truth = {}
     for eid in data_dict:
         ground_truth[eid] = copy.deepcopy(data_dict[eid]['y'][1])
@@ -184,17 +186,21 @@ def train_rrr_encoder_with_tune(
     data_dict: dict[str, Any],
     num_samples: int = 10,
     tune_storage_path: str | None = None,
+    search_space: dict[str, Any] | None = None,
+    trials_csv_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    """Ray-Tune hyperparameter search over `lr` for `train_rrr_encoder`.
+    """Ray-Tune hyperparameter search for `train_rrr_encoder`, selected on validation BPS.
 
     Args:
         data_dict: mapping `eid -> {'X': [train, val, test], 'y': [...]}`.
-        num_samples: number of Ray Tune trials.
+        num_samples: number of Ray Tune trials (use 1 with `tune.grid_search` entries).
         tune_storage_path: Ray Tune experiment root directory; `None` uses Ray's default.
+        search_space: Ray Tune search space; `None` searches `lr` only (loguniform 5e-2 to 2).
+        trials_csv_path: if set, the per-trial results table is written here as a csv.
 
     Returns:
         Final `train_rrr_encoder` result evaluated with the best config on the held-out
-        (last) split.
+        (last) split; each per-session result also carries the winning `config`.
     """
     train_val_dict = {}
     for eid in data_dict:
@@ -203,7 +209,8 @@ def train_rrr_encoder_with_tune(
         train_val_dict[eid]['X'].pop()
         train_val_dict[eid]['y'].pop()
 
-    search_space = {'lr': tune.loguniform(5e-2, 2)}
+    if search_space is None:
+        search_space = {'lr': tune.loguniform(5e-2, 2)}
     analysis = tune.run(
         tune.with_parameters(train_rrr_encoder, data_dict=train_val_dict, report_to_tune=True),
         resources_per_trial={'cpu': 2, 'gpu': 1},
@@ -214,13 +221,21 @@ def train_rrr_encoder_with_tune(
     )
     best_config = analysis.get_best_config(metric='bps', mode='max')
     print('Best config: ', best_config)
+    if trials_csv_path is not None:
+        trials_csv_path = Path(trials_csv_path)
+        trials_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis.dataframe().to_csv(trials_csv_path, index=False)
+        print(f'Saved sweep trials to: {trials_csv_path}')
     # test data_dict, remove the 2nd last element of X and y since it is the validation set
     train_test_dict = {}
     for eid in data_dict:
         train_test_dict[eid] = copy.deepcopy(data_dict[eid])
         train_test_dict[eid]['X'].pop(-2)
         train_test_dict[eid]['y'].pop(-2)
-    return train_rrr_encoder(config=best_config, data_dict=train_test_dict, report_to_tune=False)
+    result = train_rrr_encoder(config=best_config, data_dict=train_test_dict, report_to_tune=False)
+    for res in result.values():
+        res['config'] = dict(best_config)
+    return result
 
 
 def train_cnn_encoder(

@@ -112,6 +112,34 @@ def get_encoding_decoding_args(argv: list[str] | None = None) -> argparse.Namesp
         'or for img_tokens_compressed* the same name as --latent_kind. If --latent_kind is '
         'omitted, Ray uses its usual default (e.g. ~/ray_results) when this is unset.',
     )
+    parser.add_argument(
+        '--rrr_sweep',
+        action='store_true',
+        help='Encoding only: run a RRR grid search (lr x n_comp x l2, selected on validation '
+        'BPS) instead of RRR + CNN, and replace only the "rrr" entry of the existing result '
+        'file (the original is kept as <name>_pre_rrr_sweep.npy).',
+    )
+    parser.add_argument(
+        '--rrr_lrs',
+        type=float,
+        nargs='+',
+        default=[0.1, 0.5, 1.0],
+        help='--rrr_sweep: L-BFGS learning rates to try.',
+    )
+    parser.add_argument(
+        '--rrr_ncomps',
+        type=int,
+        nargs='+',
+        default=[3, 9, 32],
+        help='--rrr_sweep: RRR ranks (number of shared temporal components) to try.',
+    )
+    parser.add_argument(
+        '--rrr_l2s',
+        type=float,
+        nargs='+',
+        default=[25.0, 100.0, 200.0],
+        help='--rrr_sweep: L2 penalties on beta to try.',
+    )
     return parser.parse_args(argv)
 
 

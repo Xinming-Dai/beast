@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import ray
 import yaml
+from ray import tune
 
 from beast.sable_encoding_decoding.neural.decoder import (
     train_cnn_decoder_with_tune,
@@ -341,6 +342,67 @@ def _maybe_assert_latent_intervals_match_neural(
     print('OK: latent train/val/test_intervals match neural aligned npz via neural_trial_idx.')
 
 
+def _results_npy_path(save_path: Path) -> Path:
+    """Return the file `np.save` writes for `save_path` (it appends `.npy`).
+
+    Args:
+        save_path: result path without the `.npy` extension.
+
+    Returns:
+        `save_path` with `.npy` appended.
+    """
+    return save_path.with_name(f'{save_path.name}.npy')
+
+
+def _load_existing_results(save_path: Path, eid: str) -> dict[str, Any]:
+    """Load the result dict previously saved for `eid`, to be updated in place.
+
+    Args:
+        save_path: result path without the `.npy` extension.
+        eid: session id that must be present in the saved results.
+
+    Returns:
+        The saved `{eid: {'rrr': ..., 'cnn': ...}}` dict, or an empty dict (with a warning)
+        when no result file exists yet.
+
+    Raises:
+        KeyError: if the result file exists but has no entry for `eid`.
+    """
+    npy_path = _results_npy_path(save_path)
+    if not npy_path.exists():
+        warnings.warn(
+            f'{npy_path} does not exist; the sweep result will be saved without a cnn entry.',
+            stacklevel=2,
+        )
+        return {}
+    result_dict = np.load(npy_path, allow_pickle=True).item()
+    if eid not in result_dict:
+        raise KeyError(f'{npy_path}: no entry for eid {eid}; got {sorted(result_dict)}')
+    return result_dict
+
+
+def _save_results_with_backup(save_path: Path, result_dict: dict[str, Any]) -> None:
+    """Save `result_dict`, keeping the first pre-existing file as `<name>_pre_rrr_sweep.npy`.
+
+    The new file is written to a temp name first, so an interrupted write never clobbers the
+    original. The original is renamed (not copied) to the backup name; an existing backup is
+    never overwritten, so repeated sweeps keep the very first (pre-sweep) results.
+
+    Args:
+        save_path: result path without the `.npy` extension.
+        result_dict: results to save.
+    """
+    npy_path = _results_npy_path(save_path)
+    tmp_path = npy_path.with_name(f'{npy_path.name}.tmp')
+    with tmp_path.open('wb') as f:
+        np.save(f, result_dict)
+    backup_path = npy_path.with_name(f'{save_path.name}_pre_rrr_sweep.npy')
+    if npy_path.exists() and not backup_path.exists():
+        npy_path.rename(backup_path)
+        print(f'Kept original results as: {backup_path}')
+    tmp_path.replace(npy_path)
+
+
 def main() -> None:
     """Run the neural encoding/decoding pipeline end to end (RRR + CNN via Ray Tune)."""
     ray_temp = _resolve_ray_session_temp_dir()
@@ -358,6 +420,11 @@ def main() -> None:
             '--model_config is required when --latent_kind is psae '
             '(to verify z_trials_time last dim matches model.auto_encoder.num_latents).',
         )
+
+    if args.rrr_sweep and args.eval_task != 'encoding':
+        raise ValueError('--rrr_sweep is only supported for --eval_task encoding')
+    if args.rrr_sweep and _is_img_tokens_compressed_family(args.latent_kind):
+        raise ValueError('--rrr_sweep is not supported for img_tokens_compressed* (CNN-only)')
 
     eid = args.eid
     neural_input_dir = Path(args.neural_input_dir) / eid
@@ -552,6 +619,31 @@ def main() -> None:
         f"Test X Shape: {train_data[eid]['X'][2].shape}, "
         f"Test Y Shape: {train_data[eid]['y'][2].shape}",
     )
+
+    if args.rrr_sweep:
+        # fail fast (before the sweep) if the existing results cannot be loaded
+        result_dict = _load_existing_results(save_path, eid)
+        search_space = {
+            'lr': tune.grid_search(args.rrr_lrs),
+            'n_comp': tune.grid_search(args.rrr_ncomps),
+            'l2': tune.grid_search(args.rrr_l2s),
+        }
+        rrr_result = train_rrr_encoder_with_tune(
+            train_data,
+            num_samples=1,
+            tune_storage_path=tune_storage_path,
+            search_space=search_space,
+            trials_csv_path=Path(latent_input_dir) / 'rrr_sweep_trials.csv',
+        )
+        print(f'Best RRR config for {eid}: {rrr_result[eid]["config"]}')
+        print(
+            f"RRR Encoding {eid} Test BPS: {rrr_result[eid]['bps']} "
+            f"Test R2: {rrr_result[eid]['r2']}",
+        )
+        result_dict.setdefault(eid, {})['rrr'] = rrr_result[eid]
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        _save_results_with_backup(save_path, result_dict)
+        return
 
     if eval_task == 'encoding':
         rrr_result = train_rrr_encoder_with_tune(
