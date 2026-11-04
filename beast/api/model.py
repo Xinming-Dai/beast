@@ -169,6 +169,7 @@ class Model:
         save_render_views: bool = False,
         save_pointclouds: bool = True,
         save_camera_pointcloud_scene: bool = False,
+        save_masked_pointclouds: bool = False,
         load_gt_camera_params_for_vis: bool = False,
         compute_metrics: bool = False,
         use_segmentation_mask: bool = False,
@@ -197,6 +198,9 @@ class Model:
             save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
                 camera frustums, with a ground-truth overlay when
                 ``load_gt_camera_params_for_vis`` is also set).
+            save_masked_pointclouds: whether to also save ``.ply`` point clouds with
+                background points removed by the segmentation mask, under
+                ``output_dir/ply_masked/{session_id}/``. Requires ``use_segmentation_mask``.
             load_gt_camera_params_for_vis: for Cheese3D datasets, load ground-truth
                 camera calibration into ``gt_c2w``/``gt_fxfycxcy`` for visualization,
                 overriding the saved training config's
@@ -226,7 +230,7 @@ class Model:
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files',
-            'camera_pointcloud_scene_glb_files', 'vis_files', 'render_view_files',
+            'masked_ply_files', 'camera_pointcloud_scene_glb_files', 'vis_files', 'render_view_files',
             'metrics_npz', 'neural_metrics_npz', 'average_psnr', 'average_ssim'.
         """
         from beast.inference import infer_sable as _infer_sable
@@ -268,6 +272,7 @@ class Model:
             save_render_views=save_render_views,
             save_pointclouds=save_pointclouds,
             save_camera_pointcloud_scene=save_camera_pointcloud_scene,
+            save_masked_pointclouds=save_masked_pointclouds,
             compute_metrics=compute_metrics,
             require_segmentation_mask=use_segmentation_mask,
             max_batches=max_batches,

@@ -101,6 +101,14 @@ def register_parser(subparsers: Any) -> None:
         help='Skip saving .ply Gaussian-center point clouds (on by default otherwise)',
     )
     sable_group.add_argument(
+        '--save-masked-pointclouds',
+        action='store_true',
+        help=(
+            'Also save .ply point clouds with background points removed by the segmentation '
+            'mask, under <output>/ply_masked/<session_id>/. Requires --use-segmentation-mask'
+        ),
+    )
+    sable_group.add_argument(
         '--save-render-views',
         action='store_true',
         help=(
@@ -267,6 +275,10 @@ def _handle_sable(args, model):
         _logger.error('--segmentation-root requires --use-segmentation-mask')
         return
 
+    if args.save_masked_pointclouds and not args.use_segmentation_mask:
+        _logger.error('--save-masked-pointclouds requires --use-segmentation-mask')
+        return
+
     if args.neural_input_dir is not None and not args.compute_metrics:
         _logger.error('--neural-input-dir requires --compute-metrics')
         return
@@ -290,6 +302,7 @@ def _handle_sable(args, model):
         save_render_views=args.save_render_views,
         save_pointclouds=not args.no_save_pointclouds,
         save_camera_pointcloud_scene=args.save_camera_pointcloud_scene,
+        save_masked_pointclouds=args.save_masked_pointclouds,
         load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
         compute_metrics=args.compute_metrics,
         use_segmentation_mask=args.use_segmentation_mask,
