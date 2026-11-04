@@ -14,7 +14,11 @@
 # Exhaustive PSNR/SSIM evaluation on predicted views: runs inference over every frame of a
 # split for the given DATASET_PATH/SESSION_NAMES, applies the segmentation mask to both the
 # render and the target before scoring, saves every masked render-only PNG, and computes
-# PSNR/SSIM across all of them. No PLY point clouds or GLB scenes are saved.
+# PSNR/SSIM across all of them. No PLY point clouds or GLB scenes are saved by default.
+#
+# Set SAVE_MASKED_PLY=1 to also save PLY point clouds with background points removed by the
+# segmentation mask (OUTPUT_DIR/ply_masked/{EID}/). For masked PLYs only, run with
+# SAVE_MASKED_PLY=1 SAVE_RENDER_VIEWS=0 COMPUTE_METRICS=0.
 #
 # When NEURAL_INPUT_DIR is set (and COMPUTE_METRICS=1), `beast predict --neural-input-dir`
 # organizes the metrics per EID as [K neural trials, T neural bins, V views], aligned to
@@ -27,7 +31,7 @@ source ~/.bashrc
 conda activate beast
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
-JOB_ID="${JOB_ID:-21954620_session3}"
+JOB_ID="${JOB_ID:-21047248}"
 
 STAGE=eval
 PRECACHED_VIDEO_ROOT="/work/hdd/bfsr/xdai3/IBL_data/synchronized"
@@ -37,6 +41,7 @@ SPLITS="${SPLITS:-test}"
 # 0 and 1 are boolean flags
 SAVE_VISUALS="${SAVE_VISUALS:-0}"
 SAVE_PLY="${SAVE_PLY:-0}"
+SAVE_MASKED_PLY="${SAVE_MASKED_PLY:-0}"
 SAVE_RENDER_VIEWS="${SAVE_RENDER_VIEWS:-1}"
 COMPUTE_METRICS="${COMPUTE_METRICS:-1}"
 USE_SEGMENTATION_MASK="${USE_SEGMENTATION_MASK:-1}"
@@ -47,7 +52,7 @@ SEGMENTATION_ROOT="${SEGMENTATION_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_f
 VDA_CACHE_ROOT="${VDA_CACHE_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/$STAGE/depth_map}"
 CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/$STAGE/litpose_correspondences/processed_correspondences}"
 NEURAL_BATCH_SIZE="${NEURAL_BATCH_SIZE:-60}"
-SESSION_NAMES="${SESSION_NAMES:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02 781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+SESSION_NAMES="${SESSION_NAMES:-4b00df29-3769-43be-bb40-128b1cba6d35 72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
 # Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
 MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID}"
 OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference_metrics}"
@@ -84,6 +89,7 @@ Session names:         ${SESSION_NAMES:-(all sessions from saved training config
 Max files per session: ${MAX_FILES_PER_SESSION:-(unlimited)}
 Save visuals:           $SAVE_VISUALS
 Save PLY point clouds:  $SAVE_PLY
+Save masked PLY:        $SAVE_MASKED_PLY
 Save render views:      $SAVE_RENDER_VIEWS
 Compute metrics:        $COMPUTE_METRICS
 Use segmentation mask:  $USE_SEGMENTATION_MASK
@@ -122,6 +128,7 @@ PREDICT_ARGS=(
 [ -n "$MAX_FILES_PER_SESSION" ] && PREDICT_ARGS+=(--max-files-per-session "$MAX_FILES_PER_SESSION")
 [ "$SAVE_VISUALS" = "1" ]       && PREDICT_ARGS+=(--save-visuals)
 [ "$SAVE_PLY" != "1" ]          && PREDICT_ARGS+=(--no-save-pointclouds)
+[ "$SAVE_MASKED_PLY" = "1" ]    && PREDICT_ARGS+=(--save-masked-pointclouds)
 [ "$SAVE_RENDER_VIEWS" = "1" ]  && PREDICT_ARGS+=(--save-render-views)
 if [ "$COMPUTE_METRICS" = "1" ]; then
     PREDICT_ARGS+=(--compute-metrics)

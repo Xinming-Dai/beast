@@ -769,6 +769,7 @@ def _extract_pointcloud_xyz_rgb(
     result: dict,
     sample_idx: int,
     gs,
+    drop_background: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
     """Extract point-cloud xyz/rgb for one batch sample from a Sable result dict.
 
@@ -777,18 +778,23 @@ def _extract_pointcloud_xyz_rgb(
     falls back to opacity-as-grayscale coloring.  When a segmentation mask is present
     (``result['target_mask']`` or ``result['target_gaussian_mask']``), background
     points are recolored white so unregularized background geometry doesn't clutter
-    the point cloud.
+    the point cloud, or removed entirely when ``drop_background`` is set.
 
     Args:
         result: dict returned by ``model.get_model_outputs(batch)``.
         sample_idx: batch index to extract.
         gs: GaussianModel for this batch item, used as the opacity-grayscale fallback.
+        drop_background: if True, remove background points instead of recoloring them
+            (and raise if no mask matches the point count).
 
     Returns:
         tuple of ``(xyz, rgb01, used_pixel_colors)``: xyz is a float array of shape
         [N, 3]; rgb01 is a float array of shape [N, 3] with values in [0, 1];
         used_pixel_colors indicates whether per-pixel RGB (vs. opacity grayscale) was
         used.
+
+    Raises:
+        ValueError: if ``drop_background`` is set but no mask matches the point count.
     """
     pixelalign_xyz = result.get('pixelalign_xyz')
     images = result.get('image')
@@ -804,6 +810,7 @@ def _extract_pointcloud_xyz_rgb(
     target_gaussian_mask = result.get('target_gaussian_mask')
 
     rgb01 = None
+    mask01 = None
     if use_pixel_colors:
         xyz = (
             pixelalign_xyz[sample_idx]
@@ -824,8 +831,6 @@ def _extract_pointcloud_xyz_rgb(
         if xyz.shape[0] == rgb_candidate.shape[0]:
             rgb01 = rgb_candidate
             mask01 = _flatten_mask_for_points(target_mask, sample_idx, xyz.shape[0])
-            if mask01 is not None:
-                rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
 
     used_pixel_colors = rgb01 is not None
 
@@ -834,8 +839,18 @@ def _extract_pointcloud_xyz_rgb(
         opacity = gs.get_opacity.detach().float().cpu().numpy().squeeze(-1)
         rgb01 = np.clip(np.stack([opacity, opacity, opacity], axis=-1), 0, 1)
         mask01 = _flatten_mask_for_points(target_gaussian_mask, sample_idx, xyz.shape[0])
-        if mask01 is not None:
-            rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
+
+    if mask01 is None:
+        if drop_background:
+            raise ValueError(
+                f'no segmentation mask matches the {xyz.shape[0]} points of sample '
+                f'{sample_idx}; cannot save a masked point cloud',
+            )
+    elif drop_background:
+        keep = mask01[:, 0] > 0.5
+        xyz, rgb01 = xyz[keep], rgb01[keep]
+    else:
+        rgb01 = rgb01 * mask01 + (1.0 - mask01)  # background -> white
 
     return xyz, rgb01, used_pixel_colors
 
@@ -848,6 +863,7 @@ def save_gaussian_pointclouds(
     session_ids: list[str] | None = None,
     sample_indices: list[int] | None = None,
     scene_names: list[str] | None = None,
+    masked_only: bool = False,
 ) -> list[Path]:
     """Save Gaussian centers from one Sable batch output as PLY point clouds.
 
@@ -875,9 +891,16 @@ def save_gaussian_pointclouds(
             ``pointcloud_{scene_name}_sample{sample_idx:02d}.ply`` instead of the
             ``batch_idx``-based default, so files can be traced back to their
             session/frame without rerunning inference.
+        masked_only: if True, drop background points (segmentation mask == 0) and write
+            to ``output_dir / 'ply_masked' / {session_id}`` instead of the ``ply`` layout;
+            requires ``session_ids``. Samples with no foreground points are skipped.
 
     Returns:
         list of Path objects for the PLY files that were written.
+
+    Raises:
+        ValueError: if ``masked_only`` is set and ``session_ids`` is missing or a sample
+            has no matching mask.
     """
     gaussians_list = result.get('gaussians')
     if not gaussians_list:
@@ -885,6 +908,8 @@ def save_gaussian_pointclouds(
 
     output_dir = Path(output_dir)
     ply_dir = output_dir / 'ply'
+    if masked_only and session_ids is None:
+        raise ValueError('masked_only requires session_ids to group files per session')
 
     try:
         import open3d as o3d
@@ -899,11 +924,16 @@ def save_gaussian_pointclouds(
         if sample_indices is not None and sample_idx not in sample_indices:
             continue
 
-        xyz, rgb01, used_pixel_colors = _extract_pointcloud_xyz_rgb(result, sample_idx, gs)
+        xyz, rgb01, used_pixel_colors = _extract_pointcloud_xyz_rgb(
+            result, sample_idx, gs, drop_background=masked_only,
+        )
         if xyz.size == 0:
             continue
 
-        sample_dir = ply_dir / session_ids[sample_idx] if session_ids is not None else ply_dir
+        if masked_only:
+            sample_dir = output_dir / 'ply_masked' / session_ids[sample_idx]
+        else:
+            sample_dir = ply_dir / session_ids[sample_idx] if session_ids is not None else ply_dir
         sample_dir.mkdir(parents=True, exist_ok=True)
         if scene_names is not None:
             scene_tag = _sanitize_filename(scene_names[sample_idx])
@@ -1258,6 +1288,7 @@ def infer_sable(
     output_dir: str | Path,
     save_pointclouds: bool = True,
     save_camera_pointcloud_scene: bool = False,
+    save_masked_pointclouds: bool = False,
     save_visuals: bool = False,
     save_render_views: bool = False,
     compute_metrics: bool = False,
@@ -1279,6 +1310,10 @@ def infer_sable(
         save_pointclouds: whether to save ``.ply`` files for each batch.
         save_camera_pointcloud_scene: whether to save ``.glb`` scenes (point cloud +
             camera frustums) for each batch.
+        save_masked_pointclouds: whether to also save ``.ply`` files with background
+            points removed by the segmentation mask, under
+            ``output_dir/ply_masked/{session_id}/``.
+            Requires a segmentation mask (raises ``RuntimeError`` otherwise).
         save_visuals: whether to save render-vs-target PNG grids for each batch.
         save_render_views: whether to save one render-only PNG per view per sample, in
             addition to (or instead of) the combined grid from ``save_visuals``.
@@ -1311,6 +1346,7 @@ def infer_sable(
             - ``'output_dir'``: str path of the output directory.
             - ``'num_batches'``: number of batches processed.
             - ``'ply_files'``: list of Path objects for all saved PLY files.
+            - ``'masked_ply_files'``: list of Path objects for all saved masked PLY files.
             - ``'camera_pointcloud_scene_glb_files'``: list of Path objects for all
               saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
@@ -1344,6 +1380,7 @@ def infer_sable(
     model.eval()
 
     all_ply: list[Path] = []
+    all_masked_ply: list[Path] = []
     all_glb: list[Path] = []
     all_vis: list[Path] = []
     all_render_views: list[Path] = []
@@ -1412,7 +1449,7 @@ def infer_sable(
             target_image = result.get('target_image')
             target_mask = result.get('target_mask')
 
-            if require_segmentation_mask and target_mask is None:
+            if (require_segmentation_mask or save_masked_pointclouds) and target_mask is None:
                 raise RuntimeError(
                     "--use-segmentation-mask is set but the batch has no 'mask' key. Pass "
                     '--segmentation-root (or set training.use_segmentation.cache_root in the '
@@ -1430,6 +1467,19 @@ def infer_sable(
                     scene_names=scene_names,
                 )
                 all_ply.extend(ply_paths)
+
+            if save_masked_pointclouds:
+                masked_ply_paths = save_gaussian_pointclouds(
+                    result, output_dir, batch_idx,
+                    session_ids=(
+                        session_ids
+                        if session_ids is not None
+                        else [_parse_scene_name(name)[0] for name in scene_names]
+                    ),
+                    sample_indices=sample_indices,
+                    scene_names=scene_names, masked_only=True,
+                )
+                all_masked_ply.extend(masked_ply_paths)
 
             if save_camera_pointcloud_scene:
                 glb_paths = _save_camera_pointcloud_scene_fn(
@@ -1502,7 +1552,8 @@ def infer_sable(
 
     log_step(
         f'infer_sable: processed {num_batches} batches, '
-        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids, '
+        f'{len(all_ply)} PLY files, {len(all_masked_ply)} masked PLY files, '
+        f'{len(all_glb)} GLB scenes, {len(all_vis)} PNG grids, '
         f'{len(all_render_views)} render-only PNGs',
         level='info',
     )
@@ -1562,6 +1613,7 @@ def infer_sable(
         'output_dir': str(output_dir),
         'num_batches': num_batches,
         'ply_files': all_ply,
+        'masked_ply_files': all_masked_ply,
         'camera_pointcloud_scene_glb_files': all_glb,
         'vis_files': all_vis,
         'render_view_files': all_render_views,
