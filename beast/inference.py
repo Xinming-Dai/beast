@@ -1664,6 +1664,7 @@ def _batch_neural_rows(
 _LATENT_GATE_KEYS: dict[str, str] = {
     'frame_z': 'return_frame_cls_tokens',
     'dino_z': 'return_dino_cls',
+    'dino_z_proj': 'return_dino_cls_proj',
     'combined_z': 'return_combined_z',
     'img_tokens': 'return_img_tokens',
 }
