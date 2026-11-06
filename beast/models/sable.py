@@ -339,6 +339,23 @@ class Sable(BaseLightningModel):
         )
 
         self.dino_featurizer = DinoV3()
+        dino_dim = self.dino_featurizer.embed_dim
+        proj_type = config['model'].get('dino_cls_proj', {}).get('type', 'mlp')
+        if proj_type == 'mlp':
+            self.dino_cls_proj = nn.Sequential(
+                nn.Linear(dino_dim, self.d * 2, bias=True),
+                nn.SiLU(),
+                nn.Linear(self.d * 2, self.d, bias=True),
+                nn.LayerNorm(self.d, bias=False),
+            )
+        elif proj_type == 'linear':
+            self.dino_cls_proj = nn.Sequential(
+                nn.Linear(dino_dim, self.d, bias=True),
+                nn.LayerNorm(self.d, bias=False),
+            )
+        else:
+            raise ValueError(f"Unsupported model.dino_cls_proj.type: {proj_type!r}")
+        self.dino_cls_proj.apply(_init_weights)
 
         # transformer encoder2 and init
         self.transformer_encoder_geom = build_transformer_blocks(
@@ -782,17 +799,28 @@ class Sable(BaseLightningModel):
         #         self.ww,
         #         embedder=self.pe_embedder,
         #     )
-        dino_cls_tokens = dino_cls_tokens[batch_idx, input_idx, ...]
+
+        dino_cls_tokens_raw = dino_cls_tokens[batch_idx, input_idx, ...]
+        dino_cls_tokens_proj = self.dino_cls_proj(dino_cls_tokens_raw)
         if full_mask is not None:
-            dino_cls_tokens = dino_cls_tokens.masked_fill(full_mask.unsqueeze(-1), 0)
+            dino_cls_tokens_raw = dino_cls_tokens_raw.masked_fill(full_mask.unsqueeze(-1), 0)
+            dino_cls_tokens_proj = dino_cls_tokens_proj.masked_fill(full_mask.unsqueeze(-1), 0)
         # dino_z_out is for neural encoding
         dino_cls_out = latent_tensor_export_if_requested(
-            dino_cls_tokens,
+            dino_cls_tokens_raw,
             data,
             self.config,
             self.training,
             data_key='return_dino_cls',
             config_key='return_dino_cls',
+        )
+        dino_cls_proj_out = latent_tensor_export_if_requested(
+            dino_cls_tokens_proj,
+            data,
+            self.config,
+            self.training,
+            data_key='return_dino_cls_proj',
+            config_key='return_dino_cls_proj',
         )
 
         # image tokens masking for input views
@@ -850,10 +878,9 @@ class Sable(BaseLightningModel):
         img_tokens_input = torch.cat([img_tokens_input, plucker_emb_input], dim=-1)                           # [b, v_input*n, 2d]
         all_tokens = self.mlp_fuse(img_tokens_input)                                                          # [b, v_input*n, d]
 
-        # Each local-attention group contains its own CLS followed by its patches.
-        all_tokens = rearrange(all_tokens, 'b (v n) d -> b v n d', v=v_input)
-        all_tokens = torch.cat([dino_cls_tokens.unsqueeze(2), all_tokens], dim=2)
-        all_tokens = rearrange(all_tokens, 'b v n d -> b (v n) d')
+        # cls_tokens = repeat(self.cls_token, '1 n d -> b n d', b=b)
+        cls_tokens = dino_cls_tokens_proj
+        all_tokens = torch.cat([cls_tokens, all_tokens], dim=1)
 
         # encoder layers, predict depths and feature vectors
         all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input + v_input*n, d]
@@ -878,7 +905,7 @@ class Sable(BaseLightningModel):
             data_key='return_img_tokens',
             config_key='return_img_tokens',
         )
-        combined_z = torch.cat([frame_cls_tokens, dino_cls_tokens], dim=-1)
+        combined_z = torch.cat([frame_cls_tokens, dino_cls_tokens_raw], dim=-1)
         # combined_z_out is for neural encoding
         combined_z_out = latent_tensor_export_if_requested(
             combined_z,
@@ -1258,6 +1285,7 @@ class Sable(BaseLightningModel):
             'frame_z': cls_3d_out,
             'img_tokens': img_tokens_out,
             'dino_z': dino_cls_out,
+            'dino_z_proj': dino_cls_proj_out,
             'combined_z': combined_z_out,
         })
 

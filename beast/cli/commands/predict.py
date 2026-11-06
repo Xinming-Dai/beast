@@ -213,6 +213,12 @@ def register_parser(subparsers: Any) -> None:
         help='Save dino_z (DINO featurizer CLS tokens)',
     )
     latent_group.add_argument(
+        '--return-dino-z-proj',
+        action='store_true',
+        help='Save dino_z_proj (trainable projection of the DINO CLS tokens); independent of '
+             'the other latent types and may be combined with any of them',
+    )
+    latent_group.add_argument(
         '--return-cat-z',
         action='store_true',
         help='Save combined_z = cat([frame_z, dino_z], dim=-1)',
@@ -333,6 +339,8 @@ def _handle_sable_extract_latents(args, model, output_dir):
         latent_types = list(individual_flags)
     else:
         latent_types = [name for name, requested in individual_flags.items() if requested]
+    if getattr(args, 'return_dino_z_proj', False):
+        latent_types.append('dino_z_proj')
     if args.return_img_tokens:
         latent_types.append('img_tokens')
 
