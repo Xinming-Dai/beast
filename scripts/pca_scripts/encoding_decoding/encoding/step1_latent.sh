@@ -21,8 +21,8 @@ cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
-JOB_ID=21557552
-MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/pca_ae/$EID/$JOB_ID}"
+JOB_ID=21810401
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/pca_ae/restricted_sessions/$JOB_ID}"
 DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
 # eval-layout per-camera directories (see docs/sable/neural_extraction.md); each holds
 # <split>/interval<N>timebin<M>.png plus a <split>/frame_index_mapping.json sidecar

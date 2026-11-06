@@ -26,7 +26,7 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # configs/resnet_ae_18_cheese3d.yaml (TL/TR cameras). Unlike the IBL encoding scripts, EID here
 # is the real Cheese3D ephys session id, not a checkpoint label.
 EID="${EID:-20250523_B1_ephys-record_awake_000}"
-JOB_ID="${JOB_ID:-21707446}"
+JOB_ID="${JOB_ID:-21827024}"
 MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_18/cheese3d/$JOB_ID}"
 EVAL_FRAMES_DIR="${EVAL_FRAMES_DIR:-/work/hdd/bfsr/xdai3/cheese3d_neural/eval_frames}"
 # eval-layout per-camera directories (see docs/sable/neural_extraction.md); each holds

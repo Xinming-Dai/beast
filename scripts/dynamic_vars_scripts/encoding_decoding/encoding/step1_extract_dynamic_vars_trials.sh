@@ -24,7 +24,7 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data
 OUTPUT_DIR=/projects/bfsr/xdai3/project3d/twoview3d_ckpts/dynamic_vars
 
-EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+EID="${EID:-51e53aff-1d5d-4182-a684-aba783d50ae5}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Extracting DYNAMIC_VARS trials for eid=$EID"
 

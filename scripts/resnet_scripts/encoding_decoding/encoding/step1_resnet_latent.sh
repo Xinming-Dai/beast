@@ -20,9 +20,11 @@ cd "$REPO_ROOT"
 
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 
-EID="${EID:-ecb5520d-1358-434c-95ec-93687ecd1396}"                                              # single session ID (eid)
-JOB_ID=20861004
-MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/$EID/$JOB_ID}"
+# EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
+# EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+JOB_ID=21975992
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/resnet_ae_152/ibl_pretrain_restricted_sessions/$JOB_ID}"
 DATASET_BASE=/work/hdd/bfsr/xdai3/IBL_data/synchronized
 # eval-layout per-camera directories (see docs/sable/neural_extraction.md); each holds
 # <split>/interval<N>timebin<M>.png plus a <split>/frame_index_mapping.json sidecar

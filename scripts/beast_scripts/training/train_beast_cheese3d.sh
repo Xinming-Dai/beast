@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=20G
-#SBATCH -t 0-11:59:00
+#SBATCH -t 0-24:00:00
 #SBATCH -J beast_cheese3d
 #SBATCH -o /u/xdai3/project3d/SABLE_repo_3/beast/scripts/beast_scripts/training/train_beast_cheese3d_%j.log
 #SBATCH --export=ALL

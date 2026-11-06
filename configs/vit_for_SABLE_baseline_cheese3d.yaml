@@ -40,7 +40,7 @@ training:
   train_batch_size: 24    # per GPU
   val_batch_size: 24
   test_batch_size: 24
-  num_epochs: 280  # matches SABLE's 15710 steps (batch_size_per_gpu=16) on this dataset
+  num_epochs: 400  # matches SABLE's 15710 steps (batch_size_per_gpu=16) on this dataset
   num_workers: 8  # Number of CPU workers for the DataLoader
   num_gpus: 1
   num_nodes: 1

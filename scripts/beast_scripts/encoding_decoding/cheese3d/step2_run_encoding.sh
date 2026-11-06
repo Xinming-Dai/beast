@@ -25,7 +25,7 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/cheese3d_neural/neural_data   # root dir of neural (spike) data
 
 EID="${EID:-20250523_B1_ephys-record_awake_000}"
-JOB_ID="${JOB_ID:-21732171}"
+JOB_ID="${JOB_ID:-21827020}"
 LATENT_KIND="${1:-${LATENT_KIND:-frame}}"                  # frame | dino | combined
 LATENT_INPUT_DIR=/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit/cheese3d/$JOB_ID/latents
 

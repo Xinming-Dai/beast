@@ -23,10 +23,10 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # Neural encoding: predicts neural activity from PCA autoencoder latents (RRR/CNN, via Ray Tune).
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data   # root dir of neural (spike) data
 
-JOB_ID=00000000
+JOB_ID=21810401
 LATENT_KIND="${1:-${LATENT_KIND:-frame}}"                  # frame | dino | combined
-EID="${2:-${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}}"
-LATENT_INPUT_DIR=/projects/bfsr/xdai3/project3d/twoview3d_ckpts/pca_ae/$EID/$JOB_ID/latents
+EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+LATENT_INPUT_DIR=/projects/bfsr/xdai3/project3d/twoview3d_ckpts/pca_ae/restricted_sessions/$JOB_ID/latents
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural encoding for eid=$EID with latent_kind=$LATENT_KIND"
 echo "LATENT_INPUT_DIR=$LATENT_INPUT_DIR"

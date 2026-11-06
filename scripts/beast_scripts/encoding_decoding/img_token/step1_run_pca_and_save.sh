@@ -3,7 +3,7 @@
 #SBATCH --job-name="beast_pca_compress"
 #SBATCH --partition=cpu
 #SBATCH -c 1
-#SBATCH --mem 120G
+#SBATCH --mem 110G
 #SBATCH -t 0-00:59:00
 #SBATCH --export=ALL
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/beast_scripts/encoding_decoding/img_token/step1_run_pca_and_save_%j.log
@@ -25,9 +25,11 @@ export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
 # --input-dir instead of --combined-trials-*-npz. run_pca_and_save.py itself is unchanged.
 # Produces img_tokens_pca_joint.npz + img_tokens_compressed_trials.npz under MODEL_ROOT,
 # consumed by step2_run_decoding.sh's LATENT_INPUT_DIR.
-EID="${EID:-f312aaec-3b6f-44b3-86b4-3a0c119c0438}"
-JOB_ID=20668699
-MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_large/$EID/$JOB_ID}"
+EID="${EID:-4b00df29-3769-43be-bb40-128b1cba6d35}"
+# EID="${EID:-72cb5550-43b4-4ef0-add5-e4adfdfb5e02}"
+# EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
+JOB_ID=21975990
+MODEL_DIR="${MODEL_DIR:-/projects/bfsr/xdai3/project3d/twoview3d_ckpts/beast_vit_large/ibl_pretrain_restricted_sessions/$JOB_ID}"
 INPUT_DIR="${INPUT_DIR:-$MODEL_DIR/latents/img_tokens}"     # root of img_tokens_batch*.npz shards
 # no /$EID suffix here: --session-names below already selects INPUT_DIR/$EID as the per-session
 # input, and run_pca_and_save.py's --input-dir loop appends session_name once under this anchor
