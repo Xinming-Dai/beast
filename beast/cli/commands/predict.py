@@ -232,9 +232,9 @@ def register_parser(subparsers: Any) -> None:
     latent_group.add_argument(
         '--return-all-z',
         action='store_true',
-        help='Shorthand for --return-frame-z --return-dino-z --return-cat-z; '
-             'mutually exclusive with the individual --return-frame-z/--return-dino-z/'
-             '--return-cat-z flags',
+        help='Shorthand for --return-frame-z --return-dino-z --return-cat-z '
+             '--return-dino-z-proj; mutually exclusive with the individual '
+             '--return-frame-z/--return-dino-z/--return-cat-z flags',
     )
     latent_group.add_argument(
         '--no-resume',
@@ -336,10 +336,10 @@ def _handle_sable_extract_latents(args, model, output_dir):
         return
 
     if args.return_all_z:
-        latent_types = list(individual_flags)
+        latent_types = list(individual_flags) + ['dino_z_proj']
     else:
         latent_types = [name for name, requested in individual_flags.items() if requested]
-    if getattr(args, 'return_dino_z_proj', False):
+    if getattr(args, 'return_dino_z_proj', False) and 'dino_z_proj' not in latent_types:
         latent_types.append('dino_z_proj')
     if args.return_img_tokens:
         latent_types.append('img_tokens')

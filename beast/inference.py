@@ -2001,8 +2001,8 @@ def extract_sable_latents(
         config: full beast config dict (same as used for training).
         model: trained Sable Lightning model instance.
         output_dir: root directory for per-latent-type subdirectories.
-        latent_types: subset of ``['frame_z', 'dino_z', 'combined_z', 'img_tokens']``; ``None``
-            exports all four (the ``--return-all-z`` analog).
+        latent_types: subset of ``['frame_z', 'dino_z', 'dino_z_proj', 'combined_z',
+            'img_tokens']``; ``None`` exports all five.
         max_batches: stop after this many batches per split.  ``None`` runs the full dataset.
         include_splits: IBL splits to load and process, in order (e.g. ``['train', 'val']``).
             Defaults to ``'train'``, ``'val'``, and ``'test'``.
