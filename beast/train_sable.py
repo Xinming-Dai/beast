@@ -2,6 +2,7 @@
 
 import importlib
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -243,6 +244,42 @@ class StepAccumulatorCallback(pl.Callback):
         checkpoint['total_steps_trained'] = trainer.global_step + self._steps_before
 
 
+class TimeLimitCallback(pl.Callback):
+    """Stops training gracefully once this process has run for ``max_minutes``.
+
+    Used for chained short jobs (e.g. 1-hour interactive-partition allocations): the
+    run stops before the walltime so the caller can save a resumable checkpoint and
+    the next job in the chain picks up from it. Unlike ``lightning.pytorch.callbacks.Timer``
+    the elapsed time is never restored from a checkpoint, so each job gets a full budget.
+
+    Args:
+        max_minutes: wall-clock budget for this process, measured from construction.
+    """
+
+    def __init__(self, max_minutes: float) -> None:
+        """Initialize the budget and start the clock."""
+        super().__init__()
+        self._deadline = time.monotonic() + max_minutes * 60.0
+        self.triggered = False
+
+    def on_train_batch_end(
+        self,
+        trainer: pl.Trainer,
+        _pl_module: pl.LightningModule,
+        _outputs: dict,
+        _batch: dict,
+        _batch_idx: int,
+    ) -> None:
+        """Request a stop at the end of the first batch past the deadline."""
+        if time.monotonic() >= self._deadline and not self.triggered:
+            self.triggered = True
+            trainer.should_stop = True
+            log_step(
+                f'Time limit reached at global_step={trainer.global_step}; stopping training',
+                level='warning',
+            )
+
+
 class SamplerStateCallback(pl.Callback):
     """Persists and restores the train sampler's position across checkpoint resumes.
 
@@ -449,6 +486,13 @@ def train_sable(config: dict, model, output_dir: str | Path):
     callbacks.append(StepAccumulatorCallback(callback_step_offset))
     callbacks.append(SamplerStateCallback(train_sampler))
 
+    # optional wall-clock budget for chained short jobs, see TimeLimitCallback
+    max_run_minutes = float(training.get('max_run_minutes', 0) or 0)
+    time_limit_callback: TimeLimitCallback | None = None
+    if max_run_minutes > 0:
+        time_limit_callback = TimeLimitCallback(max_run_minutes)
+        callbacks.append(time_limit_callback)
+
     precision: str | int = 32
     if training.get('use_amp', False):
         amp_dtype = str(training.get('amp_dtype', 'bf16')).lower()
@@ -493,7 +537,22 @@ def train_sable(config: dict, model, output_dir: str | Path):
     )
     log_step('trainer.fit() completed', level='debug')
 
+    total_steps_trained = trainer.global_step + callback_step_offset
+    last_ckpt_path = output_dir / 'last.ckpt'
+    trainer.save_checkpoint(last_ckpt_path)
+
     if not trainer.is_global_zero:
         sys.exit(0)
+
+    log_step(
+        f'Saved resumable checkpoint to {last_ckpt_path} '
+        f'(total_steps_trained={total_steps_trained})',
+        level='info',
+    )
+    if time_limit_callback is not None and time_limit_callback.triggered:
+        log_step('Training paused by time limit; resume from last.ckpt', level='warning')
+    elif total_steps_trained >= max_fwdbwd_passes:
+        (output_dir / 'training_complete').touch()
+        log_step(f'Training complete after {total_steps_trained} steps', level='info')
 
     return model
