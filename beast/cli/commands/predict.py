@@ -203,6 +203,15 @@ def register_parser(subparsers: Any) -> None:
         help='Extract per-pair latent tensors instead of PLY/GLB/PNG outputs',
     )
     latent_group.add_argument(
+        '--extract-dino-patches',
+        action='store_true',
+        help=(
+            'Extract frozen DINO patch tokens only (baseline). Reads just <model>/config.yaml '
+            'for dataset settings; the Sable checkpoint is never loaded and no Sable forward '
+            'runs. Saved as dino_patch_tokens/ in the same layout as img_tokens'
+        ),
+    )
+    latent_group.add_argument(
         '--return-frame-z',
         action='store_true',
         help='Save frame_z (3D-aware frame CLS tokens)',
@@ -255,6 +264,11 @@ def register_parser(subparsers: Any) -> None:
 def handle(args: argparse.Namespace) -> None:
     """Handle the predict command execution."""
 
+    # branch before Model.from_dir, which would build the full Sable and load its checkpoint
+    if getattr(args, 'extract_dino_patches', False):
+        _handle_dino_patches(args)
+        return
+
     from beast.api.model import Model
     from beast.models.sable import Sable
 
@@ -268,6 +282,56 @@ def handle(args: argparse.Namespace) -> None:
         _handle_sable(args, model)
     else:
         _handle_video_or_images(args, model)
+
+
+def _handle_dino_patches(args: argparse.Namespace) -> None:
+    """Extract frozen DINO patch tokens without building or loading the Sable model.
+
+    Only ``<model>/config.yaml`` is read, to build the same dataset (image size, preprocessing,
+    session list) the Sable latents were extracted from.
+
+    Args:
+        args: parsed ``beast predict`` arguments.
+    """
+    import torch
+
+    from beast.inference import extract_dino_patch_tokens
+    from beast.io import load_config
+    from beast.models.model_utils.utils_dino import DinoV3
+
+    if args.input is None:
+        _logger.error('--extract-dino-patches requires --input')
+        return
+
+    config = load_config(args.model / 'config.yaml')
+    config['inference'] = True
+    config['training'] = {**config.get('training', {}), 'dataset_path': str(args.input)}
+    if args.session_names is not None:
+        config['training']['session_names'] = args.session_names
+    # the dataset class requires both cache roots to be set, even though DINO never reads them
+    if args.vda_cache_root is not None:
+        config['model']['vda'] = {**config['model'].get('vda', {})}
+        config['model']['vda']['cache_root'] = str(args.vda_cache_root)
+    if args.correspondence_cache_root is not None:
+        config['model']['merge_pcd'] = {**config['model'].get('merge_pcd', {})}
+        config['model']['merge_pcd']['correspondence_cache_root'] = str(
+            args.correspondence_cache_root,
+        )
+
+    output_dir = args.output or args.model / 'inference'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    _logger.info(f'Extracting DINO patch tokens from: {args.input}')
+    _logger.info(f'Output directory: {output_dir}')
+
+    extract_dino_patch_tokens(
+        config=config,
+        dino=DinoV3().to(device),
+        output_dir=output_dir,
+        max_batches=args.max_batches,
+        include_splits=args.splits,
+        resume=not args.no_resume,
+        batch_size=args.latent_batch_size,
+    )
 
 
 def _handle_sable(args, model):
