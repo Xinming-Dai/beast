@@ -20,6 +20,7 @@ trial and bin can be read straight off the filename and files list in bin order.
 
 import argparse
 import copy
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -641,6 +642,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Run the decode-and-render pipeline end to end (CLI entry point)."""
     args = parse_args(argv)
+
+    # `python -m` runs bypass the beast CLI's logging setup; without a handler every
+    # log_step() progress message is silently dropped
+    if not logging.getLogger('beast').hasHandlers():
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)-5s %(name)s : %(message)s',
+            stream=sys.stdout,
+            force=True,
+        )
 
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

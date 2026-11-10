@@ -103,10 +103,13 @@ FINETUNE_ARGS=(
 [ -n "$VDA_CACHE_ROOT" ] && FINETUNE_ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && FINETUNE_ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
 
-python -m beast.sable_encoding_decoding.render.decode_and_render "${FINETUNE_ARGS[@]}" || { echo "ERROR: finetuning failed" >&2; exit 1; }
-
-# decoding and rendering with finetuned decoder on test split
-cp "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/config.yaml" "$FINETUNE_DIR/config.yaml"
+if [ "${FORCE_FINETUNE:-false}" != true ] && [ -f "$FINETUNE_DIR/finetuned_decoder_best.ckpt" ] && [ -f "$FINETUNE_DIR/config.yaml" ]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Finetuned checkpoint exists; skipping finetune: $FINETUNE_DIR/finetuned_decoder_best.ckpt"
+else
+    python -m beast.sable_encoding_decoding.render.decode_and_render "${FINETUNE_ARGS[@]}" || { echo "ERROR: finetuning failed" >&2; exit 1; }
+    # decoding and rendering with finetuned decoder on test split
+    cp "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/config.yaml" "$FINETUNE_DIR/config.yaml"
+fi
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Scoring test split with finetuned decoder for eid=$EID"
 
