@@ -4,6 +4,10 @@ Uses ``compressed_pred_from_decoder_result`` + ``pca_unproject`` (see
 ``docs/ibl_encoding_decoding.md`` step 5). Writes per-trial batch npz files under
 ``--out-root/<eid>/<split>/`` (one directory per requested split, e.g. ``val``, ``test``)
 matching inference-style batching (one trial per file).
+
+With ``--mean-baseline`` the neural decoder output is not used: every frame's token is replaced
+by the train-split session mean token (``x_session_avg`` in the PCA bundle). The output files
+have the same layout, so the rendering stage can score them against the real frames unchanged.
 """
 
 import argparse
@@ -177,8 +181,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         '--decoding-npy',
         type=Path,
-        required=True,
-        help='decoding_results_img_tokens_compressed.npy from the neural decoder test step.',
+        default=None,
+        help=(
+            'decoding_results_img_tokens_compressed.npy from the neural decoder test step. '
+            'Required unless --mean-baseline is set.'
+        ),
+    )
+    ap.add_argument(
+        '--mean-baseline',
+        action='store_true',
+        help=(
+            'Ignore the neural decoder output and write the train-split session mean token '
+            '(x_session_avg) for every frame, as a mean-appearance baseline.'
+        ),
     )
     ap.add_argument(
         '--pca-npz', type=Path, required=True, help='img_tokens_pca_joint.npz from PCA step',
@@ -215,41 +230,54 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             'img_tokens_estimated_neuraltrialXXXX.npz (one file per requested id).'
         ),
     )
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.decoding_npy is None and not args.mean_baseline:
+        ap.error('--decoding-npy is required unless --mean-baseline is set')
+    return args
 
 
 def _unproject_one_split(
     split: str,
     *,
     eid: str,
-    decoding_npy: Path,
+    decoding_npy: Path | None,
     trials_path: Path,
     pca,
     z_avg: np.ndarray,
     z_std: np.ndarray,
     out_root: Path,
     neural_filter: list[int] | None,
+    mean_baseline: bool = False,
 ) -> None:
     """Unproject one split's neural-decoded compressed tokens and write per-trial `.npz` files.
 
     Args:
         split: split name (`'val'` or `'test'`).
         eid: session id.
-        decoding_npy: path to the neural decoder's `decoding_results_img_tokens_compressed.npy`.
+        decoding_npy: path to the neural decoder's `decoding_results_img_tokens_compressed.npy`;
+            unused (may be `None`) when `mean_baseline` is set.
         trials_path: resolved path to `img_tokens_compressed_trials.npz`.
         pca: fitted sklearn PCA model.
         z_avg: session mean used to denormalize (broadcastable to the full token shape).
         z_std: session std used to denormalize.
         out_root: root directory; output is written under `out_root/eid/split/`.
         neural_filter: optional list of neural trial ids to restrict output to.
+        mean_baseline: if true, write `z_avg` for every time bin instead of the decoded tokens.
 
     Raises:
         KeyError: if `trials_path` lacks `{split}_z_trials_time`.
-        ValueError: if shapes disagree between the decoder's `pred` and the split's tokens.
+        ValueError: if shapes disagree between the decoder's `pred` and the split's tokens, if
+            `decoding_npy` is missing when not in `mean_baseline` mode, or if `z_avg` is not
+            `(1, 1, L, D)` in `mean_baseline` mode.
     """
     t0 = time.perf_counter()
-    cnn = _load_decoding_payload(decoding_npy, eid, split)
-    pred = np.asarray(cnn['pred'], dtype=np.float64)
+    cnn = None
+    pred = None
+    if not mean_baseline:
+        if decoding_npy is None:
+            raise ValueError('decoding_npy is required unless mean_baseline is set')
+        cnn = _load_decoding_payload(decoding_npy, eid, split)
+        pred = np.asarray(cnn['pred'], dtype=np.float64)
     with np.load(trials_path, allow_pickle=True) as d:
         keys = set(d.files)
         split_z_key = f'{split}_z_trials_time'
@@ -275,32 +303,42 @@ def _unproject_one_split(
     split_mask = np.array([str(t).lower() == split for t in trial_split_all], dtype=bool)
     neural_idx_split = neural_idx_all[split_mask]
 
-    k, t_bins, le = pred.shape
     _, _, l_tok, k_comp = split_z.shape
-    if le != l_tok * k_comp:
-        raise ValueError(
-            f"[split={split!r}] pred last dim {le} != L*k_comp ({l_tok}*{k_comp}); "
-            'check PCA n_feat_keep matches decoding.',
-        )
+    z_pred_k = None
+    if mean_baseline:
+        k, t_bins = split_z.shape[:2]
+        if z_avg.ndim != 4 or z_avg.shape[:2] != (1, 1) or z_avg.shape[2] != l_tok:
+            raise ValueError(
+                f"[split={split!r}] mean baseline needs z_avg of shape (1, 1, {l_tok}, D); "
+                f'got {z_avg.shape}',
+            )
+    else:
+        k, t_bins, le = pred.shape
+        if le != l_tok * k_comp:
+            raise ValueError(
+                f"[split={split!r}] pred last dim {le} != L*k_comp ({l_tok}*{k_comp}); "
+                'check PCA n_feat_keep matches decoding.',
+            )
 
-    if k != split_z.shape[0]:
-        raise ValueError(
-            f"[split={split!r}] pred trials K={k} != {split_z_key} rows {split_z.shape[0]}",
+        if k != split_z.shape[0]:
+            raise ValueError(
+                f"[split={split!r}] pred trials K={k} != {split_z_key} rows {split_z.shape[0]}",
+            )
+        z_pred_k = compressed_pred_from_decoder_result(
+            {eid: cnn}, eid, n_tokens=l_tok, n_comp=k_comp,
         )
     if len(neural_idx_split) != k:
         raise ValueError(
-            f"[split={split!r}] neural_idx_split len {len(neural_idx_split)} != pred K={k}",
+            f"[split={split!r}] neural_idx_split len {len(neural_idx_split)} != trials K={k}",
         )
 
     row_orig: list[int] | None = None
-    z_pred_k = compressed_pred_from_decoder_result(
-        {eid: cnn}, eid, n_tokens=l_tok, n_comp=k_comp,
-    )
     if neural_filter is not None:
         t0 = time.perf_counter()
         row_orig = indices_for_neural_trials(neural_idx_split, neural_filter)
         ix = np.asarray(row_orig, dtype=np.int64)
-        z_pred_k = np.asarray(z_pred_k[ix], dtype=np.float64)
+        if z_pred_k is not None:
+            z_pred_k = np.asarray(z_pred_k[ix], dtype=np.float64)
         neural_idx_split = neural_idx_split[ix]
         if split_iv is not None:
             split_iv = split_iv[ix]
@@ -313,15 +351,19 @@ def _unproject_one_split(
     out_dir = out_root / eid / split
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    k_out = int(z_pred_k.shape[0])
+    k_out = len(neural_idx_split)
     t0 = time.perf_counter()
+    what = 'Writing mean-baseline' if mean_baseline else 'Unprojecting and writing'
     log_step(
-        f"[split={split!r}] Unprojecting and writing {k_out} trial(s) one at a time to keep "
-        'peak memory low',
+        f"[split={split!r}] {what} {k_out} trial(s) one at a time to keep peak memory low",
         level='info',
     )
     for j in range(k_out):
-        slab = pca_unproject(pca, z_pred_k[j : j + 1], z_avg, z_std)
+        if mean_baseline:
+            # the exact session mean token, repeated for every time bin
+            slab = np.broadcast_to(z_avg, (1, t_bins, l_tok, z_avg.shape[-1]))
+        else:
+            slab = pca_unproject(pca, z_pred_k[j : j + 1], z_avg, z_std)
         slab = np.asarray(slab, dtype=np.float32)
         row_in_full = int(row_orig[j]) if row_orig is not None else j
         ni = int(neural_idx_split[j])
@@ -332,7 +374,10 @@ def _unproject_one_split(
             'meta_json': json.dumps(
                 {
                     'source': 'unproject.py',
-                    'decoding_npy': str(decoding_npy.resolve()),
+                    'decoding_npy': (
+                        str(decoding_npy.resolve()) if decoding_npy is not None else None
+                    ),
+                    'mean_baseline': mean_baseline,
                     'pca_npz': str(trials_path.resolve()),
                     'compressed_trials_npz': str(trials_path.resolve()),
                     'trial_row_in_split': row_in_full,
@@ -408,6 +453,7 @@ def main(argv: list[str] | None = None) -> None:
             z_std=z_std,
             out_root=args.out_root,
             neural_filter=neural_filter,
+            mean_baseline=args.mean_baseline,
         )
 
     log_step(

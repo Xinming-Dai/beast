@@ -75,7 +75,7 @@ SUBDIR=latents/img_tokens_compressed/$EID
 ESTIMATED_ROOT="$MODEL_ROOT/$SUBDIR/img_tokens_compressed_estimated/$EID"
 CAMERA_NPZ="$MODEL_ROOT/$SUBDIR/img_tokens_camera_parameters.npz"
 PRECACHED_VIDEO_ROOT="/work/hdd/bfsr/xdai3/IBL_data/synchronized"
-USE_MASK=false
+USE_MASK="${USE_MASK:-true}"
 SEGMENTATION_ROOT="$PRECACHED_VIDEO_ROOT/extracted_frames_for_eyz/eval"
 
 # finetune decoder on val split for one epoch
@@ -106,7 +106,7 @@ FINETUNE_ARGS=(
 python -m beast.sable_encoding_decoding.render.decode_and_render "${FINETUNE_ARGS[@]}"
 
 # decoding and rendering with finetuned decoder on test split
-cp "$MODEL_ROOT/config.yaml" "$FINETUNE_DIR/config.yaml"
+cp "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/config.yaml" "$FINETUNE_DIR/config.yaml"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Scoring test split with finetuned decoder for eid=$EID"
 
