@@ -26,7 +26,8 @@ cd "$REPO_ROOT"
 #     scripts/sable_scripts/encoding_decoding/img_token/step2_run_decoding.sh
 EID="${EID:-781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data
-LATENT_INPUT_DIR="/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/21576301/latents"   # root dir of latent data
+JOB_ID="${JOB_ID:-21047248}"
+LATENT_INPUT_DIR="${LATENT_INPUT_DIR:-/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/latents}"   # root dir of latent data
 LATENT_KIND=img_tokens_compressed
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Running neural decoding for eid=$EID"

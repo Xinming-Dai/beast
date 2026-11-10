@@ -28,7 +28,7 @@ cd "$REPO_ROOT"
 # Fill these in (or export before sbatch, e.g.:
 #   sbatch --export=ALL,INPUT_DIR=...,MODEL_ROOT=... \
 #     scripts/sable_scripts/encoding_decoding/img_token/step1_run_pca_and_save.sh
-JOB_ID="21576301"
+JOB_ID="${JOB_ID:-21047248}"
 MODEL_ROOT="${MODEL_ROOT:-/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/latents}"                    # output paths
 INPUT_DIR="$MODEL_ROOT/img_tokens"                          # inference dir of img_tokens_batch*.npz shards
 STAGE="${STAGE:-all}"                                       # 1 | 2 | all
