@@ -28,7 +28,8 @@ SCRIPT_DIR="$REPO_ROOT/scripts/sable_scripts/encoding_decoding/img_token"
 JOB_ID="${JOB_ID:-21047248}"
 EIDS="${EIDS:-4b00df29-3769-43be-bb40-128b1cba6d35 72cb5550-43b4-4ef0-add5-e4adfdfb5e02 781b35fd-e1f0-4d14-b2bb-95b7263082bb}"
 GPU_ACCOUNT="${GPU_ACCOUNT:-bezq-delta-gpu}"
-CPU_ACCOUNT="${CPU_ACCOUNT:-bfsr-delta-cpu}"
+CPU_ACCOUNT="${CPU_ACCOUNT:-beez-delta-cpu}"
+START_AT="${START_AT:-step1}"
 
 DRY_COUNT=0
 
@@ -59,6 +60,13 @@ all_final_jobs=()
 for eid in $EIDS; do
     env_vars="EID=$eid,JOB_ID=$JOB_ID"
 
+    if [ "$START_AT" = step4b ]; then
+        submit "$GPU_ACCOUNT" "" "$env_vars" "$SCRIPT_DIR/step4b_finetune_decoder.sh"; s4b=$JOB
+        submit "$GPU_ACCOUNT" "$s4b" "$env_vars" "$SCRIPT_DIR/step4d_eval_mean_baseline.sh"; s4d=$JOB
+        echo "[$eid] step4b=$s4b -> step4d=$s4d"
+        all_final_jobs+=("$s4b" "$s4d")
+        continue
+    fi
     submit "$CPU_ACCOUNT" "" "$env_vars,SESSION_NAMES=$eid" "$SCRIPT_DIR/step1_run_pca_and_save.sh"; s1=$JOB
     submit "$GPU_ACCOUNT" "$s1" "$env_vars" "$SCRIPT_DIR/step2_run_decoding.sh"; s2=$JOB
     submit "$CPU_ACCOUNT" "$s2" "$env_vars" "$SCRIPT_DIR/step3_unproject.sh"; s3=$JOB
