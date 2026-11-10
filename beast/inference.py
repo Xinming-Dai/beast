@@ -2215,6 +2215,166 @@ def extract_sable_latents(
     }
 
 
+DINO_PATCH_LATENT_TYPE = 'dino_patch_tokens'
+
+
+def extract_dino_patch_tokens(
+    config: dict,
+    dino: torch.nn.Module,
+    output_dir: str | Path,
+    max_batches: int | None = None,
+    include_splits: list[str] | None = None,
+    resume: bool = True,
+    batch_size: int | None = None,
+) -> dict:
+    """Extract and save frozen DINO patch tokens with the same layout as Sable latents.
+
+    Runs only the frozen DINO featurizer (no Sable pose encoder, geometry transformer, decoder
+    or renderer) over the same dataset rows, in the same batch order, as
+    ``extract_sable_latents``. Each batch is saved as
+    ``output_dir/dino_patch_tokens/<session_id>/<split>/dino_patch_tokens_batch{idx:04d}.npz``
+    with the same row metadata, so the downstream encoding/decoding stages can consume it like
+    ``img_tokens``. Like ``img_tokens``, the per-batch shards are the deliverable: they are never
+    combined into a trials tensor or deleted.
+
+    Args:
+        config: full beast config dict (same as used for training).
+        dino: frozen DINO featurizer whose forward takes ImageNet-normalized images
+            ``[b, v, 3, h, w]`` and returns ``(patch_tokens [b, v, n, d], cls_tokens)``, e.g.
+            ``beast.models.model_utils.utils_dino.DinoV3``.
+        output_dir: root directory for the ``dino_patch_tokens`` subdirectory.
+        max_batches: stop after this many batches per split. ``None`` runs the full dataset.
+        include_splits: IBL splits to process, in order. Defaults to ``'train'``, ``'val'``,
+            and ``'test'``.
+        resume: when ``True`` (default), skip batches whose files already exist.
+        batch_size: overrides ``training.batch_size_per_gpu``. Must stay the same across
+            resumed runs against the same ``output_dir``.
+
+    Returns:
+        dict with keys ``'output_dir'``, ``'num_batches'``, ``'num_batches_skipped'`` and
+        ``'saved_files'`` (list of saved Path objects).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    splits_to_process = include_splits or ['train', 'val', 'test']
+    resolved_batch_size = _resolve_batch_size(config['training'], batch_size)
+
+    device = next(dino.parameters()).device
+    dino.eval()
+
+    num_batches = 0
+    num_batches_skipped = 0
+    saved_files: list[Path] = []
+
+    with torch.no_grad():
+        for split_name in splits_to_process:
+            dataset = _build_sable_dataset(config, include_splits=[split_name])
+            if len(dataset) == 0:
+                log_step(
+                    f'extract_dino_patch_tokens: split {split_name!r} has no records, skipping',
+                    level='info',
+                )
+                continue
+
+            num_total_batches = _num_batches_for(len(dataset), resolved_batch_size)
+            session_ids_by_batch = [
+                _batch_session_ids(dataset._records, b, resolved_batch_size)
+                for b in range(num_total_batches)
+            ]
+            resume_start = (
+                _resume_batch_start(
+                    output_dir, [DINO_PATCH_LATENT_TYPE], session_ids_by_batch, split_name,
+                )
+                if resume
+                else 0
+            )
+            effective_start = (
+                min(resume_start, max_batches) if max_batches is not None else resume_start
+            )
+            log_step(
+                f'extract_dino_patch_tokens: split {split_name!r} has {num_total_batches} '
+                f'batches total (resuming from batch {effective_start})',
+                level='info',
+            )
+
+            num_batches_skipped += effective_start
+            for b in range(effective_start):
+                for session_id in session_ids_by_batch[b]:
+                    path = _batch_output_path(
+                        output_dir, DINO_PATCH_LATENT_TYPE, session_id, split_name, b,
+                    )
+                    if path.is_file():
+                        saved_files.append(path)
+
+            _, loader = _build_sable_inference_loader(
+                config,
+                include_splits=[split_name],
+                batch_size=resolved_batch_size,
+                start_row=effective_start * resolved_batch_size,
+                dataset=dataset,
+            )
+
+            for local_idx, batch in enumerate(loader):
+                batch_idx = effective_start + local_idx
+                if max_batches is not None and batch_idx >= max_batches:
+                    break
+
+                row_ids = [_parse_scene_name(scene_name) for scene_name in batch['scene_name']]
+                session_ids = [session_id for session_id, _ in row_ids]
+                pair_idxs = [pair_idx for _, pair_idx in row_ids]
+                splits = list(batch['split'])
+                neural_trial_idx = batch['neural_trial_idx'].cpu().numpy().tolist()
+                neural_bin_idx = batch['neural_bin_idx'].cpu().numpy().tolist()
+                neural_interval_sec = batch['neural_interval_sec'].cpu().numpy()
+
+                # images are in [0, 1]; normalize exactly as Sable does before its DINO call
+                images = batch['image'].to(device)
+                mean = images.new_tensor(_IMAGENET_MEAN).view(1, 1, 3, 1, 1)
+                std = images.new_tensor(_IMAGENET_STD).view(1, 1, 3, 1, 1)
+                patch_tokens, _ = dino((images - mean) / std)
+                # [b, v, n, d] -> [b, v * n, d], same flattening as the Sable img_tokens export
+                z_np = patch_tokens.flatten(1, 2).detach().float().cpu().numpy()
+
+                session_row_groups: dict[str, list[int]] = {}
+                for row_idx, session_id in enumerate(session_ids):
+                    session_row_groups.setdefault(session_id, []).append(row_idx)
+
+                for session_id, rows in session_row_groups.items():
+                    path = _batch_output_path(
+                        output_dir, DINO_PATCH_LATENT_TYPE, session_id, split_name, batch_idx,
+                    )
+                    _save_latent_batch_npz(
+                        path,
+                        z=z_np[rows],
+                        session_ids=[session_ids[i] for i in rows],
+                        pair_idxs=[pair_idxs[i] for i in rows],
+                        splits=[splits[i] for i in rows],
+                        neural_trial_idx=[neural_trial_idx[i] for i in rows],
+                        neural_bin_idx=[neural_bin_idx[i] for i in rows],
+                        neural_interval_sec=neural_interval_sec[rows],
+                    )
+                    saved_files.append(path)
+                    log_step(
+                        f'extract_dino_patch_tokens: [{split_name}] batch '
+                        f'{batch_idx + 1}/{num_total_batches} saved -> {path}',
+                        level='info',
+                    )
+
+                num_batches += 1
+
+    log_step(
+        f'extract_dino_patch_tokens: processed {num_batches} batches '
+        f'({num_batches_skipped} skipped via resume) across splits {splits_to_process}',
+        level='info',
+    )
+    return {
+        'output_dir': str(output_dir),
+        'num_batches': num_batches,
+        'num_batches_skipped': num_batches_skipped,
+        'saved_files': saved_files,
+    }
+
+
 def _combine_and_cleanup_sessions(
     output_dir: Path,
     latent_types: list[str],
