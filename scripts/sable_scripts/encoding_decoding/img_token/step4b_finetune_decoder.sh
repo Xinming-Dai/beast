@@ -103,7 +103,7 @@ FINETUNE_ARGS=(
 [ -n "$VDA_CACHE_ROOT" ] && FINETUNE_ARGS+=(--vda-cache-root "$VDA_CACHE_ROOT")
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && FINETUNE_ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
 
-python -m beast.sable_encoding_decoding.render.decode_and_render "${FINETUNE_ARGS[@]}"
+python -m beast.sable_encoding_decoding.render.decode_and_render "${FINETUNE_ARGS[@]}" || { echo "ERROR: finetuning failed" >&2; exit 1; }
 
 # decoding and rendering with finetuned decoder on test split
 cp "/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions/$JOB_ID/config.yaml" "$FINETUNE_DIR/config.yaml"
@@ -127,6 +127,6 @@ EVAL_ARGS=(
 [ -n "$CORRESPONDENCE_CACHE_ROOT" ] && EVAL_ARGS+=(--correspondence-cache-root "$CORRESPONDENCE_CACHE_ROOT")
 [ "$USE_MASK" = true ] && EVAL_ARGS+=(--use-segmentation-mask --segmentation-root "$SEGMENTATION_ROOT")
 
-python -m beast.sable_encoding_decoding.render.decode_and_render "${EVAL_ARGS[@]}"
+python -m beast.sable_encoding_decoding.render.decode_and_render "${EVAL_ARGS[@]}" || { echo "ERROR: test scoring failed" >&2; exit 1; }
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Done finetuning decoder and scoring test for eid=$EID"
 conda deactivate
