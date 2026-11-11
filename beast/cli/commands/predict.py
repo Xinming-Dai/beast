@@ -87,6 +87,20 @@ def register_parser(subparsers: Any) -> None:
         help='Save render-vs-target PNG grids alongside PLY point clouds',
     )
     sable_group.add_argument(
+        '--save-renders',
+        action='store_true',
+        help=(
+            'Save the full-context render and ground-truth PNG of every view under '
+            '<output>/renders/<session>/<camera>/ and <output>/gt/<session>/<camera>/ '
+            '(same file names, for computing PSNR/SSIM)'
+        ),
+    )
+    sable_group.add_argument(
+        '--no-pointclouds',
+        action='store_true',
+        help='Skip saving PLY point clouds (default: PLY files are saved)',
+    )
+    sable_group.add_argument(
         '--save-camera-pointcloud-scene',
         action='store_true',
         help=(
@@ -219,10 +233,12 @@ def _handle_sable(args, model):
         correspondence_cache_root=args.correspondence_cache_root,
         splits=args.splits,
         save_visuals=args.save_visuals,
+        save_pointclouds=not args.no_pointclouds,
         save_camera_pointcloud_scene=args.save_camera_pointcloud_scene,
         load_gt_camera_params_for_vis=args.load_gt_camera_params_for_vis,
         max_batches=args.max_batches,
         session_names=args.session_names,
+        save_renders=args.save_renders,
     )
 
 

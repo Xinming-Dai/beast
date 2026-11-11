@@ -904,6 +904,72 @@ def save_gaussian_pointclouds(
     return saved
 
 
+_FRAME_SCENE_NAME_RE = re.compile(r'^(.+)_frame_(\d+)$')
+
+
+def _unit_tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
+    """Convert an RGB tensor [3, H, W] in [0, 1] to a PIL image."""
+    array = (tensor.detach().float().clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
+    return Image.fromarray(array.permute(1, 2, 0).cpu().numpy(), mode='RGB')
+
+
+def save_view_renders(
+    result: dict,
+    batch: dict,
+    output_dir: str | Path,
+    camera_names: list[str] | None = None,
+) -> list[Path]:
+    """Save the rendered and ground-truth image of every target view as PNGs.
+
+    Files are written so that a render and its ground truth share the same relative path
+    under ``renders/`` and ``gt/``, which makes pairing them for PSNR/SSIM trivial::
+
+        {output_dir}/renders/{session}/{camera}/img{frame:08d}.png
+        {output_dir}/gt/{session}/{camera}/img{frame:08d}.png
+
+    ``session`` and ``frame`` are parsed from ``scene_name`` (``{session}_frame_{frame:08d}``,
+    as produced by ``Cheese3DDataset``); other scene names are used verbatim as the folder
+    and the file is named ``img.png``. Images are saved at the model resolution, i.e. the
+    ground truth is the (stretched) image the model saw, not the original frame.
+
+    Args:
+        result: dict returned by ``model.get_model_outputs(batch)``; needs ``'render'``
+            ([B, V_target, 3, H, W] in [0, 1]), ``'target_image'`` (same shape) and
+            ``'target_indices'`` ([B, V_target]).
+        batch: the batch fed to the model; needs ``'scene_name'`` (list of B strings).
+        output_dir: root output directory.
+        camera_names: camera name for each view index of the dataset's ``image`` tensor.
+            When ``None`` or too short, views are named ``view{idx}``.
+
+    Returns:
+        list of Path objects for the render PNGs that were written.
+    """
+    output_dir = Path(output_dir)
+    render = result['render']
+    target = result['target_image']
+    target_idx = result['target_indices'].cpu().tolist()
+    scene_names = batch['scene_name']
+
+    saved: list[Path] = []
+    for b_i, scene_name in enumerate(scene_names):
+        match = _FRAME_SCENE_NAME_RE.match(scene_name)
+        session = match.group(1) if match else scene_name
+        file_name = f'img{int(match.group(2)):08d}.png' if match else 'img.png'
+        for v_i, view_idx in enumerate(target_idx[b_i]):
+            camera = (
+                camera_names[view_idx]
+                if camera_names is not None and view_idx < len(camera_names)
+                else f'view{view_idx}'
+            )
+            for kind, images in (('renders', render), ('gt', target)):
+                out_path = output_dir / kind / session / camera / file_name
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                _unit_tensor_to_pil(images[b_i, v_i]).save(out_path)
+                if kind == 'renders':
+                    saved.append(out_path)
+    return saved
+
+
 def _dedupe_cameras_by_view_index(
     input_idx: torch.Tensor,
     c2w_input: np.ndarray,
@@ -1195,6 +1261,7 @@ def infer_sable(
     save_visuals: bool = False,
     max_batches: int | None = None,
     include_splits: list[str] | None = None,
+    save_renders: bool = False,
 ) -> dict:
     """Run Sable inference over an IBL dataset and optionally save PLY point clouds.
 
@@ -1211,6 +1278,9 @@ def infer_sable(
         max_batches: stop after this many batches.  ``None`` runs the full dataset.
         include_splits: IBL splits to load (e.g. ``['train', 'val']``).  Defaults to
             ``'train'``, ``'val'``, and ``'test'``.
+        save_renders: whether to save the per-view render and ground-truth PNGs written
+            by :func:`save_view_renders` (full-context reconstruction; no views are masked
+            at inference).
 
     Returns:
         dict with keys:
@@ -1220,13 +1290,15 @@ def infer_sable(
             - ``'camera_pointcloud_scene_glb_files'``: list of Path objects for all
               saved ``.glb`` scenes.
             - ``'vis_files'``: list of Path objects for all saved PNG grids.
+            - ``'render_files'``: list of Path objects for all saved per-view renders.
     """
     from beast.models.model_utils.train_vis import save_training_visuals
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _dataset, loader = _build_sable_inference_loader(config, include_splits=include_splits)
+    dataset, loader = _build_sable_inference_loader(config, include_splits=include_splits)
+    camera_names = getattr(dataset, 'camera_names', None)
 
     device = next(model.parameters()).device
     model.eval()
@@ -1234,6 +1306,7 @@ def infer_sable(
     all_ply: list[Path] = []
     all_glb: list[Path] = []
     all_vis: list[Path] = []
+    all_renders: list[Path] = []
     num_batches = 0
 
     with torch.no_grad():
@@ -1265,11 +1338,17 @@ def infer_sable(
                 )
                 all_vis.extend(vis_paths or [])
 
+            if save_renders:
+                all_renders.extend(
+                    save_view_renders(result, batch, output_dir, camera_names=camera_names)
+                )
+
             num_batches += 1
 
     log_step(
         f'infer_sable: processed {num_batches} batches, '
-        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids',
+        f'{len(all_ply)} PLY files, {len(all_glb)} GLB scenes, {len(all_vis)} PNG grids, '
+        f'{len(all_renders)} render PNGs',
         level='info',
     )
 
@@ -1279,6 +1358,7 @@ def infer_sable(
         'ply_files': all_ply,
         'camera_pointcloud_scene_glb_files': all_glb,
         'vis_files': all_vis,
+        'render_files': all_renders,
     }
 
 

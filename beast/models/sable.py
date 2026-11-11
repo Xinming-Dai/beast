@@ -154,6 +154,23 @@ def build_token_masks(
     return pixel_mask, gaussian_mask
 
 
+def shuffle_context_full_mask(full_mask: torch.Tensor) -> torch.Tensor:
+    """Randomly reassign which context views are fully masked, independently per sample.
+
+    Each row is permuted uniformly at random, so the number of masked views per sample is
+    preserved (e.g. exactly one of V views for ``fixed_1to2``) while the masked view is
+    resampled uniformly. For V=2 and one masked view this is a 50% swap.
+
+    Args:
+        full_mask: bool tensor [B, V]; True = zero out all tokens for that view.
+
+    Returns:
+        bool tensor [B, V] with each row randomly permuted.
+    """
+    idx_perm = torch.rand(full_mask.shape, device=full_mask.device).argsort(dim=1)
+    return full_mask.gather(1, idx_perm)
+
+
 def build_segmentation_gaussian_mask(
     seg_mask: torch.Tensor,
     hh: int,
@@ -758,8 +775,7 @@ class Sable(BaseLightningModel):
         if self.training and 'context_full_mask' in data:
             full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
             if self.randomize_context_full_mask:
-                flip = (torch.rand(b, device=full_mask.device) < 0.5).unsqueeze(1)
-                full_mask = torch.where(flip, full_mask.flip(dims=[1]), full_mask)
+                full_mask = shuffle_context_full_mask(full_mask)
 
         keep = None
         pixel_mask = None

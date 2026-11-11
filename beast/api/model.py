@@ -171,6 +171,7 @@ class Model:
         load_gt_camera_params_for_vis: bool = False,
         max_batches: int | None = None,
         session_names: list[str] | str | None = None,
+        save_renders: bool = False,
     ) -> dict[str, Any]:
         """Run Sable inference over a scene dataset and save PLY point clouds.
 
@@ -196,10 +197,12 @@ class Model:
             max_batches: stop after this many batches; None runs the full dataset.
             session_names: session IDs to load. Accepts a list or a single string.
                 When ``None``, the value from the saved training config is used.
+            save_renders: whether to save per-view render and ground-truth PNGs
+                (``renders/`` and ``gt/`` under ``output_dir``) for computing image metrics.
 
         Returns:
             dict with keys 'output_dir', 'num_batches', 'ply_files',
-            'camera_pointcloud_scene_glb_files', 'vis_files'.
+            'camera_pointcloud_scene_glb_files', 'vis_files', 'render_files'.
         """
         from beast.inference import infer_sable as _infer_sable
 
@@ -235,6 +238,7 @@ class Model:
             save_camera_pointcloud_scene=save_camera_pointcloud_scene,
             max_batches=max_batches,
             include_splits=splits,
+            save_renders=save_renders,
         )
 
     def extract_sable_latents(

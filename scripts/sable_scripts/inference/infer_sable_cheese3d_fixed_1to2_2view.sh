@@ -1,0 +1,107 @@
+#!/bin/bash
+#SBATCH -A bfsr-delta-gpu
+#SBATCH -p gpuA40x4,gpuA100x4,gpuA100x8
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-task=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH -t 0-02:00:00
+#SBATCH -J cheese3d_f1to2_2view_infer
+#SBATCH -o /u/xdai3/project3d/SABLE_repo_2/beast/scripts/sable_scripts/inference/infer_sable_cheese3d_fixed_1to2_2view_%j.log
+#SBATCH --export=ALL
+
+exec 2>&1
+source ~/.bashrc
+conda activate beast
+
+REPO_ROOT="/u/xdai3/project3d/SABLE_repo_2/beast"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+# training run directory name, i.e. <SLURM_JOB_ID>_fixed_1to2_2view as created by
+# train_sable_cheese3d_fixed_1to2_2view.sh; a bare numeric job id also works
+JOB_ID="${JOB_ID:?set JOB_ID (or MODEL_DIR) to the training job to run inference for}"
+[[ "$JOB_ID" =~ ^[0-9]+$ ]] && JOB_ID="${JOB_ID}_fixed_1to2_2view"
+
+# Model dir contains config.yaml saved during training; checkpoints live under tb_logs/
+MODEL_DIR="${MODEL_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d/$JOB_ID}"
+DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
+OUTPUT_DIR="${OUTPUT_DIR:-$MODEL_DIR/inference_renders}"
+
+SPLITS="${SPLITS:-train val}"
+# renders/ and gt/ PNGs (full-context reconstruction, no view masked) for PSNR/SSIM
+SAVE_RENDERS="${SAVE_RENDERS:-1}"
+SAVE_POINTCLOUDS="${SAVE_POINTCLOUDS:-0}"
+SAVE_VISUALS="${SAVE_VISUALS:-0}"
+SAVE_CAMERA_SCENE="${SAVE_CAMERA_SCENE:-0}"
+MAX_BATCHES="${MAX_BATCHES:-}"
+
+# Blackwell 10.0 unsupported by gsplat; use a safe default if missing or 10.0.
+if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
+    export TORCH_CUDA_ARCH_LIST="8.0;8.6"
+fi
+
+[ -x /usr/bin/gcc ] && export CC=/usr/bin/gcc CXX=/usr/bin/g++
+
+for _cuda in /usr/local/cuda \
+             /opt/nvidia/hpc_sdk/Linux_x86_64/25.3/cuda/12.8 \
+             /opt/cuda; do
+    [ -d "$_cuda" ] && export CUDA_HOME="$_cuda" && break
+done
+export PATH="${CUDA_HOME:-}/bin:${PATH}"
+export PYTHONUNBUFFERED=1
+
+cat <<EOF
+---------------------------------------
+Job name:              ${SLURM_JOB_NAME:-local}
+Job ID:                ${SLURM_JOB_ID:-local}
+Running on node(s):    ${SLURM_NODELIST:-$(hostname)}
+Model dir:             $MODEL_DIR
+Dataset path:          $DATASET_PATH
+Output dir:            $OUTPUT_DIR
+Splits:                $SPLITS
+Save renders:          $SAVE_RENDERS
+Save pointclouds:      $SAVE_POINTCLOUDS
+Save visuals:          $SAVE_VISUALS
+Save camera scene:     $SAVE_CAMERA_SCENE
+Max batches:           ${MAX_BATCHES:-(all)}
+TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
+---------------------------------------
+EOF
+
+echo '=== GPU (PyTorch) ==='
+python - <<'PY'
+import torch
+print("torch:", torch.__version__, "cuda:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    for i in range(torch.cuda.device_count()):
+        cap = torch.cuda.get_device_capability(i)
+        print(f"  cuda:{i} {torch.cuda.get_device_name(i)}  capability={cap[0]}.{cap[1]}")
+PY
+
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Starting inference..."
+
+[ -d "$MODEL_DIR" ]    || { echo "ERROR: Model dir not found: $MODEL_DIR"; exit 1; }
+[ -d "$DATASET_PATH" ] || { echo "ERROR: Dataset path not found: $DATASET_PATH"; exit 1; }
+
+cd "$REPO_ROOT"
+
+PREDICT_ARGS=(
+    --model "$MODEL_DIR"
+    --input "$DATASET_PATH"
+    --output "$OUTPUT_DIR"
+    --splits $SPLITS
+    # the render path never depends on init_gs; skipping it avoids the VDA/Kabsch work
+    --disable-init-gs
+)
+[ "$SAVE_RENDERS" = "1" ] && PREDICT_ARGS+=(--save-renders)
+[ "$SAVE_POINTCLOUDS" != "1" ] && PREDICT_ARGS+=(--no-pointclouds)
+[ "$SAVE_VISUALS" = "1" ] && PREDICT_ARGS+=(--save-visuals)
+[ "$SAVE_CAMERA_SCENE" = "1" ] && PREDICT_ARGS+=(--save-camera-pointcloud-scene --load-gt-camera-params-for-vis)
+[ -n "$MAX_BATCHES" ]     && PREDICT_ARGS+=(--max-batches "$MAX_BATCHES")
+
+beast predict "${PREDICT_ARGS[@]}"
+
+echo "[$(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S')] Done."
+
+conda deactivate
