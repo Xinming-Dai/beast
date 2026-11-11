@@ -10,6 +10,7 @@ from lightning.pytorch.utilities import rank_zero_only
 import torch
 import yaml
 
+from beast.data.calibration import resolve_camera_prior
 from beast.data.samplers import ResumableRandomSampler
 from beast.inference import save_camera_pointcloud_scene, save_gaussian_pointclouds
 from beast.logging import log_step
@@ -104,6 +105,9 @@ class ValVisualizationCallback(pl.Callback):
         save_camera_pointcloud_scene: whether to also save a point cloud + camera
             frustum scene (as a ``.glb`` file under ``vis_dir / 'glb'``) alongside
             each visual.
+        align_to_gt: whether the camera scene re-fits the predicted cameras to the GT
+            cameras (similarity transform) before drawing. Set to ``False`` when the
+            predicted cameras already share the GT frame (``camera_prior`` ``init``/``gt``).
     """
 
     def __init__(
@@ -113,6 +117,7 @@ class ValVisualizationCallback(pl.Callback):
         max_views: int = 2,
         save_pointclouds: bool = True,
         save_camera_pointcloud_scene: bool = False,
+        align_to_gt: bool = True,
     ) -> None:
         """Initialize with output directory and visualization limits."""
         super().__init__()
@@ -121,6 +126,7 @@ class ValVisualizationCallback(pl.Callback):
         self._max_views = max_views
         self._save_pointclouds = save_pointclouds
         self._save_camera_pointcloud_scene = save_camera_pointcloud_scene
+        self._align_to_gt = align_to_gt
         self._saved_this_epoch = False
 
     def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
@@ -162,6 +168,7 @@ class ValVisualizationCallback(pl.Callback):
                     self._vis_dir,
                     batch_idx=0,
                     max_samples=self._max_samples,
+                    align_to_gt=self._align_to_gt,
                 )
                 if glb_paths:
                     log_step(f'Saved initial camera scene: {glb_paths[0]}', level='info')
@@ -212,6 +219,7 @@ class ValVisualizationCallback(pl.Callback):
                     self._vis_dir,
                     batch_idx=trainer.global_step,
                     max_samples=self._max_samples,
+                    align_to_gt=self._align_to_gt,
                 )
                 if glb_paths:
                     log_step(f'Saved val camera scene: {glb_paths[0]}', level='info')
@@ -381,10 +389,14 @@ def train_sable(config: dict, model, output_dir: str | Path):
             if unexpected:
                 log_step(f'Unexpected keys when loading checkpoint: {unexpected}', level='warning')
             ckpt_path_for_trainer = None
+            if not any(key.endswith('pose_predictor.prior_delta') for key in state_dict):
+                model.init_pose_from_prior()
         else:
             global_step_at_resume = int(
                 raw_ckpt.get('total_steps_trained', raw_ckpt.get('global_step', 0)),
             )
+    else:
+        model.init_pose_from_prior()
 
     max_steps_this_run: int = max(0, max_fwdbwd_passes - global_step_at_resume)
     if global_step_at_resume > 0:
@@ -432,6 +444,8 @@ def train_sable(config: dict, model, output_dir: str | Path):
                 max_views=int(training.get('vis_max_views', 2)),
                 save_pointclouds=training.get('save_pointclouds', True),
                 save_camera_pointcloud_scene=training.get('save_camera_pointcloud_scene', False),
+                # init/gt priors share the GT frame, so no re-fit: drift stays visible
+                align_to_gt=resolve_camera_prior(training) == 'none',
             )
         )
     callbacks.append(StepAccumulatorCallback(callback_step_offset))

@@ -97,7 +97,10 @@ training:
     - 20231031_B31_chew_temperature_000
   cheese3d_left_camera: TL
   cheese3d_right_camera: TR
-  use_camera_params: false
+  camera_prior: none  # none | init (GT rig as learnable init) | gt (GT rig as input)
+  calibration_dir: /work/hdd/bfsr/xdai3/cheese3d/calibrations
+  calibration_baseline: 1.0  # rescale rig so the mean camera-to-canonical distance is this
+  camera_prior_ramp_ratio: 0.5  # init: release from GT over this fraction of max_fwdbwd_passes
   load_gt_camera_params_for_vis: true  # overlay GT camera frustums (black) in save_camera_pointcloud_scene
   use_segmentation:
     enabled: true

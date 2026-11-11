@@ -18,6 +18,42 @@ from beast.io import load_config
 
 ROOT = Path(__file__).parent.parent
 
+_CALIBRATION_TOML = """\
+[cam_0]
+name = "BC"
+size = [ 640, 512,]
+matrix = [ [ 1000.0, 0.0, 319.5,], [ 0.0, 1000.0, 255.5,], [ 0.0, 0.0, 1.0,],]
+distortions = [ -0.15, 0.0, 0.0, 0.0, 0.0,]
+rotation = [ 0.0, 0.0, 0.0,]
+translation = [ 0.0, 0.0, 0.0,]
+
+[cam_1]
+name = "TL"
+size = [ 640, 512,]
+matrix = [ [ 800.0, 0.0, 319.5,], [ 0.0, 800.0, 255.5,], [ 0.0, 0.0, 1.0,],]
+distortions = [ -0.15, 0.0, 0.0, 0.0, 0.0,]
+rotation = [ 0.0, 0.0, 0.0,]
+translation = [ -10.0, 0.0, 0.0,]
+
+[cam_2]
+name = "TR"
+size = [ 640, 512,]
+matrix = [ [ 800.0, 0.0, 319.5,], [ 0.0, 800.0, 255.5,], [ 0.0, 0.0, 1.0,],]
+distortions = [ -0.15, 0.0, 0.0, 0.0, 0.0,]
+rotation = [ 0.0, 0.0, 1.5707963267948966,]
+translation = [ 0.0, -20.0, 0.0,]
+"""
+
+
+@pytest.fixture
+def calibration_dir(tmp_path: Path) -> Path:
+    """Directory with a 3-camera (BC, TL, TR) toml rig as video_calibration and session_a."""
+    calib_dir = tmp_path / 'calibrations'
+    calib_dir.mkdir()
+    (calib_dir / 'video_calibration.toml').write_text(_CALIBRATION_TOML)
+    (calib_dir / 'session_a.toml').write_text(_CALIBRATION_TOML)
+    return calib_dir
+
 
 # ---------------------------------------------
 # functions for loading test data from figshare

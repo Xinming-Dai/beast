@@ -115,7 +115,7 @@ def register_parser(subparsers: Any) -> None:
         help=(
             'For Cheese3D datasets, load ground-truth camera calibration for the '
             '--save-camera-pointcloud-scene overlay, regardless of the saved training '
-            "config's training.use_camera_params"
+            "config's training.camera_prior"
         ),
     )
     sable_group.add_argument(

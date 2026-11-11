@@ -21,6 +21,7 @@ from torchvision import transforms
 from typeguard import typechecked
 
 from beast.logging import log_step
+from beast.data.calibration import resolve_camera_prior
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
 from beast.models.base import BaseLightningModel
@@ -1006,6 +1007,7 @@ def save_camera_pointcloud_scene(
     batch_idx: int,
     max_samples: int | None = None,
     screen_width: float | None = None,
+    align_to_gt: bool = True,
 ) -> list[Path]:
     """Save the predicted point cloud together with camera frustums as a .glb scene.
 
@@ -1046,6 +1048,8 @@ def save_camera_pointcloud_scene(
             regardless of the scene's absolute coordinate scale (Cheese3D point clouds
             span ~100s of units, unlike the ~1-2 unit scale a fixed absolute default
             was originally tuned for).
+        align_to_gt: whether to fit a similarity transform from the predicted to the GT
+            cameras and apply it to the predicted geometry. Ignored without ``gt_c2w``.
 
     Returns:
         list of Path objects for the .glb files that were written.
@@ -1099,7 +1103,7 @@ def save_camera_pointcloud_scene(
             correspond = [
                 (pos, vidx) for pos, vidx in enumerate(view_indices) if vidx < gt_c2w_np.shape[0]
             ]
-            if correspond:
+            if correspond and align_to_gt:
                 pred_positions, gt_indices = zip(*correspond)
                 transform = estimate_camera_similarity_transform(
                     c2ws[list(pred_positions)],
@@ -1109,7 +1113,7 @@ def save_camera_pointcloud_scene(
                 xyz = (xyz * yz_flip) @ transform[:3, :3].T + transform[:3, 3] # undo flip, apply transform
                 xyz = xyz * yz_flip # reapply flip
                 c2ws = apply_similarity_transform_to_poses(transform, c2ws)
-            else:
+            elif not correspond:
                 log_step(
                     f'Skipping GT camera overlay for sample {sample_idx}: no view-index '
                     f'overlap between predicted views {view_indices} and gt_c2w rows '
@@ -1326,7 +1330,12 @@ def infer_sable(
                 all_ply.extend(ply_paths)
 
             if save_camera_pointcloud_scene:
-                glb_paths = _save_camera_pointcloud_scene_fn(result, output_dir, batch_idx)
+                glb_paths = _save_camera_pointcloud_scene_fn(
+                    result,
+                    output_dir,
+                    batch_idx,
+                    align_to_gt=resolve_camera_prior(config.get('training', {})) == 'none',
+                )
                 all_glb.extend(glb_paths)
 
             if save_visuals:

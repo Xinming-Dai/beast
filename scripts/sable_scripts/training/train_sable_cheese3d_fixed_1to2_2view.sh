@@ -26,6 +26,13 @@ DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d}"
 RESET_TRAINING_STATE="${RESET_TRAINING_STATE:-True}"
+# how GT camera calibration is used: none | init (learnable init of the pose head) | gt (as input);
+# ignored when resuming, which reuses the saved config
+CAMERA_PRIOR="${CAMERA_PRIOR:-none}"
+case "$CAMERA_PRIOR" in
+    none|init|gt) ;;
+    *) echo "ERROR: CAMERA_PRIOR must be none, init or gt (got: $CAMERA_PRIOR)"; exit 1 ;;
+esac
 RESUME_CKPT_JOB_ID="${RESUME_CKPT_JOB_ID:-}"
 PRETRAINED_CKPT="${PRETRAINED_CKPT:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt}"
 
@@ -47,7 +54,7 @@ if [ "$RESET_TRAINING_STATE" = "False" ]; then
 else
     RESUME_CKPT="${RESUME_CKPT:-$PRETRAINED_CKPT}"
     if [ -n "${SLURM_JOB_ID:-}" ]; then
-        CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}_fixed_1to2_2view"
+        CHECKPOINT_DIR="${CHECKPOINT_BASE}/${SLURM_JOB_ID}_fixed_1to2_2view${CAMERA_PRIOR:+_camera_prior_$CAMERA_PRIOR}"
     else
         CHECKPOINT_DIR="$CHECKPOINT_BASE"
     fi
@@ -78,6 +85,7 @@ Config: $CONFIG
 Dataset path: $DATASET_PATH
 Resume ckpt: ${RESUME_CKPT:-(none)}
 Reset training state: $RESET_TRAINING_STATE
+Camera prior: $CAMERA_PRIOR
 Checkpoint dir (output): $CHECKPOINT_DIR
 TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
@@ -108,6 +116,7 @@ OVERRIDES=(
     "training.reset_training_state=$RESET_TRAINING_STATE"
 )
 [ -n "$RESUME_CKPT" ] && OVERRIDES+=("training.resume_ckpt=$RESUME_CKPT")
+[ "$RESET_TRAINING_STATE" != "False" ] && OVERRIDES+=("training.camera_prior=$CAMERA_PRIOR")
 
 beast train \
     --config "$CONFIG" \

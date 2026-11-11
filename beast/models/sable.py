@@ -9,6 +9,11 @@ from einops.layers.torch import Rearrange
 from einops import rearrange, repeat
 import open3d as o3d
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD
+from beast.data.calibration import (
+    build_camera_prior,
+    resolve_camera_prior,
+    resolve_cheese3d_camera_names,
+)
 from beast.models.base import BaseLightningModel
 from beast.models.model_utils.losses import LossComputer
 from beast.models.model_utils.utils_transformer import (
@@ -18,7 +23,7 @@ from beast.models.model_utils.utils_transformer import (
 )
 from beast.models.model_utils.camera_utils import get_interpolated_poses_many
 from beast.models.model_utils.utils_pe import get_2d_sincos_pos_embed
-from beast.models.model_utils.utils_rot import rot6d2mat, quat2mat
+from beast.models.model_utils.utils_rot import mat2rot6d, rot6d2mat, quat2mat
 from beast.models.model_utils.utils_gaussian import get_point_range_func, Renderer
 from beast.models.model_utils.utils_vis import build_stepback_c2ws
 
@@ -658,6 +663,35 @@ class Sable(BaseLightningModel):
             'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'},
             'monitor': 'val_loss',
         }
+
+    def training_step(self, batch_dict: dict, batch_idx: int) -> dict:
+        """Run the base training step and log the camera-prior release factor.
+
+        Args:
+            batch_dict: batch from the dataloader.
+            batch_idx: batch index.
+
+        Returns:
+            dict with the training ``loss``.
+        """
+        out = super().training_step(batch_dict, batch_idx)
+        if self.pose_predictor.camera_prior == 'init':
+            self.log(
+                'camera_prior_scale',
+                self.pose_predictor.last_prior_scale,
+                on_step=True,
+                on_epoch=False,
+            )
+        return out
+
+    def init_pose_from_prior(self):
+        """Zero the pose heads so the initial poses equal the GT camera prior.
+
+        No-op unless ``training.camera_prior`` is ``init``. Call after loading pretrained
+        weights (which would otherwise overwrite the zeroed heads), and not when resuming
+        a run that already trained the heads.
+        """
+        self.pose_predictor.zero_init_heads()
 
     def forward(self, data, create_visual=False, render_video=False):
 
@@ -1861,6 +1895,89 @@ class PoseEstimator(nn.Module):
 
         self.f_bias = 1.25
 
+        self.camera_prior = resolve_camera_prior(self.config['training'])
+        self.prior_ref_idx: int | None = None
+        self.ramp_steps = 0                  # training passes over which the prior is released
+        self.last_prior_scale = 1.0          # lambda applied in the latest forward pass
+        if self.camera_prior == 'init':
+            self._init_camera_prior()
+
+    def _init_camera_prior(self):
+        '''
+        Build the GT rig prior (training.camera_prior == "init") from the toml calibration.
+
+        prior_pose [V_real, 9] is the fixed GT offset, in the space rel_head predicts in
+        (identity-relative 6d rotation + translation), from the canonical view to each view.
+        prior_delta [V_real, 9] is a learnable per-camera refinement, zero at the start and masked
+        to zero for the canonical view, which must stay the identity. prior_focal [V_real, 2] is
+        each view's GT [fx/W, fy/H] minus f_bias.
+
+        The learned deviation (rel_head output + prior_delta) is scaled by lambda in [0, 1],
+        which rises linearly over the first camera_prior_ramp_ratio * max_fwdbwd_passes training
+        passes (prior_step counts them), so the model leaves the GT rig gradually.
+        '''
+        if not (self.is_pairwise and self.canonical == 'middle' and self.pose_rep == '6d'):
+            raise NotImplementedError(
+                'camera_prior="init" requires pose_latent mode "pairwise", canonical "middle" '
+                'and representation "6d"'
+            )
+        training = self.config['training']
+        camera_names = resolve_cheese3d_camera_names(training)
+        c2w, fxfycxcy, idx_ref = build_camera_prior(
+            Path(training['calibration_dir']) / 'video_calibration.toml',
+            camera_names,
+            float(training.get('calibration_baseline', 1.0)),
+        )
+        identity = torch.tensor([1, 0, 0, 0, 1, 0, 0, 0, 0], dtype=torch.float32)
+        prior_pose = mat2rot6d(torch.from_numpy(c2w)) - identity     # [V_real, 9]
+        mask = torch.ones(len(camera_names), 1)
+        mask[idx_ref] = 0.0
+        self.f_bias = float(fxfycxcy[idx_ref, 0])
+        prior_focal = torch.from_numpy(fxfycxcy[:, :2]) - self.f_bias   # [V_real, 2]
+
+        ramp_ratio = float(training.get('camera_prior_ramp_ratio', 0.5))
+        if not 0.0 <= ramp_ratio <= 1.0:
+            raise ValueError(
+                f'training.camera_prior_ramp_ratio must be in [0, 1]; got {ramp_ratio}'
+            )
+        self.ramp_steps = round(ramp_ratio * int(training.get('max_fwdbwd_passes', 4000)))
+
+        self.prior_ref_idx = idx_ref
+        self.register_buffer('prior_pose', prior_pose)
+        self.prior_delta = nn.Parameter(torch.zeros_like(prior_pose))
+        self.register_buffer('prior_mask', mask)
+        self.register_buffer('prior_focal', prior_focal)
+        self.register_buffer('prior_step', torch.zeros((), dtype=torch.long))
+
+    def prior_scale(self) -> float:
+        '''
+        Lambda in [0, 1]: how much of the learned deviation from the GT rig is applied now.
+
+        1 outside init mode, or when the ramp is disabled (camera_prior_ramp_ratio = 0).
+        '''
+        if self.prior_ref_idx is None or self.ramp_steps <= 0:
+            return 1.0
+        return min(1.0, int(self.prior_step) / self.ramp_steps)
+
+    def _advance_prior_step(self):
+        '''Count one training forward pass towards the ramp (not in eval mode).'''
+        if self.prior_ref_idx is not None and self.training:
+            self.prior_step += 1
+
+    def zero_init_heads(self):
+        '''
+        Zero the output layers of rel_head and canonical_k_head so the initial pose and
+        focal equal the GT prior exactly. The heads still receive gradients through their
+        hidden layer and learn residuals around the prior.
+        '''
+        if self.camera_prior != 'init':
+            return
+        for head in (self.rel_head, self.canonical_k_head):
+            last = head[-1]
+            nn.init.zeros_(last.weight)
+            if last.bias is not None:
+                nn.init.zeros_(last.bias)
+
     def forward(self, x, v):
         '''
         x: [b*v, d] or [b, v, d]
@@ -1878,7 +1995,9 @@ class PoseEstimator(nn.Module):
             if v == 1:
                 return self.forward_canonical_single_view(x, v, self.canonical, return_dim2)
             else:
-                return self.forward_canonical(x, v, self.canonical, return_dim2)
+                out = self.forward_canonical(x, v, self.canonical, return_dim2)
+                self._advance_prior_step()
+                return out
         else:
             return self.forward_global(x, v, self.canonical, return_dim2)
 
@@ -1970,10 +2089,18 @@ class PoseEstimator(nn.Module):
         info_rel = self.rel_head(feat_rel)                                     # [b, v-1, num_pose_element + 3]
         info_all = info_canonical.repeat(1, v, 1)                             # [b, v, num_pose_element + 3 + 2]
 
+        if self.prior_ref_idx is not None:
+            # release from the GT rig gradually: the learned deviation is scaled by lambda
+            self.last_prior_scale = self.prior_scale()
+            info_rel = info_rel * self.last_prior_scale
+
         if canonical == 'first':
             info_all[:, 1:, :self.num_pose_element + 3] += info_rel
         elif canonical == 'middle':
             info_all[:, rel_indices, :self.num_pose_element + 3] += info_rel
+
+        if self.prior_ref_idx is not None:
+            info_all = self.add_camera_prior(info_all, v, rel_indices, self.last_prior_scale)
 
         # Add cx, cy (fixed at 0.5)
         cxcy_all = torch.tensor([0.5, 0.5], device=info_all.device).reshape(1, 1, 2).repeat(b, v, 1)
@@ -1984,6 +2111,26 @@ class PoseEstimator(nn.Module):
             return rearrange(info_all, 'b v d -> (b v) d') if return_dim2 else info_all, info_reg
         else:
             return rearrange(info_all, 'b v d -> (b v) d') if return_dim2 else info_all
+
+    def add_camera_prior(self, info_all, v, rel_indices, scale):
+        '''
+        Add the GT rig prior to [b, v, num_pose_element + 3 + 2] pose/focal predictions.
+
+        Adds the GT poses plus the learnable per-camera refinement scaled by lambda (scale).
+        Views past the real ones (padding) reuse the last real view's row.
+        '''
+        num_real = self.prior_pose.shape[0]
+        if min(v // 2, num_real - 1) != self.prior_ref_idx:
+            raise ValueError(
+                f'camera prior was built for canonical view {self.prior_ref_idx}, but {v} views '
+                f'make view {min(v // 2, num_real - 1)} canonical'
+            )
+        idx_row = torch.arange(v, device=info_all.device).clamp(max=num_real - 1)
+        prior_pose = self.prior_pose + scale * self.prior_delta * self.prior_mask   # [V_real, 9]
+        info_all = info_all.clone()
+        info_all[:, rel_indices, :self.num_pose_element + 3] += prior_pose[idx_row[rel_indices]]
+        info_all[:, :, self.num_pose_element + 3:] += self.prior_focal[idx_row]
+        return info_all
 
     def forward_canonical_single_view(self, x, v, canonical, return_dim2):
         '''

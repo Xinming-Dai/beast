@@ -15,6 +15,11 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset, default_collate
 
+from beast.data.calibration import (
+    build_camera_prior,
+    resolve_camera_prior,
+    resolve_cheese3d_cameras,
+)
 from beast.logging import log_step
 
 _logger = logging.getLogger(__name__)
@@ -1231,9 +1236,10 @@ class Cheese3DDataset(SABLEDataset):
     ``training.cheese3d_left_camera`` and ``training.cheese3d_right_camera`` (default
     ``'TL'``/``'TR'``) by matching frame index.  Optionally includes a third center
     camera (``training.cheese3d_center_camera``, e.g. ``'TC'``).  The accompanying
-    per-frame ``.npy`` files (static camera intrinsics/extrinsics) are loaded when
-    ``training.use_camera_params`` is ``true``, returning pre-calibrated ``c2w`` and
-    ``fxfycxcy`` tensors that the model uses in place of its learned pose predictor.
+    GT camera calibration (from ``training.calibration_dir`` toml files, or the legacy
+    per-frame ``.npy`` files) is loaded when ``training.camera_prior`` is ``'gt'``,
+    returning pre-calibrated ``c2w`` and ``fxfycxcy`` tensors that the model uses in place
+    of its learned pose predictor.
 
     Unlike :class:`SABLEDataset`:
 
@@ -1269,16 +1275,22 @@ class Cheese3DDataset(SABLEDataset):
       must not be combined with it.
     * ``training.use_segmentation.enabled`` (default ``False``),
       ``training.use_segmentation.cache_root`` (required when enabled).
-    * ``training.use_camera_params`` (default ``False``) — when ``true``, load per-frame
-      ``.npy`` calibration files and return ``c2w`` ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``
-      in the batch dict so the model can skip its learned pose predictor.
+    * ``training.camera_prior`` (``none`` | ``init`` | ``gt``, default ``none``) — ``gt``
+      returns ``c2w`` ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]`` in the batch dict so the
+      model can skip its learned pose predictor; ``init`` is handled by the model. Legacy
+      ``training.use_camera_params: true`` (when ``camera_prior`` is unset) means ``gt``
+      from per-frame ``.npy`` files.
+    * ``training.calibration_dir`` — directory of ``<session>.toml`` calibrations. When set,
+      GT cameras come from these (relative to the canonical view, translations divided by
+      the rig scale so the mean camera distance is ``training.calibration_baseline``,
+      default ``1.0``) instead of the per-frame ``.npy`` files.
     * ``training.load_gt_camera_params_for_vis`` (default ``False``) — when ``true``, always
-      load the same per-frame ``.npy`` calibration files into ``gt_c2w`` ``[V, 4, 4]`` and
-      ``gt_fxfycxcy`` ``[V, 4]``, independent of ``use_camera_params``. These keys are for
+      load the same GT calibration into ``gt_c2w`` ``[V, 4, 4]`` and
+      ``gt_fxfycxcy`` ``[V, 4]``, independent of ``camera_prior``. These keys are for
       visualization only (e.g. overlaying ground-truth camera poses on predicted poses in
       ``beast.inference.save_camera_pointcloud_scene``) and are never read by the model as
       input, so they can be enabled even when the model is learning its own poses
-      (``use_camera_params: false``).
+      (``camera_prior: none``).
     * ``training.val_split_ratio``, ``model.seed``, ``model.image_tokenizer.image_size``,
       ``training.training_regime``.
     """
@@ -1308,27 +1320,9 @@ class Cheese3DDataset(SABLEDataset):
         session_names = training.get('session_names')
         if not session_names:
             raise ValueError('training.session_names must be a non-empty list.')
-        cameras_raw = training.get('cheese3d_cameras')
-        extra_cameras: list[str] = []
-        if cameras_raw:
-            if training.get('cheese3d_center_camera'):
-                raise ValueError(
-                    'training.cheese3d_cameras cannot be combined with '
-                    'training.cheese3d_center_camera.'
-                )
-            cameras = [str(camera) for camera in cameras_raw]
-            if len(cameras) < 2 or len(set(cameras)) != len(cameras):
-                raise ValueError(
-                    f'training.cheese3d_cameras must list two or more distinct cameras; '
-                    f'got {cameras}'
-                )
-            left_camera, right_camera, *extra_cameras = cameras
-            center_camera: str | None = None
-        else:
-            left_camera = str(training.get('cheese3d_left_camera', 'TL'))
-            right_camera = str(training.get('cheese3d_right_camera', 'TR'))
-            center_camera_raw = training.get('cheese3d_center_camera')
-            center_camera = str(center_camera_raw) if center_camera_raw else None
+        left_camera, right_camera, center_camera, extra_cameras = resolve_cheese3d_cameras(
+            training,
+        )
         # view order matches the order of ``image`` in ``__getitem__``
         self._camera_names: list[str] = [
             left_camera,
@@ -1350,7 +1344,14 @@ class Cheese3DDataset(SABLEDataset):
                 )
             segmentation_root = Path(segmentation_root_raw)
         self._use_segmentation = use_segmentation
-        self._use_camera_params: bool = bool(training.get('use_camera_params', False))
+        camera_prior = resolve_camera_prior(training)
+        self._use_camera_params: bool = camera_prior == 'gt'
+        self._calibration_dir: Path | None = (
+            Path(training['calibration_dir']) if training.get('calibration_dir') else None
+        )
+        self._calibration_baseline: float = float(training.get('calibration_baseline', 1.0))
+        # per-session (c2w, fxfycxcy) built from the toml calibrations; constant per session
+        self._calibration_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._load_gt_camera_params_for_vis: bool = bool(
             training.get('load_gt_camera_params_for_vis', False),
         )
@@ -1681,7 +1682,7 @@ class Cheese3DDataset(SABLEDataset):
             ``depth_vda``, ``leftcamera_xy``, ``rightcamera_xy``, ``confidence``,
             ``scene_name``, ``split``, ``neural_trial_idx``, ``neural_bin_idx``,
             ``neural_interval_sec``, optionally ``centercamera_xy``, optionally
-            ``mask``, (when ``training.use_camera_params`` is ``true``) ``c2w``
+            ``mask``, (when ``training.camera_prior`` is ``'gt'``) ``c2w``
             ``[V, 4, 4]`` and ``fxfycxcy`` ``[V, 4]``, and (when
             ``training.load_gt_camera_params_for_vis`` is ``true``) ``gt_c2w``
             ``[V, 4, 4]`` and ``gt_fxfycxcy`` ``[V, 4]``. ``split``,
@@ -1785,6 +1786,8 @@ class Cheese3DDataset(SABLEDataset):
             tuple of (c2w ``[V, 4, 4]``, fxfycxcy ``[V, 4]``) float32 arrays,
             ``V == self._num_views``.
         """
+        if self._calibration_dir is not None:
+            return self._load_calibration_params(rec.session_id)
         left_c2w, left_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.left_path.with_suffix('.npy'))
         right_c2w, right_fxfycxcy = _npy_to_c2w_fxfycxcy(rec.right_path.with_suffix('.npy'))
         c2w_arrays = [left_c2w, right_c2w]
@@ -1800,6 +1803,29 @@ class Cheese3DDataset(SABLEDataset):
             c2w_arrays.append(extra_c2w)
             fxfycxcy_arrays.append(extra_fxfycxcy)
         return np.stack(c2w_arrays), np.stack(fxfycxcy_arrays)
+
+    def _load_calibration_params(self, session_id: str) -> tuple[np.ndarray, np.ndarray]:
+        """Load GT c2w/fxfycxcy for a session from its toml calibration.
+
+        Poses are relative to the canonical (reference) view with the rig scale
+        normalised by ``training.calibration_baseline``. Results are cached per session.
+
+        Args:
+            session_id: session directory name; ``<calibration_dir>/<session_id>.toml``
+                must exist.
+
+        Returns:
+            tuple of (c2w ``[V, 4, 4]``, fxfycxcy ``[V, 4]``) float32 arrays.
+        """
+        if session_id not in self._calibration_cache:
+            c2w, fxfycxcy, _ = build_camera_prior(
+                self._calibration_dir / f'{session_id}.toml',
+                self._camera_names,
+                self._calibration_baseline,
+            )
+            self._calibration_cache[session_id] = (c2w, fxfycxcy)
+        c2w, fxfycxcy = self._calibration_cache[session_id]
+        return c2w.copy(), fxfycxcy.copy()
 
     def _fixed_correspondences(
         self,
