@@ -1,0 +1,162 @@
+inference: false
+evaluation: false
+
+model:
+  model_class: sable
+  seed: 0
+  gaussians:
+    init_gs: true
+    n_gaussians: 1
+    range_setting:
+      type: linear_depth
+      near: 0
+      far: 8
+    sh_degree: 3
+    upsampler:
+      upsample_factor: 1
+  gs_per_pixel_sqrt: 1
+  hard_pixelalign: true
+  image_tokenizer:
+    image_size: 320
+    in_channels: 3
+    patch_size: 16
+  input_with_pe: true
+  near_plane: 0.2
+  pose_latent:
+    canonical: middle
+    length: 1
+    mode: pairwise
+  scaling_bias: -3.0
+  scaling_max: -2.0
+  target_image:
+    height: 320
+    width: 320
+  transformer:
+    d: 768
+    d_head: 64
+    decoder_n_layer: 8
+    depth_init: true
+    encoder_geom_n_layer: 16
+    encoder_n_layer: 16
+    fix_decoder: false
+    neck_n_layer: 1
+    special_init: true
+    use_qk_norm: true
+  vda:
+    enabled: true
+    mode: online
+    cache_root: null
+    repo_root: /u/xdai3/project3d/E-RayZer-private/third_party/VDA
+    checkpoint_path: /work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/vda/checkpoints/video_depth_anything_vitb.pth
+    encoder: vitb  # vitl | vitb | vits
+    metric: false
+    debug_save: false
+    debug_dir: null
+  use_deferred_rendering: false
+  use_gsplat: true
+  patch_masking:
+    ratio: 0.5
+    pixel_mask: true
+    gaussian_mask: false
+  session_token:
+    num_sessions: 7  # must match len(training.session_names)
+  merge_pcd:
+    num_points: 3
+    debug_merged_pcd: false
+    debug_merged_pcd_num_batches: 24
+    correspondence_cache_root: null
+  dino_cls_proj:
+    type: mlp # mlp | linear
+
+optimizer:
+  type: AdamW
+  lr: 0.00002
+  wd: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 3000
+  div_factor: 1.0
+  final_div_factor: 1.0
+  scheduler: cosine
+
+training:
+  dataset_name: beast.data.sable_dataset.IBLTwoViewDataset
+  dataset_path: null  
+  session_names: # Multisession
+    - 9b528ad0-4599-4a55-9148-96cc1d93fb24
+    - 51e53aff-1d5d-4182-a684-aba783d50ae5
+    - 0802ced5-33a3-405e-8336-b65ebc5cb07c
+    - 88224abb-5746-431f-9c17-17d7ef806e6a
+    - a4a74102-2af5-45dc-9e41-ef7f5aed88be
+    - ecb5520d-1358-434c-95ec-93687ecd1396
+    - f312aaec-3b6f-44b3-86b4-3a0c119c0438
+
+  # Validation
+  val_split_ratio: 0.06
+  val_every: 500
+
+  # Combined validation metric
+  val_score_frame_weight: 1.0
+  val_score_perceptual_weight: 1.0
+  val_score_depth_weight: 1.0
+  save_val_best_checkpoint: true
+
+  batch_size_per_gpu: 24
+  grad_accum_steps: 1
+  num_workers: 8
+  prefetch_factor: 4
+  num_threads: 1
+
+  amp_dtype: bf16
+  use_amp: true
+  use_tf32: true
+
+  checkpoint_dir: path/to/ckpt_folder
+  checkpoint_every: 500
+  checkpoint_steps: [50000]
+
+  resume_ckpt: path/to/sable_dl3dv.pt
+  reset_training_state: true
+  max_fwdbwd_passes: 50000
+  print_every: 10
+  save_visuals: true
+  save_pointclouds: true
+  save_camera_pointcloud_scene: true
+  vis_num_samples: 1
+  vis_max_views: 2
+  render_video: false
+
+  grad_checkpoint_every: 1
+  grad_clip_norm: 1.0
+  allowed_gradnorm_factor: 5.0
+  no_pass_steps: 50
+
+  l2_loss_weight: 1.0
+  lpips_loss_weight: 0.0
+  perceptual_loss_weight: 0.3
+  gs_reg_loss_weight: 1.0
+
+  scene_scale_factor: 1.35
+  image_preprocess: stretch  # stretch | square_crop | stereo_square_crop_anchor
+  random_split: false
+  random_shuffle: false
+
+  training_regime: all_views_reconstruction
+  num_views: 2
+  num_input_views: 2
+  num_target_views: 2
+
+  view_selector:
+    type: all
+    fallback_type: all
+    overlap_path_template: null
+    use_curriculum: false
+    curriculum_iter: 0
+    curriculum_start_min_overlap: 1.0
+    curriculum_start_max_overlap: 1.0
+    min_overlap: 0.0
+    max_overlap: 1.0
+    min_frame_dist: 1
+    max_frame_dist: 1
+    curriculum_start_min_frame_dist: 1
+    curriculum_start_max_frame_dist: 1
