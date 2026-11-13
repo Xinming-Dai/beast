@@ -4,7 +4,8 @@
 [beast/data/sable_dataset.py](../../beast/data/sable_dataset.py)) trains SABLE on
 multi-view frames from the Cheese3D multi-camera frame dumps, without requiring
 precomputed VDA depth or real correspondence files.  The default setup uses two views
-(TL + TR); a third center view (TC) can be enabled via config.
+(TL + TR); a third center view (TC) can be enabled via config, and any number of views
+(e.g. five: TL, TR, L, R, BC) via `cheese3d_cameras`.
 
 ## Expected directory layout
 
@@ -54,6 +55,37 @@ model:
 
 When `cheese3d_center_camera` is set, also update `num_views`, `num_input_views`,
 `num_target_views`, and `vis_max_views` to `3` in the config.
+
+### More than three views
+
+Set `cheese3d_cameras` to an ordered list instead of the left/right/center keys (it takes
+precedence over them); it needs at least two distinct cameras. View `i` is camera `i`, and
+`num_views`, `num_input_views`, `num_target_views`, and `vis_max_views` must equal the list
+length. See
+[configs/sable/sable_cheese3d_5view.yaml](../../configs/sable/sable_cheese3d_5view.yaml):
+
+```yaml
+training:
+  cheese3d_cameras: [TL, TR, L, R, BC]
+  num_views: 5
+  num_input_views: 5
+  num_target_views: 5
+  vis_max_views: 5
+```
+
+Notes:
+
+- Only frames present in **all** listed cameras (and, with segmentation on, all their masks)
+  are used, and `gt_c2w` / `gt_fxfycxcy` / `mask` are stacked in list order.
+- The fixed correspondences (`leftcamera_xy`, `rightcamera_xy`, `centercamera_xy`) are only
+  provided for the first three cameras. They are unused when `model.gaussians.init_gs: false`
+  (as in the Cheese3D configs); the VDA point-cloud merge only aligns views 0 and 1 regardless.
+- The canonical (identity-pose) camera is index `num_views // 2` (here `L`).
+- `center_camera_holdout` requires exactly three views, and the eval layout
+  (`{camera}/{split}/interval*.png`) only supports two cameras, so extra cameras are ignored
+  there.
+- 5 views are about 2000 tokens per sample versus 1200 for 3, so the 5-view config uses
+  `batch_size_per_gpu: 12` with `grad_accum_steps: 2`.
 
 `cheese3d_session_names`, `cheese3d_left_camera`, `cheese3d_right_camera`, and
 `cheese3d_center_camera` are read directly from the config dict (`extra='allow'` on
@@ -165,8 +197,20 @@ The SABLE model (`beast/models/sable.py`) applies the masks in three places:
 ## Running training
 
 ```bash
-sbatch scripts/sable_scripts/training/train_sable_cheese3d.sh
+sbatch scripts/sable_scripts/training/cheese3d/train_sable_cheese3d.sh
+# five views (TL, TR, L, R, BC); checkpoints go under twoview3d_ckpts/cheese3d_5view/<job id>
+sbatch scripts/sable_scripts/training/cheese3d/train_sable_cheese3d_5view.sh
 ```
+
+## Running inference
+
+```bash
+JOB_ID=<training job id> sbatch scripts/sable_scripts/inference/infer_sable_cheese3d_5view.sh
+```
+
+`beast predict` rebuilds the dataset from the checkpoint's saved `config.yaml`, so the camera
+list is picked up automatically. The render-vs-target PNG grid shows
+`training.vis_max_views` views (default 2 when the key is absent).
 
 `train_sable.py` resolves `training.dataset_name` dynamically (via
 `_resolve_dataset_class`), so other dataset classes can be swapped in the same way by

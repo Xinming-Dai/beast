@@ -1495,6 +1495,7 @@ def infer_sable(
                     result=SimpleNamespace(**result),
                     batch=batch,
                     step=batch_idx,
+                    max_views=int(config['training'].get('vis_max_views', 2)),
                     session_ids=session_ids,
                     sample_indices=sample_indices,
                 )

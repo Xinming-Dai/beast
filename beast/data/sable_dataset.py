@@ -37,6 +37,8 @@ class _PrecacheRecord:
     right_mask_path: Path | None = None
     center_path: Path | None = None
     center_mask_path: Path | None = None
+    extra_paths: tuple[Path, ...] = ()
+    extra_mask_paths: tuple[Path, ...] = ()
     split: str | None = None
     neural_trial_idx: int | None = None
     neural_bin_idx: int | None = None
@@ -1301,8 +1303,9 @@ class Cheese3DDataset(SABLEDataset):
     For each session in ``training.session_names``, pairs frames from
     ``training.cheese3d_left_camera`` and ``training.cheese3d_right_camera`` (default
     ``'TL'``/``'TR'``) by matching frame index.  Optionally includes a third center
-    camera (``training.cheese3d_center_camera``, e.g. ``'TC'``).  The accompanying
-    per-frame ``.npy`` files (static camera intrinsics/extrinsics) are loaded when
+    camera (``training.cheese3d_center_camera``, e.g. ``'TC'``).  For more than three
+    views, set ``training.cheese3d_cameras`` to the full ordered camera list instead.  The
+    accompanying per-frame ``.npy`` files (static camera intrinsics/extrinsics) are loaded when
     ``training.use_camera_params`` is ``true``, returning pre-calibrated ``c2w`` and
     ``fxfycxcy`` tensors that the model uses in place of its learned pose predictor.
 
@@ -1334,6 +1337,11 @@ class Cheese3DDataset(SABLEDataset):
       ``training.cheese3d_right_camera`` (default ``'TR'``),
       ``training.cheese3d_center_camera`` (default ``None``; set to e.g. ``'TC'`` to
       enable three-view training).
+    * ``training.cheese3d_cameras`` (default ``None``) — ordered list of two or more distinct
+      camera names (e.g. ``['TL', 'TR', 'L', 'R', 'BC']``). When set it overrides the
+      left/right/center keys above; view ``i`` is camera ``i``. The first three cameras take the
+      left/right/center roles (fixed correspondences, ``center_camera_holdout``); the rest are
+      stacked after them.
     * ``training.use_segmentation.enabled`` (default ``False``),
       ``training.use_segmentation.cache_root`` (required when enabled).
     * ``training.use_camera_params`` (default ``False``) — when ``true``, load per-frame
@@ -1375,11 +1383,28 @@ class Cheese3DDataset(SABLEDataset):
         session_names = training.get('session_names')
         if not session_names:
             raise ValueError('training.session_names must be a non-empty list.')
-        left_camera = str(training.get('cheese3d_left_camera', 'TL'))
-        right_camera = str(training.get('cheese3d_right_camera', 'TR'))
-        center_camera_raw = training.get('cheese3d_center_camera')
-        center_camera: str | None = str(center_camera_raw) if center_camera_raw else None
-        self._num_views: int = 3 if center_camera else 2
+        cameras_raw = training.get('cheese3d_cameras')
+        extra_cameras: list[str] = []
+        if cameras_raw:
+            if isinstance(cameras_raw, str):
+                raise ValueError(
+                    f'training.cheese3d_cameras must be a list of camera names; got {cameras_raw!r}'
+                )
+            cameras = [str(camera) for camera in cameras_raw]
+            if len(cameras) < 2 or len(set(cameras)) != len(cameras):
+                raise ValueError(
+                    'training.cheese3d_cameras must contain at least two distinct cameras; '
+                    f'got {cameras}'
+                )
+            left_camera, right_camera = cameras[:2]
+            center_camera: str | None = cameras[2] if len(cameras) > 2 else None
+            extra_cameras = cameras[3:]
+        else:
+            left_camera = str(training.get('cheese3d_left_camera', 'TL'))
+            right_camera = str(training.get('cheese3d_right_camera', 'TR'))
+            center_camera_raw = training.get('cheese3d_center_camera')
+            center_camera = str(center_camera_raw) if center_camera_raw else None
+        self._num_views: int = 2 + (center_camera is not None) + len(extra_cameras)
 
         seg_cfg: dict = training.get('use_segmentation') or {}
         use_segmentation = bool(seg_cfg.get('enabled', False))
@@ -1410,6 +1435,7 @@ class Cheese3DDataset(SABLEDataset):
             include_splits=include_splits,
             val_split_ratio=val_split_ratio,
             split_seed=split_seed,
+            extra_cameras=extra_cameras,
         )
 
         self._vda_cache_root = None  # type: ignore[assignment]
@@ -1431,8 +1457,9 @@ class Cheese3DDataset(SABLEDataset):
         include_splits: list[str] | None,
         val_split_ratio: float,
         split_seed: int,
+        extra_cameras: list[str] | None = None,
     ) -> list[_PrecacheRecord]:
-        """Build records by pairing same-index frames from two or three cameras across sessions.
+        """Build records by pairing same-index frames from two or more cameras across sessions.
 
         Args:
             dataset_path: root Cheese3D directory containing per-session subdirectories.
@@ -1447,14 +1474,20 @@ class Cheese3DDataset(SABLEDataset):
             include_splits: split filter; see :class:`SABLEDataset` for details.
             val_split_ratio: fraction of records reserved for validation.
             split_seed: RNG seed for the deterministic train/val split.
+            extra_cameras: optional cameras beyond left/right/center, in view order. Only
+                frames present in every camera directory are included and each record stores
+                them in ``extra_paths``. Requires ``center_camera`` to be set.
 
         Returns:
             list of ``_PrecacheRecord``.
         """
-        camera_names = (
-            f'{left_camera}/{right_camera}/{center_camera}'
-            if center_camera
-            else f'{left_camera}/{right_camera}'
+        extra_cameras = list(extra_cameras or [])
+        if extra_cameras and center_camera is None:
+            raise ValueError('extra_cameras requires center_camera to be set.')
+        camera_names = '/'.join(
+            [left_camera, right_camera]
+            + ([center_camera] if center_camera else [])
+            + extra_cameras
         )
         records: list[_PrecacheRecord] = []
         eval_records: list[_PrecacheRecord] = []
@@ -1497,7 +1530,7 @@ class Cheese3DDataset(SABLEDataset):
                 if center_camera is not None:
                     log_step(
                         f'session {session_name!r}: eval layout does not support a center '
-                        f'camera; {center_camera!r} is ignored',
+                        f'camera; {[center_camera, *extra_cameras]} are ignored',
                         level='warning',
                     )
                 eval_records.extend(session_eval_records)
@@ -1514,14 +1547,27 @@ class Cheese3DDataset(SABLEDataset):
                     )
                     continue
 
+            extra_dirs = [session_dir / camera for camera in extra_cameras]
+            missing_extra = [d.name for d in extra_dirs if not d.is_dir()]
+            if missing_extra:
+                log_step(
+                    f'skipping session {session_name!r}: missing {missing_extra} camera '
+                    f'directory',
+                    level='warning',
+                )
+                continue
+
             left_indices = self._frame_indices(left_dir, prefix='img', suffix='.png')
             right_indices = self._frame_indices(right_dir, prefix='img', suffix='.png')
             common_indices = left_indices & right_indices
             if center_dir is not None:
                 center_indices = self._frame_indices(center_dir, prefix='img', suffix='.png')
                 common_indices &= center_indices
+            for extra_dir in extra_dirs:
+                common_indices &= self._frame_indices(extra_dir, prefix='img', suffix='.png')
 
             left_mask_dir = right_mask_dir = center_mask_dir = None
+            extra_mask_dirs: list[Path] = []
             if segmentation_root is not None:
                 left_mask_dir = self._resolve_mask_dir(segmentation_root, session_name, left_camera)
                 right_mask_dir = self._resolve_mask_dir(segmentation_root, session_name, right_camera)
@@ -1536,6 +1582,14 @@ class Cheese3DDataset(SABLEDataset):
                         center_mask_dir, prefix='mask', suffix='.png',
                     )
                     common_indices &= center_mask_indices
+                for camera in extra_cameras:
+                    extra_mask_dir = self._resolve_mask_dir(
+                        segmentation_root, session_name, camera,
+                    )
+                    extra_mask_dirs.append(extra_mask_dir)
+                    common_indices &= self._frame_indices(
+                        extra_mask_dir, prefix='mask', suffix='.png',
+                    )
 
             for frame_idx in sorted(common_indices):
                 records.append(_PrecacheRecord(
@@ -1559,6 +1613,10 @@ class Cheese3DDataset(SABLEDataset):
                         center_mask_dir / f'mask{frame_idx:08d}.png'
                         if center_mask_dir
                         else None
+                    ),
+                    extra_paths=tuple(d / f'img{frame_idx:08d}.png' for d in extra_dirs),
+                    extra_mask_paths=tuple(
+                        d / f'mask{frame_idx:08d}.png' for d in extra_mask_dirs
                     ),
                 ))
 
@@ -1661,7 +1719,7 @@ class Cheese3DDataset(SABLEDataset):
             )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Load one frame tuple (two or three views).
+        """Load one frame tuple (two or more views).
 
         Raw images are always returned unchanged under ``image`` so that VDA, the
         image tokeniser, and DINO receive full scene context.  When segmentation is
@@ -1691,19 +1749,19 @@ class Cheese3DDataset(SABLEDataset):
         left_img, left_orig_w, left_orig_h = self._load_image(rec.left_path)
         right_img, right_orig_w, right_orig_h = self._load_image(rec.right_path)
 
+        images = [left_img, right_img]
+        center_orig_size: tuple[int, int] | None = None
         if rec.center_path is not None:
             center_img, center_orig_w, center_orig_h = self._load_image(rec.center_path)
-            image_tensor = torch.stack([left_img, right_img, center_img], dim=0)   # [3, 3, H, W]
-            depth_tensor = torch.zeros(
-                3, 1, self._image_size, self._image_size, dtype=torch.float32,
-            )
-            center_orig_size: tuple[int, int] | None = (center_orig_w, center_orig_h)
-        else:
-            image_tensor = torch.stack([left_img, right_img], dim=0)   # [2, 3, H, W]
-            depth_tensor = torch.zeros(
-                2, 1, self._image_size, self._image_size, dtype=torch.float32,
-            )
-            center_orig_size = None
+            images.append(center_img)
+            center_orig_size = (center_orig_w, center_orig_h)
+        for extra_path in rec.extra_paths:
+            extra_img, _, _ = self._load_image(extra_path)
+            images.append(extra_img)
+        image_tensor = torch.stack(images, dim=0)   # [V, 3, H, W]
+        depth_tensor = torch.zeros(
+            len(images), 1, self._image_size, self._image_size, dtype=torch.float32,
+        )
 
         context_indices, target_indices = self._resolve_view_indices()
         correspondences = self._fixed_correspondences(
@@ -1751,6 +1809,7 @@ class Cheese3DDataset(SABLEDataset):
             masks = [left_mask, right_mask]
             if rec.center_mask_path is not None:
                 masks.append(self._load_mask(rec.center_mask_path))  # [1, H, W]
+            masks.extend(self._load_mask(path) for path in rec.extra_mask_paths)  # [1, H, W]
             result['mask'] = torch.stack(masks, dim=0)  # [V, 1, H, W]
 
         if self._use_camera_params or self._load_gt_camera_params_for_vis:
@@ -1786,6 +1845,10 @@ class Cheese3DDataset(SABLEDataset):
             )
             c2w_arrays.append(center_c2w)
             fxfycxcy_arrays.append(center_fxfycxcy)
+        for extra_path in rec.extra_paths:
+            extra_c2w, extra_fxfycxcy = _npy_to_c2w_fxfycxcy(extra_path.with_suffix('.npy'))
+            c2w_arrays.append(extra_c2w)
+            fxfycxcy_arrays.append(extra_fxfycxcy)
         return np.stack(c2w_arrays), np.stack(fxfycxcy_arrays)
 
     def _fixed_correspondences(
