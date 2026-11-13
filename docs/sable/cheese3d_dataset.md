@@ -84,6 +84,13 @@ Notes:
 - `center_camera_holdout` requires exactly three views, and the eval layout
   (`{camera}/{split}/interval*.png`) only supports two cameras, so extra cameras are ignored
   there.
+- `center_camera_holdout` only holds the center view out of the geometry encoder's patch
+  tokens while random patch masking is active in training. Set `training.strict_holdout: true`
+  for a true holdout: the center view's image tokens are zeroed in train and eval and its
+  Gaussians are dropped, so it is rendered from the other views only (its pose is still
+  learned through the render loss). `training.strict_holdout_hide_encoders: true` additionally
+  hides its image from the pose encoder and DINO, so its pose is predicted without the frame.
+  Both default to `false`, which reproduces older checkpoints.
 - 5 views are about 2000 tokens per sample versus 1200 for 3, so the 5-view config uses
   `batch_size_per_gpu: 12` with `grad_accum_steps: 2`.
 

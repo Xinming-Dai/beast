@@ -262,6 +262,31 @@ def place_cameras_anchored(
     return np.stack(poses), np.stack(intrinsics), sources
 
 
+def held_out_variants(training_regime: str, choice: str) -> list[tuple[str | None, bool]]:
+    """Which held-out-view variants to run for a model.
+
+    Args:
+        training_regime: ``training.training_regime`` of the model config.
+        choice: ``'both'``, ``'visible'`` (held-out view left visible at inference, which is
+            what validation did in training) or ``'masked'`` (strict holdout: its image tokens
+            zeroed and its Gaussians dropped, so it is rendered from the other views only).
+
+    Returns:
+        list of ``(variant name, mask_held_out)``. Models without a held-out view run once with
+        variant name ``None``, because the variants would be identical.
+
+    Raises:
+        ValueError: if ``choice`` is unknown.
+    """
+    if choice not in ('both', 'visible', 'masked'):
+        raise ValueError(f'held-out TC choice must be both/visible/masked, got {choice!r}')
+    if str(training_regime).strip().lower() != 'center_camera_holdout':
+        return [(None, False)]
+    variants = {'visible': ('tc_visible', False), 'masked': ('tc_masked', True)}
+    names = ('visible', 'masked') if choice == 'both' else (choice,)
+    return [variants[name] for name in names]
+
+
 def tensor_to_uint8(image: torch.Tensor) -> np.ndarray:
     """Convert a ``[3, H, W]`` float image in [0, 1] to an ``[H, W, 3]`` uint8 array."""
     array = image.detach().float().clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy()
@@ -473,6 +498,9 @@ def _run_nvs_session(
     pose_mode: str = 'anchor',
     anchor_camera: str = 'TC',
     anchor_source: str = 'auto',
+    mask_held_out: bool = False,
+    variant: str | None = None,
+    hide_held_out_from_encoders: bool = False,
 ) -> dict:
     """Run NVS for one frame of one session and save the figure, metrics and scenes.
 
@@ -509,6 +537,13 @@ def _run_nvs_session(
         anchor_source: ``'predicted'`` uses the model's own pose for the anchor, ``'derived'``
             maps its GT pose into the model frame with the similarity fit, ``'auto'`` picks
             ``'predicted'`` when the model has a pose for it.
+        mask_held_out: strict holdout at inference (the ``strict_holdout`` batch key read by
+            ``Sable.forward``): the held-out view's image tokens are zeroed and its Gaussians are
+            dropped. Only meaningful for ``center_camera_holdout`` models.
+        variant: subfolder name for this run's outputs under the frame folder, or ``None``.
+        hide_held_out_from_encoders: with ``mask_held_out``, also hide the held-out image from
+            the pose encoder and DINO (``hide_held_out_from_encoders`` batch key). Only sensible
+            for models trained with ``training.strict_holdout_hide_encoders``.
 
     Returns:
         the metrics dict that is also written to ``nvs_metrics.json``.
@@ -529,11 +564,17 @@ def _run_nvs_session(
     batch_indices = range(dataset_idx, min(dataset_idx + context_batch, len(dataset)))
     batch = collate_with_correspondence_padding([dataset[idx] for idx in batch_indices])
     batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+    if mask_held_out:
+        batch['strict_holdout'] = True
+        if hide_held_out_from_encoders:
+            batch['hide_held_out_from_encoders'] = True
     source_frame_idx = int(rec.left_source_frame_index)
     output_dir = Path(output_dir) / f'frame_{source_frame_idx:08d}'
+    if variant is not None:
+        output_dir = output_dir / variant
     log_step(
         f'cheese3d_nvs: {rec.scene_name}, model cameras {model_cameras}, amp={amp}, '
-        f'batch={len(batch_indices)}',
+        f'batch={len(batch_indices)}, strict holdout={mask_held_out}',
         level='info',
     )
 
@@ -626,8 +667,8 @@ def _run_nvs_session(
         focal_ratio = pred_px[anchor_camera][:2] / gt_px[anchor_idx, :2]
         if anchor_camera in held_out:
             log_step(
-                f'cheese3d_nvs: anchor {anchor_camera} was masked from the encoders, so its '
-                'predicted pose is unreliable; try anchor_source=derived',
+                f'cheese3d_nvs: anchor {anchor_camera} is this model\'s held-out view; compare '
+                'anchor_source=derived if its predicted pose looks off',
                 level='warning',
             )
     else:
@@ -709,6 +750,9 @@ def _run_nvs_session(
         'frame_idx': source_frame_idx,
         'scene_name': rec.scene_name,
         'amp': amp,
+        'held_out_tc': (
+            'none' if variant is None else ('masked' if mask_held_out else 'visible')
+        ),
         'context_batch': len(batch_indices),
         'pose_mode': pose_mode,
         'global_fit_intrinsics': intrinsics,
@@ -832,7 +876,9 @@ def run_nvs(
     pose_mode: str = 'anchor',
     anchor_camera: str = 'TC',
     anchor_source: str = 'auto',
-) -> dict[str, dict]:
+    held_out_tc: str = 'both',
+    hide_held_out_from_encoders: bool = False,
+) -> dict[str, dict[str, dict]]:
     """Run NVS for one frame of each session, loading the model once.
 
     The dataset always covers every session in the saved training config (in config order) so
@@ -862,9 +908,16 @@ def run_nvs(
         pose_mode: ``'anchor'`` or ``'global_fit'``; which renders fill row 2.
         anchor_camera: camera the ``anchor`` mode places the others relative to.
         anchor_source: ``'auto'``, ``'predicted'`` or ``'derived'``; see ``_run_nvs_session``.
+        held_out_tc: ``'both'``, ``'visible'`` or ``'masked'`` for ``center_camera_holdout``
+            models, see ``held_out_variants``. Each variant is saved under
+            ``frame_<idx:08d>/<variant>/`` with its own
+            ``nvs_metrics_all_sessions_<variant>.json``; other models run once.
+        hide_held_out_from_encoders: for the masked variant, also hide the held-out image from
+            the pose encoder and DINO; see ``_run_nvs_session``.
 
     Returns:
-        ``{session: metrics dict}`` for the sessions that had a frame in ``split``.
+        ``{variant name or 'default': {session: metrics dict}}`` for the sessions that had a
+        frame in ``split``.
 
     Raises:
         ValueError: if a model camera is missing from ``cameras``.
@@ -897,49 +950,57 @@ def run_nvs(
     dataset = _build_sable_dataset(config, include_splits=[split])
 
     output_dir = Path(output_dir)
-    all_metrics: dict[str, dict] = {}
-    for session in sessions:
-        try:
-            all_metrics[session] = _run_nvs_session(
-                model, config, dataset, model_dir, output_dir / session, session,
-                frame_idx, cameras, align_cameras, device,
-                amp=amp, context_batch=context_batch, intrinsics=intrinsics,
-                save_glb=save_glb, pose_mode=pose_mode, anchor_camera=anchor_camera,
-                anchor_source=anchor_source,
-            )
-        except ValueError as err:
-            log_step(f'cheese3d_nvs: skipping session {session}: {err}', level='warning')
+    variants = held_out_variants(config['training'].get('training_regime', ''), held_out_tc)
+    results: dict[str, dict[str, dict]] = {}
+    for variant, mask_held_out in variants:
+        all_metrics: dict[str, dict] = {}
+        for session in sessions:
+            try:
+                all_metrics[session] = _run_nvs_session(
+                    model, config, dataset, model_dir, output_dir / session, session,
+                    frame_idx, cameras, align_cameras, device,
+                    amp=amp, context_batch=context_batch, intrinsics=intrinsics,
+                    save_glb=save_glb, pose_mode=pose_mode, anchor_camera=anchor_camera,
+                    anchor_source=anchor_source, mask_held_out=mask_held_out, variant=variant,
+                    hide_held_out_from_encoders=hide_held_out_from_encoders,
+                )
+            except ValueError as err:
+                log_step(f'cheese3d_nvs: skipping session {session}: {err}', level='warning')
 
-    if not all_metrics:
-        raise RuntimeError(f'no session produced an NVS result; tried {sessions}')
+        if not all_metrics:
+            raise RuntimeError(f'no session produced an NVS result; tried {sessions}')
 
-    summary = {
-        key: {
-            metric: float(np.nanmean([m['summary'][key][metric] for m in all_metrics.values()]))
-            for metric in ('psnr', 'ssim')
+        summary = {
+            key: {
+                metric: float(np.nanmean([
+                    m['summary'][key][metric] for m in all_metrics.values()
+                ]))
+                for metric in ('psnr', 'ssim')
+            }
+            for key in ('predicted_mean', 'projected_mean_all', 'projected_mean_novel')
         }
-        for key in ('predicted_mean', 'projected_mean_all', 'projected_mean_novel')
-    }
-    summary['projected_mean_novel_by_pose_mode'] = {
-        mode: {
-            metric: float(np.nanmean([
-                m['summary']['projected_mean_novel_by_pose_mode'][mode][metric]
-                for m in all_metrics.values()
-            ]))
-            for metric in ('psnr', 'ssim')
+        summary['projected_mean_novel_by_pose_mode'] = {
+            mode: {
+                metric: float(np.nanmean([
+                    m['summary']['projected_mean_novel_by_pose_mode'][mode][metric]
+                    for m in all_metrics.values()
+                ]))
+                for metric in ('psnr', 'ssim')
+            }
+            for mode in ('global_fit', 'anchor')
         }
-        for mode in ('global_fit', 'anchor')
-    }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / 'nvs_metrics_all_sessions.json').write_text(
-        json.dumps({'mean_over_sessions': summary, 'sessions': all_metrics}, indent=2) + '\n',
-    )
-    log_step(
-        f'cheese3d_nvs: {len(all_metrics)}/{len(sessions)} sessions done; '
-        f'mean over sessions: {summary}',
-        level='info',
-    )
-    return all_metrics
+        suffix = '' if variant is None else f'_{variant}'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f'nvs_metrics_all_sessions{suffix}.json').write_text(
+            json.dumps({'mean_over_sessions': summary, 'sessions': all_metrics}, indent=2) + '\n',
+        )
+        log_step(
+            f'cheese3d_nvs [{variant or "default"}]: {len(all_metrics)}/{len(sessions)} '
+            f'sessions done; mean over sessions: {summary}',
+            level='info',
+        )
+        results[variant or 'default'] = all_metrics
+    return results
 
 
 def main() -> None:
@@ -1004,6 +1065,19 @@ def main() -> None:
         help='anchor pose: the predicted one (auto when the model has it) or derived from the '
         'GT rig via the similarity fit',
     )
+    parser.add_argument(
+        '--held-out-tc',
+        choices=('both', 'visible', 'masked'),
+        default='both',
+        help='for center_camera_holdout models: run with the held-out view visible, with its '
+        'strict holdout (tokens zeroed, its Gaussians dropped), or both',
+    )
+    parser.add_argument(
+        '--hide-held-out-from-encoders',
+        action='store_true',
+        help='masked variant only: also hide the held-out image from the pose encoder and DINO '
+        '(for models trained with training.strict_holdout_hide_encoders)',
+    )
     parser.add_argument('--no-save-glb', action='store_true', help='skip the .glb scene')
     args = parser.parse_args()
     run_nvs(
@@ -1022,6 +1096,8 @@ def main() -> None:
         pose_mode=args.pose_mode,
         anchor_camera=args.anchor_camera,
         anchor_source=args.anchor_source,
+        held_out_tc=args.held_out_tc,
+        hide_held_out_from_encoders=args.hide_held_out_from_encoders,
     )
 
 
