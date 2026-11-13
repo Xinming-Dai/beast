@@ -995,6 +995,9 @@ def save_camera_pointcloud_scene(
     session_ids: list[str] | None = None,
     sample_indices: list[int] | None = None,
     scene_names: list[str] | None = None,
+    align_view_indices: list[int] | None = None,
+    extra_c2w: np.ndarray | None = None,
+    file_suffix: str = '',
 ) -> list[Path]:
     """Save the predicted point cloud together with camera frustums as a .glb scene.
 
@@ -1044,6 +1047,17 @@ def save_camera_pointcloud_scene(
             ``scene_{scene_name}_sample{sample_idx:02d}.glb`` instead of the
             ``batch_idx``-based default, so files can be traced back to their
             session/frame without rerunning inference.
+        align_view_indices: view indices whose predicted/GT poses are used to fit the
+            similarity transform. ``None`` (default) fits on every predicted view that has a
+            ``gt_c2w`` row; pass a subset to keep views whose pose carries no real information
+            (e.g. a center view masked from the encoders) out of the fit. All GT rows are still
+            drawn.
+        extra_c2w: additional camera-to-world poses ``[E, 4, 4]`` in the predicted frame,
+            drawn as black frusta for every saved sample (e.g. cameras placed by a method other
+            than the GT similarity fit). They follow the predicted cameras through the GT
+            alignment when ``gt_c2w`` is present. ``None`` draws nothing extra.
+        file_suffix: appended to the file stem (``scene_..._sample00{file_suffix}.glb``) so
+            several scenes for the same sample can coexist.
 
     Returns:
         list of Path objects for the .glb files that were written.
@@ -1091,12 +1105,16 @@ def save_camera_pointcloud_scene(
             c2w_target[sample_idx].detach().float().cpu().numpy(),
         )
         num_cameras = len(view_indices)
+        extra_np = None if extra_c2w is None else np.asarray(extra_c2w, dtype=float)
 
         gt_c2w_np = None
         if has_gt_c2w and sample_idx < gt_c2w.shape[0]:
             gt_c2w_np = gt_c2w[sample_idx].detach().float().cpu().numpy()  # [V_gt, 4, 4]
             correspond = [
-                (pos, vidx) for pos, vidx in enumerate(view_indices) if vidx < gt_c2w_np.shape[0]
+                (pos, vidx)
+                for pos, vidx in enumerate(view_indices)
+                if vidx < gt_c2w_np.shape[0]
+                and (align_view_indices is None or vidx in align_view_indices)
             ]
             if correspond:
                 pred_positions, gt_indices = zip(*correspond)
@@ -1108,6 +1126,8 @@ def save_camera_pointcloud_scene(
                 xyz = (xyz * yz_flip) @ transform[:3, :3].T + transform[:3, 3] # undo flip, apply transform
                 xyz = xyz * yz_flip # reapply flip
                 c2ws = apply_similarity_transform_to_poses(transform, c2ws)
+                if extra_np is not None:
+                    extra_np = apply_similarity_transform_to_poses(transform, extra_np)
             else:
                 log_step(
                     f'Skipping GT camera overlay for sample {sample_idx}: no view-index '
@@ -1147,13 +1167,25 @@ def save_camera_pointcloud_scene(
                     screen_width=sample_screen_width,
                 )
 
+        if extra_np is not None:
+            for extra_pose in extra_np:
+                add_scene_cam(
+                    scene=scene,
+                    c2w=extra_pose,
+                    edge_color=gt_color,
+                    imsize=(256, 256),
+                    screen_width=sample_screen_width,
+                )
+
         sample_dir = glb_dir / session_ids[sample_idx] if session_ids is not None else glb_dir
         sample_dir.mkdir(parents=True, exist_ok=True)
         if scene_names is not None:
             scene_tag = _sanitize_filename(scene_names[sample_idx])
-            out_glb = sample_dir / f'scene_{scene_tag}_sample{sample_idx:02d}.glb'
+            out_glb = sample_dir / f'scene_{scene_tag}_sample{sample_idx:02d}{file_suffix}.glb'
         else:
-            out_glb = sample_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}.glb'
+            out_glb = (
+                sample_dir / f'scene_batch{batch_idx:04d}_sample{sample_idx:02d}{file_suffix}.glb'
+            )
         scene.export(out_glb)
 
         log_step(
