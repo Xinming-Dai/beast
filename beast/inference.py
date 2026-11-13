@@ -820,8 +820,12 @@ def _extract_pointcloud_xyz_rgb(
             .numpy()
         )
         xyz[:, [1, 2]] *= -1
+        sample_images = images[sample_idx]
+        gaussian_indices = result.get('gaussian_indices')
+        if torch.is_tensor(gaussian_indices) and sample_idx < gaussian_indices.shape[0]:
+            sample_images = sample_images[gaussian_indices[sample_idx].to(sample_images.device)]
         rgb_candidate = (
-            images[sample_idx]
+            sample_images
             .detach().float().cpu()
             .clamp(0, 1)
             .permute(0, 2, 3, 1)

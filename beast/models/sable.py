@@ -157,6 +157,71 @@ def build_token_masks(
     return pixel_mask, gaussian_mask
 
 
+def held_out_keep_positions(held_out: torch.Tensor) -> torch.Tensor:
+    """Positions of the views that are NOT held out, per sample, in their original order.
+
+    Args:
+        held_out: bool flags, shape [B, V]; True marks a held-out view.
+
+    Returns:
+        long tensor [B, V_keep] of view positions to keep.
+
+    Raises:
+        ValueError: if samples hold out different numbers of views, or every view is held out.
+    """
+    num_kept = (~held_out).sum(dim=1)
+    if not torch.all(num_kept == num_kept[0]):
+        raise ValueError('every sample must hold out the same number of views')
+    v_keep = int(num_kept[0])
+    if v_keep == 0:
+        raise ValueError('at least one view must remain after holding views out')
+    # stable sort puts False (kept) before True (held out) and preserves view order
+    return torch.argsort(held_out.to(torch.int8), dim=1, stable=True)[:, :v_keep]
+
+
+def select_view_blocks(
+    tensor: torch.Tensor,
+    positions: torch.Tensor,
+    num_views: int,
+) -> torch.Tensor:
+    """Keep selected per-view blocks of a tensor whose dim 1 is ``num_views`` blocks in a row.
+
+    Args:
+        tensor: shape [B, num_views * N, ...].
+        positions: view positions to keep per sample, shape [B, V_keep].
+        num_views: number of views along dim 1 of ``tensor``.
+
+    Returns:
+        tensor of shape [B, V_keep * N, ...].
+    """
+    batch = tensor.shape[0]
+    per_view = tensor.shape[1] // num_views
+    batch_idx = torch.arange(batch, device=tensor.device).unsqueeze(-1)
+    blocks = tensor.reshape(batch, num_views, per_view, *tensor.shape[2:])
+    return blocks[batch_idx, positions].reshape(batch, -1, *tensor.shape[2:])
+
+
+def zero_held_out_tokens(tokens: torch.Tensor, held_out: torch.Tensor) -> torch.Tensor:
+    """Zero every image token of the views flagged as held out.
+
+    Args:
+        tokens: image tokens, shape [B, V, N, D].
+        held_out: bool flags, shape [B, V]; True marks a held-out view.
+
+    Returns:
+        ``tokens`` with the flagged views set to zero, same shape and dtype.
+
+    Raises:
+        ValueError: if ``held_out`` does not match the batch and view dimensions of ``tokens``.
+    """
+    if held_out.shape != tokens.shape[:2]:
+        raise ValueError(
+            f'held_out must have shape {tuple(tokens.shape[:2])}, got {tuple(held_out.shape)}',
+        )
+    keep = ~held_out.to(device=tokens.device, dtype=torch.bool)
+    return tokens * keep[:, :, None, None].to(tokens.dtype)
+
+
 def build_segmentation_gaussian_mask(
     seg_mask: torch.Tensor,
     hh: int,
@@ -483,6 +548,11 @@ class Sable(BaseLightningModel):
             num_input_views == num_views and num_target_views < num_views
         )
 
+        self.strict_holdout = bool(config['training'].get('strict_holdout', False))
+        self.strict_holdout_hide_encoders = bool(
+            config['training'].get('strict_holdout_hide_encoders', False),
+        )
+
     def maybe_randomize_view_indices(self, input_idx, target_idx, device):
         """Randomize view ordering for two-view training."""
         b = input_idx.shape[0]
@@ -692,6 +762,31 @@ class Sable(BaseLightningModel):
         v_input = input_idx.shape[1]
         v_target = target_idx.shape[1]
 
+        held_out = None
+        hide_encoders = False
+        full_mask = data.get('context_full_mask')
+        if (
+            data.get('strict_holdout', self.strict_holdout)
+            and full_mask is not None
+            and not self.full_context_partial_target
+        ):
+            held_out = full_mask.to(device=device, dtype=torch.bool)
+            if held_out.shape != input_idx.shape:
+                raise ValueError('context_full_mask must have the same shape as input_indices.')
+            if not torch.equal(input_idx, target_idx):
+                raise ValueError('strict_holdout requires identical input and target views.')
+            if not held_out.any():
+                held_out = None
+        encoder_images = data['image']
+        if held_out is not None and data.get(
+            'hide_held_out_from_encoders', self.strict_holdout_hide_encoders,
+        ):
+            hide_encoders = True
+            image_mask = torch.zeros((b, v_real), device=device, dtype=torch.bool)
+            image_mask[batch_idx, input_idx] = held_out
+            encoder_images = encoder_images.masked_fill(image_mask[:, :, None, None, None], 0)
+            image_all = encoder_images * 2.0 - 1.0
+
         # padding input to 10 views if less than 10 views (repeat the last view)
         if v_real < 10:
             pad_input = True
@@ -756,7 +851,7 @@ class Sable(BaseLightningModel):
         normalized = True
 
         # dino image tokenization
-        dino_image_all = data["image"]
+        dino_image_all = encoder_images
         if pad_input:
             last_view = dino_image_all[:, -1:, ...].repeat(1, pad_views, 1, 1, 1)
             dino_image_all = torch.cat([dino_image_all, last_view], dim=1)
@@ -776,12 +871,10 @@ class Sable(BaseLightningModel):
         dino_cls_tokens_proj = (
             None if self.dino_cls_proj is None else self.dino_cls_proj(dino_cls_tokens_raw)
         )
-        if full_mask is not None:
-            dino_cls_tokens_raw = dino_cls_tokens_raw.masked_fill(full_mask.unsqueeze(-1), 0)
+        if hide_encoders:
+            dino_cls_tokens_raw = dino_cls_tokens_raw.masked_fill(held_out.unsqueeze(-1), 0)
             if dino_cls_tokens_proj is not None:
-                dino_cls_tokens_proj = dino_cls_tokens_proj.masked_fill(
-                    full_mask.unsqueeze(-1), 0,
-                )
+                dino_cls_tokens_proj = dino_cls_tokens_proj.masked_fill(held_out.unsqueeze(-1), 0)
         # dino_z_out is for neural encoding
         dino_cls_out = latent_tensor_export_if_requested(
             dino_cls_tokens_raw,
@@ -827,7 +920,9 @@ class Sable(BaseLightningModel):
                 gaussian_mask = gaussian_mask if self.gaussian_mask_enabled else None
         else:
             masked_img_tokens_input = img_tokens_input
-        
+            if held_out is not None:
+                masked_img_tokens_input = zero_held_out_tokens(img_tokens_input, held_out)
+
         '''predict scene representation using (posed) input views'''
         c2w_input = pred_c2w[batch_idx, input_idx, ...]                                                      # [b, v_input, 4, 4]
         fxfycxcy_input = pred_fxfycxcy[batch_idx, input_idx, ...]                                            # [b, v_input, 4]
@@ -851,10 +946,8 @@ class Sable(BaseLightningModel):
         img_tokens_input = torch.cat([img_tokens_input, plucker_emb_input], dim=-1)                           # [b, v_input*n, 2d]
         all_tokens = self.mlp_fuse(img_tokens_input)                                                          # [b, v_input*n, d]
 
-        # Each local-attention group contains its own CLS followed by its patches.
-        all_tokens = rearrange(all_tokens, 'b (v n) d -> b v n d', v=v_input)
-        all_tokens = torch.cat([dino_cls_tokens.unsqueeze(2), all_tokens], dim=2)
-        all_tokens = rearrange(all_tokens, 'b v n d -> b (v n) d')
+        cls_tokens = dino_cls_tokens_raw if dino_cls_tokens_proj is None else dino_cls_tokens_proj
+        all_tokens = torch.cat([cls_tokens, all_tokens], dim=1)
 
         # encoder layers, predict depths and feature vectors
         all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input + v_input*n, d]
@@ -1077,6 +1170,11 @@ class Sable(BaseLightningModel):
             (xyz, features, scaling, rotation, opacity),
         )
 
+        # views whose Gaussians exist: all targets when every input view is a target; only the
+        # targets under partial-target selection; only the non-held-out views under strict holdout
+        v_gaussian = v_target
+        gaussian_idx = target_idx if self.full_context_partial_target else input_idx
+        keep_pos = None
         if self.full_context_partial_target:
             assert target_pos is not None
             xyz, features, scaling, rotation, opacity = self._select_target_gaussians(
@@ -1089,6 +1187,24 @@ class Sable(BaseLightningModel):
                 v_input=v_input,
                 v_target=v_target,
             )
+        elif held_out is not None:
+            keep_pos = held_out_keep_positions(held_out)                # [b, v_keep]
+            v_gaussian = keep_pos.shape[1]
+            xyz, features, scaling, rotation, opacity = self._select_target_gaussians(
+                xyz=xyz,
+                features=features,
+                scaling=scaling,
+                rotation=rotation,
+                opacity=opacity,
+                target_pos=keep_pos,
+                v_input=v_input,
+                v_target=v_gaussian,
+            )
+            gaussian_idx = input_idx[batch_idx, keep_pos]
+            if self.init_gs:
+                xyz_init = select_view_blocks(xyz_init, keep_pos, v_input)
+            if gaussian_mask is not None:
+                gaussian_mask = gaussian_mask[batch_idx, keep_pos]
 
         if self.init_gs:
             xyz_norm, xyz_init_norm = map(
@@ -1191,7 +1307,7 @@ class Sable(BaseLightningModel):
             img_aligned_xyz = rearrange(
                 img_aligned_xyz,
                 '(v hh ww ph pw) c -> v c (hh ph) (ww pw)',
-                v=v_target,
+                v=v_gaussian,
                 hh=self.hh,
                 ww=self.ww,
                 ph=self.ph,
@@ -1208,6 +1324,9 @@ class Sable(BaseLightningModel):
             target_gaussian_mask = build_segmentation_gaussian_mask(
                 target_mask, self.hh, self.ww, self.ph, self.pw,
             )
+            if keep_pos is not None:
+                # the Gaussians of held-out views were dropped, so drop their mask rows too
+                target_gaussian_mask = target_gaussian_mask[batch_idx, keep_pos]
 
         # apply segmentation mask to l2 loss: penalise only foreground (mouse) pixels
         if self.config['training'].get('mask_l2_loss', False) and target_mask is not None:
@@ -1227,6 +1346,7 @@ class Sable(BaseLightningModel):
             'ray_o': ray_o,
             'gaussians': gaussians,
             'pixelalign_xyz': pixelalign_xyz,
+            'gaussian_indices': gaussian_idx,
             'image': data['image'],
             'input_image': data['image'][batch_idx, input_idx.clamp(max=v_real - 1), ...],
             'target_image': target_img,

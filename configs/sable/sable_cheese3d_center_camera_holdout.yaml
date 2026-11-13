@@ -160,6 +160,8 @@ training:
   num_views: 3
   num_input_views: 3
   num_target_views: 3
+  strict_holdout: true
+  strict_holdout_hide_encoders: true
 
   view_selector:
     type: all

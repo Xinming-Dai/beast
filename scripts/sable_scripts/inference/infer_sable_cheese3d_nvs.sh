@@ -22,7 +22,7 @@ REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 CKPT_ROOT="/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/cheese3d"
 
 # Model dirs contain config.yaml saved during training; checkpoints live under tb_logs/
-MODEL_DIRS="${MODEL_DIRS:-$CKPT_ROOT/20030003_center_view_holdout $CKPT_ROOT/22338245_3_view_reconsturction $CKPT_ROOT/20156493}"
+MODEL_DIRS="${MODEL_DIRS:-$CKPT_ROOT/20030003_center_view_holdout}" #  $CKPT_ROOT/22338245_3_view_reconsturction $CKPT_ROOT/20156493
 DATASET_PATH="${DATASET_PATH:-/work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam}"
 # space-separated session names; empty = every session in the saved training config
 SESSIONS="${SESSIONS:-}"
@@ -48,6 +48,12 @@ ANCHOR_SOURCE="${ANCHOR_SOURCE:-auto}"
 # cameras the model does not have)
 INTRINSICS="${INTRINSICS:-gt}"
 SAVE_GLB="${SAVE_GLB:-1}"
+# center_camera_holdout models: visible = held-out TC left visible (what validation did in training),
+# masked = strict holdout (tokens zeroed, TC's Gaussians dropped), both = each under frame_<idx>/tc_*
+HELD_OUT_TC="${HELD_OUT_TC:-both}"
+# 1 = masked variant also hides the TC image from the pose encoder and DINO (only for models trained
+# with training.strict_holdout_hide_encoders; others never saw a blank view)
+HIDE_HELD_OUT_FROM_ENCODERS="${HIDE_HELD_OUT_FROM_ENCODERS:-0}"
 
 
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
@@ -81,6 +87,7 @@ AMP / context batch:   $AMP / $CONTEXT_BATCH
 Pose mode (row 2):     $POSE_MODE (anchor $ANCHOR_CAMERA, source $ANCHOR_SOURCE)
 Global-fit intrinsics: $INTRINSICS
 Save glb:              $SAVE_GLB
+Held-out TC variants:  $HELD_OUT_TC (hide from encoders: $HIDE_HELD_OUT_FROM_ENCODERS)
 TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
 EOF
@@ -122,8 +129,10 @@ for MODEL_DIR in $MODEL_DIRS; do
         --pose-mode "$POSE_MODE"
         --anchor-camera "$ANCHOR_CAMERA"
         --anchor-source "$ANCHOR_SOURCE"
+        --held-out-tc "$HELD_OUT_TC"
     )
     [ "$SAVE_GLB" != "1" ]   && NVS_ARGS+=(--no-save-glb)
+    [ "$HIDE_HELD_OUT_FROM_ENCODERS" = "1" ] && NVS_ARGS+=(--hide-held-out-from-encoders)
     [ -n "$SESSIONS" ]       && NVS_ARGS+=(--sessions $SESSIONS)
     [ -n "$FRAME_IDX" ]      && NVS_ARGS+=(--frame-idx "$FRAME_IDX")
     [ -n "$ALIGN_CAMERAS" ]  && NVS_ARGS+=(--align-cameras $ALIGN_CAMERAS)
