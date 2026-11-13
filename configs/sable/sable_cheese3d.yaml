@@ -86,6 +86,7 @@ training:
   dataset_path: /work/hdd/bfsr/xdai3/cheese3d_cam/cheese3d_cam
   session_names:
     - 20231031_B20_chew_bl_000
+    - 20231031_B20_chew_bl_000
     - 20231031_B21_chew_bl_000
     - 20231031_B26_chew_bl_000
     - 20231031_B31_chew_bl_000

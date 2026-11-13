@@ -412,12 +412,6 @@ class Sable(BaseLightningModel):
 
         gs_cfg = self.config['model']['gaussians']
         self.init_gs = gs_cfg.get('init_gs', True)
-        geometry_weight = float(self.config['training'].get('gs_reg_loss_weight', 0.0))
-        if not self.init_gs and geometry_weight > 0:
-            _logger.warning(
-                'Geometry loss is disabled because model.gaussians.init_gs=false '
-                '(gs_reg_loss_weight=%s).', geometry_weight,
-            )
         patch_masking_cfg = self.config['model'].get('patch_masking', {})
         self.mask_ratio = float(patch_masking_cfg.get('ratio', 0.0))
         self.pixel_mask_enabled = bool(patch_masking_cfg.get('pixel_mask', True))
@@ -430,7 +424,7 @@ class Sable(BaseLightningModel):
 
         # affine_transformation may be a single 4x4 matrix (applied to every sample)
         # or a dict keyed by session_id (sessions without an entry fall back to auto-ICP)
-        self._session_ids = list(dict.fromkeys(self.config['training'].get('session_names') or []))
+        self._session_ids = list(self.config['training'].get('session_names') or [])
         affine_cfg = merge_pcd_cfg.get('affine_transformation', None)
         if isinstance(affine_cfg, dict):
             self._affine_by_session = {
@@ -449,7 +443,7 @@ class Sable(BaseLightningModel):
         self.vda_mode = str(vda_cfg.get('mode', 'online')).strip().lower()
         if self.vda_mode not in {'online', 'precomputed'}:
             raise ValueError(f"Unsupported model.vda.mode: {self.vda_mode!r}")
-        if not self.init_gs or self.vda_mode == 'precomputed':
+        if self.vda_mode == 'precomputed':
             self.vda = None
         else:
             self.vda = load_frozen_video_depth_anything(vda_cfg)
@@ -509,8 +503,8 @@ class Sable(BaseLightningModel):
         """Resolve, augment, and finalize view indices for a forward pass.
 
         1. raw resolution from data or split heuristic
-        2. training-time randomization
-        3. real-depth view count
+        2. training-time randomization / validation-time visualization expansion
+        3. real-depth view count (always the pre-expansion target count)
         4. target-in-input position map (only when full_context_partial_target)
 
         Args:
@@ -532,13 +526,15 @@ class Sable(BaseLightningModel):
 
         if self.training:
             input_idx, target_idx = self.maybe_randomize_view_indices(input_idx, target_idx, device)
+        elif self.full_context_partial_target:
+            # render all context views (including pseudo-center) during validation
+            target_idx = input_idx.clone()
 
         target_pos: torch.Tensor | None = None
         if self.full_context_partial_target:
-            matches = input_idx.unsqueeze(2) == target_idx.unsqueeze(1)
-            if not matches.any(dim=1).all():
-                raise ValueError('Every target view must be present in the context views.')
-            target_pos = matches.int().argmax(dim=1)  # [b, v_target]
+            target_pos = (
+                input_idx.unsqueeze(2) == target_idx.unsqueeze(1)
+            ).int().argmax(dim=1)  # [b, v_target]
 
         return input_idx, target_idx, depth_num_real_views, target_pos
 
@@ -560,7 +556,9 @@ class Sable(BaseLightningModel):
         Reshapes the flat Gaussian axis into (v_input, n_per_view), indexes the view
         axis with target_pos, then reshapes back to (v_target*n_per_view,).
 
-        All attributes are selected before geometry supervision or debug replacement.
+        n_per_view is derived from rotation (not xyz) because in the debug_merged_pcd
+        path some xyz values may have been replaced by xyz_init values for v_target
+        views, making xyz.shape[1] unreliable.
 
         Args:
             xyz: Gaussian positions, shape [b, v_input*n_per_view, 3].
@@ -593,22 +591,6 @@ class Sable(BaseLightningModel):
     # ------------------------------------------------------------------
     # BaseLightningModel interface
     # ------------------------------------------------------------------
-
-    def _load_from_state_dict(
-        self, state_dict, prefix, local_metadata, strict,
-        missing_keys, unexpected_keys, error_msgs,
-    ):
-        # Older checkpoints stored the frozen VDA even when geometry was disabled.
-        # Ignore only those unused weights, preserving strict checks for the model.
-        if not self.init_gs:
-            vda_prefix = f'{prefix}vda.'
-            for key in list(state_dict):
-                if key.startswith(vda_prefix):
-                    del state_dict[key]
-        super()._load_from_state_dict(
-            state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs,
-        )
 
     def get_model_outputs(self, batch_dict: dict) -> dict:
         """Run Sable forward pass and return a plain dict.
@@ -697,8 +679,10 @@ class Sable(BaseLightningModel):
 
     def forward(self, data, create_visual=False, render_video=False):
 
-        b, v_real, c, h, w = data['image'].shape
-        device = data['image'].device
+        image_all = data['image'] * 2.0 - 1.0         # [b, v_all, c, h, w], range (0,1) to (-1,1)
+
+        b, v_real, c, h, w = image_all.shape
+        device = image_all.device
         batch_idx = torch.arange(b, device=device).unsqueeze(1)
 
         input_idx, target_idx, depth_num_real_views, target_pos = self.prepare_view_indices(
@@ -707,22 +691,6 @@ class Sable(BaseLightningModel):
 
         v_input = input_idx.shape[1]
         v_target = target_idx.shape[1]
-
-        # A held-out view must not reach any image encoder, including the pose
-        # encoder and DINO. Keep the original images for reconstruction targets.
-        full_mask = data.get('context_full_mask')
-        encoder_images = data['image']
-        if full_mask is not None:
-            full_mask = full_mask.to(device=device, dtype=torch.bool)
-            if full_mask.shape != input_idx.shape:
-                raise ValueError('context_full_mask must have the same shape as input_indices.')
-            if full_mask.any():
-                image_mask = torch.zeros((b, v_real), device=device, dtype=torch.bool)
-                image_mask[batch_idx, input_idx] = full_mask
-                encoder_images = encoder_images.masked_fill(image_mask[:, :, None, None, None], 0)
-            else:
-                full_mask = None
-        image_all = encoder_images * 2.0 - 1.0
 
         # padding input to 10 views if less than 10 views (repeat the last view)
         if v_real < 10:
@@ -788,7 +756,7 @@ class Sable(BaseLightningModel):
         normalized = True
 
         # dino image tokenization
-        dino_image_all = encoder_images
+        dino_image_all = data["image"]
         if pad_input:
             last_view = dino_image_all[:, -1:, ...].repeat(1, pad_views, 1, 1, 1)
             dino_image_all = torch.cat([dino_image_all, last_view], dim=1)
@@ -840,33 +808,25 @@ class Sable(BaseLightningModel):
         img_tokens_all = rearrange(img_tokens, '(b v) n d -> b v n d', b=b, v=v_all)
         img_tokens_input = img_tokens_all[batch_idx, input_idx, ...]            # [b, v_input, n, d]
 
+        keep = None
         pixel_mask = None
         gaussian_mask = None
-        keep = torch.ones((b, v_input, n), device=device, dtype=torch.bool)
         if self.training and self.mask_ratio > 0:
             keep = (torch.rand((b, v_input, n), device=img_tokens_input.device) >= self.mask_ratio)
-        if full_mask is not None:
-            keep = keep & ~full_mask.unsqueeze(-1)
-        masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
-        if (self.training and self.mask_ratio > 0) or full_mask is not None:
+            if 'context_full_mask' in data:
+                # [b, v_input] bool; True = zero out all tokens for that view
+                full_mask = data['context_full_mask'].to(device=img_tokens_input.device)
+                keep = keep & ~full_mask.unsqueeze(-1)  # broadcast over n → [b, v_input, n]
+            masked_img_tokens_input = img_tokens_input * keep.unsqueeze(-1).to(img_tokens_input.dtype)
             if self.pixel_mask_enabled or self.gaussian_mask_enabled:
                 pixel_mask, gaussian_mask = build_token_masks(keep, b, v_input, self.hh, self.ww, self.ph, self.pw)
                 if self.full_context_partial_target:
                     pixel_mask = pixel_mask[batch_idx, target_pos, ...]        # [b, v_target, H, W]
                     gaussian_mask = gaussian_mask[batch_idx, target_pos, ...]  # [b, v_target, N]
-                elif not torch.equal(input_idx, target_idx):
-                    # Source-image patch masks have no pixel correspondence in
-                    # a different target camera; supervise its complete image.
-                    pixel_mask = None
-                if not (self.training and self.mask_ratio > 0):
-                    # A masked pseudo view can be absent from the supervised
-                    # targets. In that case evaluate all real target pixels.
-                    if pixel_mask is not None and not pixel_mask.any():
-                        pixel_mask = None
-                    if not gaussian_mask.any():
-                        gaussian_mask = None
                 pixel_mask = pixel_mask if self.pixel_mask_enabled else None
                 gaussian_mask = gaussian_mask if self.gaussian_mask_enabled else None
+        else:
+            masked_img_tokens_input = img_tokens_input
         
         '''predict scene representation using (posed) input views'''
         c2w_input = pred_c2w[batch_idx, input_idx, ...]                                                      # [b, v_input, 4, 4]
@@ -891,21 +851,14 @@ class Sable(BaseLightningModel):
         img_tokens_input = torch.cat([img_tokens_input, plucker_emb_input], dim=-1)                           # [b, v_input*n, 2d]
         all_tokens = self.mlp_fuse(img_tokens_input)                                                          # [b, v_input*n, d]
 
-        if dino_cls_tokens_proj is None:
-            # each local-attention group contains its own raw dino CLS followed by its patches
-            all_tokens = rearrange(all_tokens, 'b (v n) d -> b v n d', v=v_input)
-            all_tokens = torch.cat([dino_cls_tokens_raw.unsqueeze(2), all_tokens], dim=2)
-            all_tokens = rearrange(all_tokens, 'b v n d -> b (v n) d')
-        else:
-            # cls_tokens = repeat(self.cls_token, '1 n d -> b n d', b=b)
-            cls_tokens = dino_cls_tokens_proj
-            all_tokens = torch.cat([cls_tokens, all_tokens], dim=1)
+        # Each local-attention group contains its own CLS followed by its patches.
+        all_tokens = rearrange(all_tokens, 'b (v n) d -> b v n d', v=v_input)
+        all_tokens = torch.cat([dino_cls_tokens.unsqueeze(2), all_tokens], dim=2)
+        all_tokens = rearrange(all_tokens, 'b v n d -> b (v n) d')
 
         # encoder layers, predict depths and feature vectors
         all_tokens = self.run_vggt_encoder_geom(all_tokens, b, v_input)   # [b, v_input + v_input*n, d]
-        all_tokens = rearrange(all_tokens, 'b (v n) d -> b v n d', v=v_input)
-        frame_cls_tokens = all_tokens[:, :, 0, :]
-        all_tokens = rearrange(all_tokens[:, :, 1:, :], 'b v n d -> b (v n) d')
+        frame_cls_tokens, all_tokens = all_tokens.split([v_input, v_input * n], dim=1)
         # cls_3d_out is for neural encoding; has extra 3d info compared with dino_cls_tokens
         cls_3d_out = latent_tensor_export_if_requested(
             frame_cls_tokens,
@@ -983,67 +936,51 @@ class Sable(BaseLightningModel):
             pw=self.pw,
         )
 
-        # Geometry supervision follows the views that produced the Gaussians,
-        # which can differ from the cameras used to render the target images.
-        gaussian_idx = input_idx
-        if self.full_context_partial_target:
-            assert target_pos is not None
-            xyz, features, scaling, rotation, opacity = self._select_target_gaussians(
-                xyz=xyz,
-                features=features,
-                scaling=scaling,
-                rotation=rotation,
-                opacity=opacity,
-                target_pos=target_pos,
-                v_input=v_input,
-                v_target=v_target,
-            )
-            gaussian_idx = target_idx
-        v_gaussian = gaussian_idx.shape[1]
-
         pcd_h = int(self.config['model']['target_image']['height'])
         pcd_w = int(self.config['model']['target_image']['width'])
 
         depth_output = None
-        gaussian_depth_output = None
         xyz_norm = None
         xyz_init_norm = None
         gs_reg_loss = xyz.new_zeros(())
 
         if self.init_gs:
-            gaussian_depth_output = self._resolve_depth_output_for_views(
+            depth_output = self._resolve_depth_output_for_target_views(
                 data=data,
                 b=b,
-                num_views=v_gaussian,
+                v_target=v_target,
                 pcd_h=pcd_h,
                 pcd_w=pcd_w,
                 batch_idx=batch_idx,
-                view_idx=gaussian_idx,
+                target_idx=target_idx,
             ).detach()
-            # Visualization depth must correspond to the rendered target camera.
-            if torch.equal(gaussian_idx, target_idx):
-                depth_output = gaussian_depth_output
-            depth_for_pcd = rearrange(gaussian_depth_output, 'b v h w -> (b v) h w')
+            depth_for_pcd = depth_output.clone()
+            depth_for_pcd = rearrange(depth_for_pcd, 'b v h w -> (b v) h w', b=b, v=v_target)
             depth_masks: list[torch.Tensor | None]
             if 'mask' in data and self.config['model']['vda'].get('mask_depth', False):
-                seg_mask = data['mask'][batch_idx, gaussian_idx, ...]
+                seg_mask = data['mask'][batch_idx, input_idx, ...]  # [b, v_input, 1, H, W]
                 seg_mask = torch.nn.functional.interpolate(
                     rearrange(seg_mask, 'b v 1 h w -> (b v) 1 h w'),
                     size=(pcd_h, pcd_w),
                     mode='nearest',
                 )
-                depth_masks = list(seg_mask[:, 0])
+                depth_masks = list(
+                    rearrange(seg_mask, '(b v) 1 h w -> (b v) h w', b=b, v=v_input)
+                )
             else:
                 depth_masks = [None] * len(depth_for_pcd)
             xyz_flat = torch.stack(
                 [
                     pseudo_pointcloud_normalized(d, self.ph, self.pw, m)
-                    for d, m in zip(depth_for_pcd, depth_masks, strict=True)
+                    for d, m in zip(depth_for_pcd, depth_masks)
                 ],
                 dim=0,
             )
-            xyz_init = rearrange(xyz_flat, '(b v) n c -> b v n c', b=b, v=v_gaussian)
+            xyz_init = rearrange(xyz_flat, '(b v) n c -> b v n c', b=b, v=v_target)
+            xyz = rearrange(xyz, 'b (v n) c -> b v n c', b=b, v=v_target)
             xyz_init_for_merge = xyz_init.detach().clone().cpu().float().numpy()
+            xyz_init_src_pts = xyz_init_for_merge[:, 0]
+            xyz_init_tgt_pts = xyz_init_for_merge[:, 1]
 
             debug_corrs: list[tuple[list[int], list[int], tuple[np.ndarray, np.ndarray] | None]] = []
             n_dbg_save = 0
@@ -1053,16 +990,14 @@ class Sable(BaseLightningModel):
 
             session_idx_batch = data.get('session_idx')
 
-            # A single source view has no second point cloud to align.
-            merge_batch_size = b if v_gaussian >= 2 else 0
-            for b_i in range(merge_batch_size):
+            for b_i in range(b):
                 corr_xy_from_pixels = None
                 src_idx = []
                 tgt_idx = []
                 init_src_pcd = o3d.geometry.PointCloud()
                 init_tgt_pcd = o3d.geometry.PointCloud()
-                init_src_pcd.points = o3d.utility.Vector3dVector(xyz_init_for_merge[b_i, 0])
-                init_tgt_pcd.points = o3d.utility.Vector3dVector(xyz_init_for_merge[b_i, 1])
+                init_src_pcd.points = o3d.utility.Vector3dVector(xyz_init_src_pts[b_i])
+                init_tgt_pcd.points = o3d.utility.Vector3dVector(xyz_init_tgt_pts[b_i])
 
                 session_id_bi = None
                 if self._session_ids and session_idx_batch is not None:
@@ -1116,7 +1051,8 @@ class Sable(BaseLightningModel):
                 if self.debug_merged_pcd and b_i < n_dbg_save:
                     debug_corrs.append((list(src_idx), list(tgt_idx), corr_xy_from_pixels))
 
-            xyz_init = rearrange(xyz_init, 'b v n c -> b (v n) c')
+            xyz_init = rearrange(xyz_init, 'b v n c -> b (v n) c', b=b, v=v_target)
+            xyz = rearrange(xyz, 'b v n c -> b (v n) c', b=b, v=v_target)
 
             if self.debug_merged_pcd:
                 xyz = xyz_init
@@ -1125,9 +1061,9 @@ class Sable(BaseLightningModel):
                     xyz_init=xyz_init,
                     xyz_init_for_merge=xyz_init_for_merge,
                     data=data,
-                    target_idx=gaussian_idx,
-                    v_target=v_gaussian,
-                    depth_output=gaussian_depth_output,
+                    target_idx=target_idx,
+                    v_target=v_target,
+                    depth_output=depth_output,
                     debug_corrs=debug_corrs,
                     pcd_h=pcd_h,
                     pcd_w=pcd_w,
@@ -1140,6 +1076,19 @@ class Sable(BaseLightningModel):
             sanitize,
             (xyz, features, scaling, rotation, opacity),
         )
+
+        if self.full_context_partial_target:
+            assert target_pos is not None
+            xyz, features, scaling, rotation, opacity = self._select_target_gaussians(
+                xyz=xyz,
+                features=features,
+                scaling=scaling,
+                rotation=rotation,
+                opacity=opacity,
+                target_pos=target_pos,
+                v_input=v_input,
+                v_target=v_target,
+            )
 
         if self.init_gs:
             xyz_norm, xyz_init_norm = map(
@@ -1242,7 +1191,7 @@ class Sable(BaseLightningModel):
             img_aligned_xyz = rearrange(
                 img_aligned_xyz,
                 '(v hh ww ph pw) c -> v c (hh ph) (ww pw)',
-                v=v_gaussian,
+                v=v_target,
                 hh=self.hh,
                 ww=self.ww,
                 ph=self.ph,
@@ -1257,7 +1206,7 @@ class Sable(BaseLightningModel):
         if 'mask' in data:
             target_mask = data['mask'][batch_idx, target_idx, ...]  # [b, v_target, 1, H, W]
             target_gaussian_mask = build_segmentation_gaussian_mask(
-                data['mask'][batch_idx, gaussian_idx, ...], self.hh, self.ww, self.ph, self.pw,
+                target_mask, self.hh, self.ww, self.ph, self.pw,
             )
 
         # apply segmentation mask to l2 loss: penalise only foreground (mouse) pixels
@@ -1288,11 +1237,9 @@ class Sable(BaseLightningModel):
             'fxfycxcy_target': fxfycxcy_target,
             'input_indices': input_idx,
             'target_indices': target_idx,
-            'gaussian_indices': gaussian_idx,
             'gt_c2w': data.get('gt_c2w'),
             'gt_fxfycxcy': data.get('gt_fxfycxcy'),
             'depth_output': depth_output,
-            'gaussian_depth_output': gaussian_depth_output,
             'depth_num_real_views': depth_num_real_views,
             'xyz_norm': xyz_norm,
             'xyz_init_norm': xyz_init_norm,
@@ -1750,33 +1697,33 @@ class Sable(BaseLightningModel):
         returns: depth_maps [b, num_views, H_vda, W_vda] (e.g. 518x518)
         """
         if self.vda is None:
-            raise RuntimeError('Online VDA depth requires init_gs=true and model.vda.mode=online.')
+            raise RuntimeError("extract_vda_depth() was called while model.vda.mode='precomputed'.")
         return extract_vda_depth(self.vda, images, num_views)
 
-    def _resolve_depth_output_for_views(
+    def _resolve_depth_output_for_target_views(
         self,
         *,
         data,
         b: int,
-        num_views: int,
+        v_target: int,
         pcd_h: int,
         pcd_w: int,
         batch_idx: torch.Tensor,
-        view_idx: torch.Tensor,
+        target_idx: torch.Tensor,
     ) -> torch.Tensor:
-        """Resolve depth for the source views used in Gaussian geometry supervision.
+        """Resolve per-view depth maps for the target views used in Gaussian initialisation.
 
         Args:
             data: batch dict.
             b: batch size.
-            num_views: number of Gaussian source views.
+            v_target: number of target views.
             pcd_h: pointcloud height in tokens.
             pcd_w: pointcloud width in tokens.
             batch_idx: batch index tensor [b, 1].
-            view_idx: source view indices [b, num_views].
+            target_idx: target view index tensor [b, v_target].
 
         Returns:
-            float tensor of shape [b, num_views, pcd_h, pcd_w].
+            float tensor of shape [b, v_target, pcd_h, pcd_w].
         """
         if self.vda_mode == 'precomputed':
             if 'depth_vda' not in data:
@@ -1792,10 +1739,9 @@ class Sable(BaseLightningModel):
                 raise ValueError(
                     f'depth_vda batch size mismatch: expected {b}, got {depth_vda.shape[0]}'
                 )
-            if int(depth_vda.shape[1]) < int(num_views):
+            if int(depth_vda.shape[1]) < int(v_target):
                 raise ValueError(
-                    f'depth_vda view count mismatch: need at least {num_views}, '
-                    f'got {depth_vda.shape[1]}'
+                    f'depth_vda view count mismatch: need at least {v_target}, got {depth_vda.shape[1]}'
                 )
             if int(depth_vda.shape[2]) != 1:
                 raise ValueError(
@@ -1806,17 +1752,17 @@ class Sable(BaseLightningModel):
                     f'depth_vda spatial size mismatch: expected {(pcd_h, pcd_w)}, '
                     f'got {tuple(depth_vda.shape[-2:])}'
                 )
-            return depth_vda[batch_idx, view_idx, 0, ...].contiguous()
+            return depth_vda[batch_idx, target_idx, 0, ...].contiguous()
 
-        images_in = data['image'][batch_idx, view_idx, ...]
-        depth_all, vda_in = self.extract_vda_depth(images_in, num_views)
+        images_in = data['image'][batch_idx, target_idx, ...]
+        depth_all, vda_in = self.extract_vda_depth(images_in, v_target)
         depth_all = torch.nn.functional.interpolate(
             rearrange(depth_all, 'b v h w -> (b v) 1 h w'),
             size=(pcd_h, pcd_w),
             mode='bilinear',
             align_corners=True,
         )
-        depth_all = rearrange(depth_all, '(b v) 1 h w -> b v h w', b=b, v=num_views)
+        depth_all = rearrange(depth_all, '(b v) 1 h w -> b v h w', b=b, v=v_target)
         self.maybe_debug_vda(images_in, vda_in, depth_all)
         return depth_all
 
