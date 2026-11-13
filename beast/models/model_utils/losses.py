@@ -183,13 +183,10 @@ def masked_gs_reg_loss(
     xyz_init_norm: torch.Tensor,
     gaussian_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Mean squared coordinate error over the selected Gaussian points."""
-    m = gaussian_mask.to(dtype=xyz_norm.dtype, device=xyz_norm.device).reshape(
-        gaussian_mask.shape[0], -1, 1,
-    )
-    valid_mask = m.expand_as(xyz_norm)
-    loss = F.mse_loss(xyz_norm, xyz_init_norm, reduction='none') * valid_mask
-    return loss.sum() / valid_mask.sum().clamp_min(1.0)
+    """Masked MSE over Gaussian xyz displacements: sum(w*(p-p0)^2) / sum(w), w broadcast over xyz coordinates."""
+    m = gaussian_mask.to(dtype=xyz_norm.dtype, device=xyz_norm.device).reshape(gaussian_mask.shape[0], -1, 1)
+    loss = F.mse_loss(xyz_norm, xyz_init_norm, reduction='none') * m
+    return loss.sum() / m.sum().clamp_min(1.0)
 
 
 class LossComputer(nn.Module):

@@ -915,7 +915,6 @@ class IBLTwoViewDataset(SABLEDataset):
         else:
             session_ids = list(session_names)
 
-        session_ids = list(dict.fromkeys(session_ids))
         self.session_ids = session_ids
         self.session_id_to_idx = {session_id: idx for idx, session_id in enumerate(session_ids)}
 
@@ -1491,9 +1490,7 @@ class Cheese3DDataset(SABLEDataset):
         )
         records: list[_PrecacheRecord] = []
         eval_records: list[_PrecacheRecord] = []
-        # Repeating a session must not create duplicate frames that can land on
-        # opposite sides of the subsequent train/validation split.
-        for session_name in dict.fromkeys(session_names):
+        for session_name in session_names:
             session_dir = dataset_path / session_name
             left_dir = session_dir / left_camera
             right_dir = session_dir / right_camera
