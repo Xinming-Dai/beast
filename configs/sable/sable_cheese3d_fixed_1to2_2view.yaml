@@ -9,8 +9,8 @@ model:
     n_gaussians: 1
     range_setting:
       type: linear_depth
-      near: 0
-      far: 8
+      near: 0.5   # bound depth around the mouse: cam-to-mouse is ~1.4-1.8 at calibration_baseline 2
+      far: 3.0
     sh_degree: 3
     upsampler:
       upsample_factor: 1
@@ -165,6 +165,7 @@ training:
   num_input_views: 2
   num_target_views: 2
   randomize_context_full_mask: true
+  leave_one_out_render: true   # render the masked view without its own Gaussians, so only other views' depth can explain it
 
   view_selector:
     type: all

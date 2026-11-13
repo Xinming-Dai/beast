@@ -176,6 +176,35 @@ def shuffle_context_full_mask(full_mask: torch.Tensor) -> torch.Tensor:
     return full_mask.gather(1, idx_perm)
 
 
+def drop_masked_view_gaussians(
+    opacity: torch.Tensor,
+    full_mask: torch.Tensor,
+    n_per_view: int,
+    opacity_floor: float = -10.0,
+) -> torch.Tensor:
+    """Make the Gaussians of fully-masked views invisible to the renderer.
+
+    Used for leave-one-out rendering: a pixel-aligned Gaussian rendered from its own camera
+    is independent of its depth, so the loss on the masked view only constrains depth once
+    that view's own Gaussians are removed and the other views have to explain it.
+
+    Args:
+        opacity: logit opacities, shape [B, V * n_per_view, 1], view-major.
+        full_mask: bool tensor [B, V_mask]; True = the view is fully masked. Only the first
+            ``V`` columns are used when fewer views carry Gaussians than the mask covers.
+        n_per_view: number of Gaussians per view.
+        opacity_floor: logit that makes a Gaussian effectively transparent; matches the
+            ``clamp(min=-10.0)`` applied in ``GaussiansUpsampler.to_gs``.
+
+    Returns:
+        tensor with the same shape as ``opacity``, set to ``opacity_floor`` for the Gaussians
+        of every masked view.
+    """
+    num_views = opacity.shape[1] // n_per_view
+    drop = full_mask[:, :num_views].repeat_interleave(n_per_view, dim=1).unsqueeze(-1)
+    return opacity.masked_fill(drop, opacity_floor)
+
+
 def build_segmentation_gaussian_mask(
     seg_mask: torch.Tensor,
     hh: int,
@@ -469,6 +498,15 @@ class Sable(BaseLightningModel):
         self.randomize_context_full_mask = bool(
             config['training'].get('randomize_context_full_mask', False)
         )
+
+        # render each fully-masked view without its own Gaussians (training only), so the loss
+        # on it can only be met through the other views' depth
+        self.leave_one_out_render = bool(config['training'].get('leave_one_out_render', False))
+        if self.leave_one_out_render and self.full_context_partial_target:
+            raise ValueError(
+                'training.leave_one_out_render is not supported together with '
+                'num_target_views < num_views'
+            )
 
     def maybe_randomize_view_indices(self, input_idx, target_idx, device):
         """Randomize view ordering for two-view training."""
@@ -1072,6 +1110,11 @@ class Sable(BaseLightningModel):
                 target_pos=target_pos,
                 v_input=v_input,
                 v_target=v_target,
+            )
+
+        if self.leave_one_out_render and full_mask is not None:
+            opacity = drop_masked_view_gaussians(
+                opacity, full_mask, self.hh * self.ww * self.ph * self.pw,
             )
 
         if self.init_gs:
