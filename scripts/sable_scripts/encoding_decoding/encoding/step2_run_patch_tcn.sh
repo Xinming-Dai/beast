@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=24G
-#SBATCH -t 0-02:00:00
+#SBATCH --mem=15G
+#SBATCH -t 0-01:29:00
 #SBATCH -J patch_tcn
 #SBATCH -o /u/xdai3/project3d/SBALE_repo/beast/scripts/sable_scripts/encoding_decoding/encoding/step2_run_patch_tcn_%j.log
 #SBATCH --export=ALL
