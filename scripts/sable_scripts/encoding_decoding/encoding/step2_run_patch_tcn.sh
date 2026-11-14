@@ -19,6 +19,7 @@
 # Use submit_patch_tcn.sh to submit every model/session pair.
 
 exec 2>&1
+export PYTHONUNBUFFERED=1  # flush print output to the slurm log as it happens
 source ~/.bashrc
 conda activate beast
 
