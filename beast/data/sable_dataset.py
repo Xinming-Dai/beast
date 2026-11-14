@@ -1639,6 +1639,9 @@ class Cheese3DDataset(SABLEDataset):
         additionally returns ``context_full_mask`` so ``Sable.forward`` zeroes the image
         tokens of one view (randomly resampled per training step) and the loss is taken
         on that masked view.
+        For ``random_view_holdout`` all views are returned as both context and target, and
+        no ``context_full_mask`` is emitted: ``Sable.prepare_view_indices`` randomly picks
+        ``training.num_input_views`` of them as input per sample and renders the rest.
         For ``fixed_1to1`` index 0 is context, index 1 is target.
 
         Returns:
@@ -1652,6 +1655,7 @@ class Cheese3DDataset(SABLEDataset):
             'all_views_reconstruction',
             'center_camera_holdout',
             'fixed_1to2',
+            'random_view_holdout',
         ):
             all_idx = torch.arange(self._num_views, dtype=torch.long)
             return all_idx, all_idx.clone()
@@ -1661,7 +1665,7 @@ class Cheese3DDataset(SABLEDataset):
             raise ValueError(
                 f'Unsupported training_regime: {self._training_regime!r}. '
                 'Built-in values: all_views_reconstruction, center_camera_holdout, fixed_1to2, '
-                'fixed_1to1. '
+                'random_view_holdout, fixed_1to1. '
                 'To use a custom regime, subclass and override _resolve_view_indices.'
             )
 

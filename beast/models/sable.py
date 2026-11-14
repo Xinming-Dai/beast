@@ -176,6 +176,50 @@ def shuffle_context_full_mask(full_mask: torch.Tensor) -> torch.Tensor:
     return full_mask.gather(1, idx_perm)
 
 
+def split_holdout_views(
+    num_views: int,
+    num_input: int,
+    batch_size: int,
+    device: torch.device | str,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Randomly split each sample's views into input views and held-out views.
+
+    Each row is an independent uniformly random permutation of the view positions; the first
+    ``num_input`` become input views and the rest are held out as render targets.
+
+    Args:
+        num_views: total number of views V per sample.
+        num_input: number of input views k, with ``1 <= k < V``.
+        batch_size: number of samples B.
+        device: device for the returned index tensors.
+        generator: optional generator (on ``device``) for reproducible splits.
+
+    Returns:
+        tuple of (input positions [B, k], held-out positions [B, V - k]); each row is sorted
+        ascending and together the two rows of a sample cover ``range(V)`` exactly once.
+    """
+    scores = torch.rand(batch_size, num_views, generator=generator, device=device)
+    idx_perm = scores.argsort(dim=1)
+    idx_input = idx_perm[:, :num_input].sort(dim=1).values
+    idx_holdout = idx_perm[:, num_input:].sort(dim=1).values
+    return idx_input, idx_holdout
+
+
+def select_view_subset(x: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+    """Gather a per-sample subset of views along dim 1.
+
+    Args:
+        x: tensor of shape [B, V, ...].
+        pos: long tensor [B, n] of view positions to keep for each sample.
+
+    Returns:
+        tensor of shape [B, n, ...].
+    """
+    idx_batch = torch.arange(x.shape[0], device=x.device).unsqueeze(-1)
+    return x[idx_batch, pos.to(x.device)]
+
+
 def drop_masked_view_gaussians(
     opacity: torch.Tensor,
     full_mask: torch.Tensor,
@@ -508,6 +552,33 @@ class Sable(BaseLightningModel):
                 'num_target_views < num_views'
             )
 
+        self.random_view_holdout = (
+            config['training'].get('training_regime') == 'random_view_holdout'
+        )
+        if self.random_view_holdout:
+            config_num_target = config['training'].get('num_target_views')
+            if not 1 <= num_input_views < num_views:
+                raise ValueError(
+                    'training_regime random_view_holdout requires '
+                    f'1 <= num_input_views < num_views; got {num_input_views} of {num_views}'
+                )
+            if config_num_target is not None and config_num_target != num_views - num_input_views:
+                raise ValueError(
+                    'training_regime random_view_holdout requires num_target_views == '
+                    f'num_views - num_input_views = {num_views - num_input_views}; '
+                    f'got {config_num_target}'
+                )
+            if self.init_gs:
+                raise ValueError(
+                    'training_regime random_view_holdout is not supported with '
+                    'model.gaussians.init_gs'
+                )
+
+    def _is_validating(self) -> bool:
+        """Return True while the attached trainer is in its validation loop."""
+        trainer = getattr(self, '_trainer', None)
+        return trainer is not None and trainer.validating
+
     def maybe_randomize_view_indices(self, input_idx, target_idx, device):
         """Randomize view ordering for two-view training."""
         b = input_idx.shape[0]
@@ -524,13 +595,17 @@ class Sable(BaseLightningModel):
         data: dict[str, torch.Tensor],
         v_real: int,
         device: torch.device,
-    ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor | None, torch.Tensor | None]:
         """Resolve, augment, and finalize view indices for a forward pass.
 
         1. raw resolution from data or split heuristic
         2. training-time randomization / validation-time visualization expansion
         3. real-depth view count (always the pre-expansion target count)
         4. target-in-input position map (only when full_context_partial_target)
+
+        With ``random_view_holdout``, training uses k random input views and the other V - k
+        views as targets. Validation uses a fixed-seed split of the same sizes, but renders
+        all V views and reports the held-out positions so metrics can be restricted to them.
 
         Args:
             data: batch dictionary.
@@ -544,12 +619,33 @@ class Sable(BaseLightningModel):
                 depth, used by visualization to skip pseudo-view depth maps.
             target_pos: [b, v_target] position of each target view within
                 input_idx, or None when full_context_partial_target is False.
+            metric_view_pos: [b, V - k] positions within target_idx of the held-out views
+                that validation metrics are computed on, or None outside validation with
+                random_view_holdout.
         """
         input_idx, target_idx = self.resolve_view_indices(data, v_real, device)
         v_target = int(target_idx.shape[1])
         depth_num_real_views = v_target
 
-        if self.training:
+        metric_view_pos: torch.Tensor | None = None
+        if self.random_view_holdout and (self.training or self._is_validating()):
+            num_views = input_idx.shape[1]
+            num_input = self.config['training']['num_input_views']
+            generator = None
+            if not self.training:
+                generator = torch.Generator(device=device).manual_seed(0)
+            pos_input, pos_holdout = split_holdout_views(
+                num_views, num_input, input_idx.shape[0], device, generator,
+            )
+            idx_all = input_idx
+            input_idx = idx_all.gather(1, pos_input)
+            if self.training:
+                target_idx = idx_all.gather(1, pos_holdout)
+            else:
+                # render every view, score only the held-out ones
+                target_idx = idx_all
+                metric_view_pos = pos_holdout
+        elif self.training:
             input_idx, target_idx = self.maybe_randomize_view_indices(input_idx, target_idx, device)
         elif self.full_context_partial_target:
             # render all context views (including pseudo-center) during validation
@@ -561,7 +657,7 @@ class Sable(BaseLightningModel):
                 input_idx.unsqueeze(2) == target_idx.unsqueeze(1)
             ).int().argmax(dim=1)  # [b, v_target]
 
-        return input_idx, target_idx, depth_num_real_views, target_pos
+        return input_idx, target_idx, depth_num_real_views, target_pos, metric_view_pos
 
     @staticmethod
     def _select_target_gaussians(
@@ -648,6 +744,13 @@ class Sable(BaseLightningModel):
         xyz_init_norm = kwargs['xyz_init_norm']
         pixel_mask = kwargs.get('pixel_mask')
         gaussian_mask = kwargs.get('gaussian_mask')
+        # random_view_holdout validation renders every view; score only the held-out ones
+        metric_view_pos = kwargs.get('metric_view_pos')
+        if metric_view_pos is not None:
+            rendering = select_view_subset(rendering, metric_view_pos)
+            target = select_view_subset(target, metric_view_pos)
+            if pixel_mask is not None:
+                pixel_mask = select_view_subset(pixel_mask, metric_view_pos)
         result = self.loss_computer(rendering, target, xyz_norm, xyz_init_norm, pixel_mask, gaussian_mask)
         log_list = [
             {'name': f'{stage}_l2', 'value': result.l2_loss},
@@ -739,9 +842,9 @@ class Sable(BaseLightningModel):
         device = image_all.device
         batch_idx = torch.arange(b, device=device).unsqueeze(1)
 
-        input_idx, target_idx, depth_num_real_views, target_pos = self.prepare_view_indices(
-            data, v_real, device,
-        )
+        (
+            input_idx, target_idx, depth_num_real_views, target_pos, metric_view_pos,
+        ) = self.prepare_view_indices(data, v_real, device)
 
         v_input = input_idx.shape[1]
         v_target = target_idx.shape[1]
@@ -1270,6 +1373,7 @@ class Sable(BaseLightningModel):
             'gt_fxfycxcy': data.get('gt_fxfycxcy'),
             'depth_output': depth_output,
             'depth_num_real_views': depth_num_real_views,
+            'metric_view_pos': metric_view_pos,
             'xyz_norm': xyz_norm,
             'xyz_init_norm': xyz_init_norm,
             'gs_reg_loss': gs_reg_loss,
