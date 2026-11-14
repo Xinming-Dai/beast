@@ -54,7 +54,8 @@ HELD_OUT_TC="${HELD_OUT_TC:-both}"
 # 1 = masked variant also hides the TC image from the pose encoder and DINO (only for models trained
 # with training.strict_holdout_hide_encoders; others never saw a blank view)
 HIDE_HELD_OUT_FROM_ENCODERS="${HIDE_HELD_OUT_FROM_ENCODERS:-0}"
-
+# render background (white is what the model trained with); GT images are not masked
+BG_COLOR="${BG_COLOR:-black}"
 
 if [[ "${TORCH_CUDA_ARCH_LIST:-}" == *"10.0"* ]] || [[ -z "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
     export TORCH_CUDA_ARCH_LIST="8.0;8.6"
@@ -88,6 +89,7 @@ Pose mode (row 2):     $POSE_MODE (anchor $ANCHOR_CAMERA, source $ANCHOR_SOURCE)
 Global-fit intrinsics: $INTRINSICS
 Save glb:              $SAVE_GLB
 Held-out TC variants:  $HELD_OUT_TC (hide from encoders: $HIDE_HELD_OUT_FROM_ENCODERS)
+Background:            $BG_COLOR
 TORCH_CUDA_ARCH_LIST:  $TORCH_CUDA_ARCH_LIST
 ---------------------------------------
 EOF
@@ -130,6 +132,7 @@ for MODEL_DIR in $MODEL_DIRS; do
         --anchor-camera "$ANCHOR_CAMERA"
         --anchor-source "$ANCHOR_SOURCE"
         --held-out-tc "$HELD_OUT_TC"
+        --bg-color "$BG_COLOR"
     )
     [ "$SAVE_GLB" != "1" ]   && NVS_ARGS+=(--no-save-glb)
     [ "$HIDE_HELD_OUT_FROM_ENCODERS" = "1" ] && NVS_ARGS+=(--hide-held-out-from-encoders)

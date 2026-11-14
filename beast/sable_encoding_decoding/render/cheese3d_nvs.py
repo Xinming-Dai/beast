@@ -24,6 +24,7 @@ from beast.logging import log_step
 
 _DEFAULT_CAMERAS = ('TL', 'TR', 'TC', 'BC')
 _RENDER_CHECK_ATOL = 1e-2
+_BG_COLORS = {'white': (1.0, 1.0, 1.0), 'black': (0.0, 0.0, 0.0)}
 
 
 def resolve_model_cameras(training: dict) -> list[str]:
@@ -423,6 +424,7 @@ def _render_at_cameras(
     height: int,
     width: int,
     near_plane: float,
+    bg_color: tuple[float, float, float] = _BG_COLORS['white'],
 ) -> torch.Tensor:
     """Render one Gaussian model from several cameras.
 
@@ -433,6 +435,7 @@ def _render_at_cameras(
         height: render height.
         width: render width.
         near_plane: near clipping plane, as used by the model's renderer.
+        bg_color: RGB background colour; white matches the model's own training renders.
 
     Returns:
         renders ``[V, 3, H, W]`` in [0, 1].
@@ -442,7 +445,7 @@ def _render_at_cameras(
     with torch.no_grad():
         buffers = render_opencv_cam_gsplat(
             gaussians, height, width, c2w, fxfycxcy_px,
-            sh_degree=gaussians.sh_degree, near_plane=near_plane,
+            sh_degree=gaussians.sh_degree, near_plane=near_plane, bg_color=bg_color,
         )
     return buffers['render'].clamp(0.0, 1.0)
 
@@ -501,6 +504,8 @@ def _run_nvs_session(
     mask_held_out: bool = False,
     variant: str | None = None,
     hide_held_out_from_encoders: bool = False,
+    bg_color: str = 'white',
+    save_outputs: bool = True,
 ) -> dict:
     """Run NVS for one frame of one session and save the figure, metrics and scenes.
 
@@ -544,13 +549,17 @@ def _run_nvs_session(
         hide_held_out_from_encoders: with ``mask_held_out``, also hide the held-out image from
             the pose encoder and DINO (``hide_held_out_from_encoders`` batch key). Only sensible
             for models trained with ``training.strict_holdout_hide_encoders``.
+        bg_color: ``'white'`` (what the model trained with) or ``'black'``; background of every
+            reported render. The sanity check against the model's own render stays on white.
+        save_outputs: ``False`` skips the figure, per-tile PNGs, json and glb scenes and only
+            returns the metrics (for scoring many frames).
 
     Returns:
-        the metrics dict that is also written to ``nvs_metrics.json``.
+        the metrics dict that is also written to ``nvs_metrics.json`` when ``save_outputs``.
 
     Raises:
-        ValueError: if no record matches, too few cameras remain to align, or the anchor
-            settings cannot be satisfied.
+        ValueError: if no record matches, too few cameras remain to align, the anchor
+            settings cannot be satisfied, or ``bg_color`` is unknown.
     """
     from beast.data.sable_dataset import collate_with_correspondence_padding
     from beast.inference import _dedupe_cameras_by_view_index, save_camera_pointcloud_scene
@@ -559,6 +568,9 @@ def _run_nvs_session(
         estimate_camera_similarity_transform,
     )
 
+    if bg_color not in _BG_COLORS:
+        raise ValueError(f'bg_color must be one of {sorted(_BG_COLORS)}, got {bg_color!r}')
+    bg_rgb = _BG_COLORS[bg_color]
     model_cameras = resolve_model_cameras(config['training'])
     dataset_idx, rec = _select_record(dataset, session, frame_idx)
     batch_indices = range(dataset_idx, min(dataset_idx + context_batch, len(dataset)))
@@ -698,7 +710,7 @@ def _run_nvs_session(
             gaussians,
             torch.from_numpy(mode_c2w).float().to(device),
             torch.from_numpy(mode_px).float().to(device),
-            height, width, near_plane,
+            height, width, near_plane, bg_rgb,
         )
         projected_by_mode[mode] = _metrics_by_camera(render_by_mode[mode], gt_images, cameras)
     # global_fit under the other intrinsics setting, for comparison
@@ -709,7 +721,7 @@ def _run_nvs_session(
         torch.from_numpy(
             build_render_intrinsics(other_intrinsics, cameras, gt_px, pred_px, fit_cameras),
         ).float().to(device),
-        height, width, near_plane,
+        height, width, near_plane, bg_rgb,
     )
     global_fit_by_intrinsics = {
         intrinsics: projected_by_mode['global_fit'],
@@ -737,6 +749,13 @@ def _run_nvs_session(
         f'cheese3d_nvs: render-path check max |diff| = {max_diff:.5f}',
         level='warning' if max_diff > _RENDER_CHECK_ATOL else 'info',
     )
+    if bg_color != 'white':
+        # the model's own renders have a white background; redo them on the requested one
+        check_render = _render_at_cameras(
+            gaussians, check_c2w, result['fxfycxcy_target'][0].float(),
+            height, width, near_plane, bg_rgb,
+        )
+        pred_render = {camera: check_render[idx] for idx, camera in enumerate(check_cameras)}
 
     predicted = _metrics_by_camera(
         torch.stack(list(pred_render.values())),
@@ -750,6 +769,7 @@ def _run_nvs_session(
         'frame_idx': source_frame_idx,
         'scene_name': rec.scene_name,
         'amp': amp,
+        'bg_color': bg_color,
         'held_out_tc': (
             'none' if variant is None else ('masked' if mask_held_out else 'visible')
         ),
@@ -784,6 +804,9 @@ def _run_nvs_session(
             },
         },
     }
+
+    if not save_outputs:
+        return metrics
 
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = [
@@ -860,6 +883,64 @@ def _run_nvs_session(
     return metrics
 
 
+def _prepare_nvs(
+    model_dir: Path,
+    dataset_path: Path,
+    sessions: list[str] | None,
+    cameras: list[str],
+    split: str,
+) -> tuple[torch.nn.Module, dict, object, list[str], str]:
+    """Load the model and build the dataset every NVS entry point scores frames from.
+
+    The dataset always covers every session in the saved training config, in config order and
+    with any repeated entry kept: the val split is a seeded shuffle of the pooled records, so
+    dropping a duplicated session would change the record count and with it which frames are
+    val (most of them would then be frames the model trained on). ``context_batch`` also
+    collates the same neighbours a training validation batch would. ``sessions`` only selects
+    which sessions are evaluated.
+
+    Args:
+        model_dir: directory with ``config.yaml`` and the best checkpoint.
+        dataset_path: root Cheese3D directory.
+        sessions: session directory names to evaluate, or ``None`` for every session in the
+            saved training config (duplicates removed).
+        cameras: GT cameras to render/score; must include every camera the model was trained on.
+        split: dataset split to draw frames from.
+
+    Returns:
+        tuple of (model on its device in eval mode, inference config, ``Cheese3DDataset`` for
+        ``split``, sessions to evaluate, device string).
+
+    Raises:
+        ValueError: if a model camera is missing from ``cameras``.
+    """
+    from beast.api.model import Model
+    from beast.inference import _build_sable_dataset
+
+    wrapper = Model.from_dir(model_dir)
+    config = {**wrapper.config}
+    configured = config['training'].get('session_names') or []
+    configured = [configured] if isinstance(configured, str) else list(configured)
+    extra_sessions = [s for s in dict.fromkeys(sessions or []) if s not in configured]
+    dataset_sessions = configured + extra_sessions
+    sessions = list(dict.fromkeys(configured if sessions is None else sessions))
+    config['inference'] = True
+    config['training'] = {
+        **config['training'],
+        'dataset_path': str(dataset_path),
+        'session_names': dataset_sessions,
+    }
+    model_cameras = resolve_model_cameras(config['training'])
+    missing = [camera for camera in model_cameras if camera not in cameras]
+    if missing:
+        raise ValueError(f'model cameras {missing} must be included in cameras {cameras}')
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = wrapper.model.to(device).eval()
+    dataset = _build_sable_dataset(config, include_splits=[split])
+    return model, config, dataset, sessions, device
+
+
 def run_nvs(
     model_dir: Path,
     dataset_path: Path,
@@ -878,12 +959,13 @@ def run_nvs(
     anchor_source: str = 'auto',
     held_out_tc: str = 'both',
     hide_held_out_from_encoders: bool = False,
+    bg_color: str = 'white',
 ) -> dict[str, dict[str, dict]]:
     """Run NVS for one frame of each session, loading the model once.
 
-    The dataset always covers every session in the saved training config (in config order) so
-    ``context_batch`` collates the same neighbours a training validation batch would; ``sessions``
-    only selects which sessions are evaluated. Each session's outputs go to
+    The dataset always covers every session in the saved training config, in config order and
+    repeats included (see ``_prepare_nvs``), so ``split`` is the split the model trained with;
+    ``sessions`` only selects which sessions are evaluated. Each session's outputs go to
     ``output_dir / session / frame_<idx:08d>`` (``nvs_grid.png``, per-tile PNGs,
     ``nvs_metrics.json``, ``glb/``);
     ``output_dir / 'nvs_metrics_all_sessions.json'`` collects every session's metrics plus
@@ -914,6 +996,7 @@ def run_nvs(
             ``nvs_metrics_all_sessions_<variant>.json``; other models run once.
         hide_held_out_from_encoders: for the masked variant, also hide the held-out image from
             the pose encoder and DINO; see ``_run_nvs_session``.
+        bg_color: ``'white'`` or ``'black'`` render background, see ``_run_nvs_session``.
 
     Returns:
         ``{variant name or 'default': {session: metrics dict}}`` for the sessions that had a
@@ -923,31 +1006,10 @@ def run_nvs(
         ValueError: if a model camera is missing from ``cameras``.
         RuntimeError: if no session produced a result.
     """
-    from beast.api.model import Model
-    from beast.inference import _build_sable_dataset
-
     cameras = list(cameras)
-    wrapper = Model.from_dir(model_dir)
-    config = {**wrapper.config}
-    configured = config['training'].get('session_names') or []
-    configured = [configured] if isinstance(configured, str) else list(configured)
-    dataset_sessions = list(dict.fromkeys(configured + list(sessions or [])))
-    if sessions is None:
-        sessions = list(dict.fromkeys(configured))
-    config['inference'] = True
-    config['training'] = {
-        **config['training'],
-        'dataset_path': str(dataset_path),
-        'session_names': dataset_sessions,
-    }
-    model_cameras = resolve_model_cameras(config['training'])
-    missing = [camera for camera in model_cameras if camera not in cameras]
-    if missing:
-        raise ValueError(f'model cameras {missing} must be included in cameras {cameras}')
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = wrapper.model.to(device).eval()
-    dataset = _build_sable_dataset(config, include_splits=[split])
+    model, config, dataset, sessions, device = _prepare_nvs(
+        model_dir, dataset_path, sessions, cameras, split,
+    )
 
     output_dir = Path(output_dir)
     variants = held_out_variants(config['training'].get('training_regime', ''), held_out_tc)
@@ -963,6 +1025,7 @@ def run_nvs(
                     save_glb=save_glb, pose_mode=pose_mode, anchor_camera=anchor_camera,
                     anchor_source=anchor_source, mask_held_out=mask_held_out, variant=variant,
                     hide_held_out_from_encoders=hide_held_out_from_encoders,
+                    bg_color=bg_color,
                 )
             except ValueError as err:
                 log_step(f'cheese3d_nvs: skipping session {session}: {err}', level='warning')
@@ -1078,6 +1141,12 @@ def main() -> None:
         help='masked variant only: also hide the held-out image from the pose encoder and DINO '
         '(for models trained with training.strict_holdout_hide_encoders)',
     )
+    parser.add_argument(
+        '--bg-color',
+        choices=tuple(_BG_COLORS),
+        default='white',
+        help='render background (white is what the model trained with)',
+    )
     parser.add_argument('--no-save-glb', action='store_true', help='skip the .glb scene')
     args = parser.parse_args()
     run_nvs(
@@ -1098,6 +1167,7 @@ def main() -> None:
         anchor_source=args.anchor_source,
         held_out_tc=args.held_out_tc,
         hide_held_out_from_encoders=args.hide_held_out_from_encoders,
+        bg_color=args.bg_color,
     )
 
 
