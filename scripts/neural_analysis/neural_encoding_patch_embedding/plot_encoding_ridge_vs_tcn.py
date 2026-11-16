@@ -22,10 +22,7 @@ python scripts/neural_analysis/neural_encoding_patch_embedding/plot_encoding_rid
 
 import argparse
 import csv
-import re
 import sys
-import warnings
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -33,257 +30,31 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.neural_analysis.plot_helpers import (  # noqa: E402
-    _default_output_path_helper,
-    bps_per_neuron,
+from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (  # noqa: E402
+    MODEL_LABELS,
+    MODELS,
+    NEURAL_DIR,
+    PCA_KS,
+    RIDGE_ROOTS,
+    RESULTS_DIR,
+    SESSION_EIDS,
+    TCN_ROOTS,
+    Y_LABEL,
+    Record,
+    RecordKey,
+    check_matching_trials,
+    load_ridge_records,
+    load_session_spikes,
+    load_tcn_records,
+    model_color,
+    summarize,
 )
+from scripts.neural_analysis.plot_helpers import _default_output_path_helper  # noqa: E402
 
-SESSION_EIDS = {
-    '78': '781b35fd-e1f0-4d14-b2bb-95b7263082bb',
-    '72': '72cb5550-43b4-4ef0-add5-e4adfdfb5e02',
-    '4b': '4b00df29-3769-43be-bb40-128b1cba6d35',
-}
-MODELS = ('full', 'nogeom', 'dino')
-MODEL_LABELS = {'full': 'Full SABLE', 'nogeom': 'NoGeom SABLE', 'dino': 'DINO'}
-MODEL_COLORS = {'full': 'tab:blue', 'nogeom': 'tab:orange', 'dino': 'tab:green'}
-KS = (6, 12, 24, 32, 64, 128)
 METHOD_STYLES = {
     'ridge': {'label': 'ridge', 'linestyle': '-', 'marker': 'o', 'offset': 0.0},
     'tcn': {'label': 'TCN', 'linestyle': '--', 'marker': 's', 'offset': 0.12},
 }
-Y_LABEL = 'Held-out BPS (bits/spike)'
-
-RIDGE_BASE = Path('/work/hdd/bezq/jzhang107/sable/cv5_step20851')
-RIDGE_ROOTS = {
-    '78': RIDGE_BASE / 'patch_ridge_cv5',
-    '72': RIDGE_BASE / 'patch_ridge_cv5_sessions' / 'session_72',
-    '4b': RIDGE_BASE / 'patch_ridge_cv5_sessions' / 'session_4b',
-}
-CKPT_ROOT = Path('/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts')
-TCN_ROOTS = {
-    'full': CKPT_ROOT / 'beast_sable/ibl_pretrain_restricted_sessions/21047248/latents/patch_TCN',
-    'nogeom': (
-        CKPT_ROOT
-        / 'beast_sable/ibl_pretrain_restricted_sessions/22359987_disable_geom/latents/patch_TCN'
-    ),
-    'dino': CKPT_ROOT / 'dino_baseline/latents/patch_TCN',
-}
-NEURAL_DIR = Path('/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data')
-RESULTS_DIR = Path(
-    CKPT_ROOT / 'beast_sable/ibl_pretrain_restricted_sessions/SABLE_encoding_patch_embedding',
-)
-
-RIDGE_PATTERN = re.compile(r'fullfit_(?P<model>\w+)_f(?P<fold>\d+)_k(?P<k>\d+)\.npz')
-TCN_PATTERN = re.compile(r'patch_tcn_k(?P<k>\d+)_fold(?P<fold>\d+)\.npy')
-
-
-@dataclass
-class Record:
-    """Per-neuron held-out BPS of one (method, session, model, K, fold) run.
-
-    Attributes:
-        bps: per-neuron BPS, shape (neurons,), NaN for neurons without test spikes.
-        trial_ids: sorted row indices of the test trials of this fold.
-    """
-
-    bps: np.ndarray
-    trial_ids: np.ndarray
-
-
-RecordKey = tuple[str, str, str, int, int]  # method, session, model, k, fold
-
-
-def load_session_spikes(eid: str, neural_dir: Path) -> np.ndarray:
-    """Stack train, val and test spikes in the original trial order.
-
-    Args:
-        eid: session eid.
-        neural_dir: directory holding `<eid>/<eid>_aligned.npz`.
-
-    Returns:
-        Array of shape (trials, time, neurons).
-    """
-    with np.load(neural_dir / eid / f'{eid}_aligned.npz') as data:
-        return np.concatenate(
-            [data['train_spikes'], data['val_spikes'], data['test_spikes']],
-            axis=0,
-        )
-
-
-def load_ridge_records(
-    session: str,
-    root: Path,
-    spikes: np.ndarray,
-    models: tuple[str, ...] = MODELS,
-) -> dict[RecordKey, Record]:
-    """Load the ridge per-neuron BPS of every (model, K, fold) file under `root`.
-
-    Args:
-        session: session name used in the record keys.
-        root: directory with `fullfit_<model>_f<fold>_k<K>.npz` files.
-        spikes: session spikes of shape (trials, time, neurons), used to mask neurons.
-        models: models to load.
-
-    Returns:
-        Records keyed by (`'ridge'`, session, model, K, fold).
-
-    Raises:
-        FileNotFoundError: if `root` holds no matching ridge file.
-    """
-    records: dict[RecordKey, Record] = {}
-    for path in sorted(root.glob('fullfit_*.npz')):
-        match = RIDGE_PATTERN.fullmatch(path.name)
-        if match is None or match['model'] not in models:
-            continue
-        with np.load(path) as data:
-            trial_ids = np.sort(data['trial_ids'])
-            has_spikes = spikes[data['trial_ids']].sum(axis=(0, 1)) > 0
-            bps = np.where(has_spikes, data['fold_bps'].astype(np.float64), np.nan)
-        key = ('ridge', session, match['model'], int(match['k']), int(match['fold']))
-        records[key] = Record(bps=bps, trial_ids=trial_ids)
-    if not records:
-        raise FileNotFoundError(f'no ridge files found in {root}')
-    return records
-
-
-def load_tcn_records(
-    session: str,
-    eid: str,
-    roots: dict[str, Path],
-    time_slice: tuple[int, int] | None = None,
-) -> dict[RecordKey, Record]:
-    """Load the TCN per-neuron BPS of every (model, K, fold) file found for a session.
-
-    Per-neuron BPS is recomputed from the stored `gt` and `pred`, which already gives NaN for
-    neurons without spikes in the test trials. Models with no output directory are skipped.
-
-    Args:
-        session: session name used in the record keys.
-        eid: session eid, the subfolder of each model root.
-        roots: model name to directory holding `<eid>/patch_tcn_k<K>_fold<F>.npy`.
-        time_slice: optional (start, stop) time bins to score, default all bins.
-
-    Returns:
-        Records keyed by (`'tcn'`, session, model, K, fold).
-    """
-    records: dict[RecordKey, Record] = {}
-    for model, root in roots.items():
-        for path in sorted((root / eid).glob('patch_tcn_k*_fold*.npy')):
-            match = TCN_PATTERN.fullmatch(path.name)
-            if match is None:
-                continue
-            payload = np.load(path, allow_pickle=True).item()
-            result = payload[eid]['cnn']
-            gt, pred = result['gt'], result['pred']
-            if time_slice is not None:
-                gt, pred = gt[:, slice(*time_slice)], pred[:, slice(*time_slice)]
-            key = ('tcn', session, model, int(match['k']), int(match['fold']))
-            records[key] = Record(
-                bps=bps_per_neuron(gt, pred),
-                trial_ids=np.sort(payload['meta']['idx_test']),
-            )
-    return records
-
-
-def check_matching_trials(records: dict[RecordKey, Record]) -> None:
-    """Check that ridge and TCN runs of the same session and fold share the same test trials.
-
-    Args:
-        records: records of both methods.
-
-    Raises:
-        ValueError: if the test trials of a ridge and a TCN run differ.
-    """
-    for (method, session, _model, _k, fold), record in records.items():
-        if method != 'tcn':
-            continue
-        for (other_method, other_session, _m, _kk, other_fold), other in records.items():
-            if (other_method, other_session, other_fold) != ('ridge', session, fold):
-                continue
-            if not np.array_equal(record.trial_ids, other.trial_ids):
-                raise ValueError(
-                    f'ridge and TCN test trials differ: session {session} fold {fold}',
-                )
-            break
-
-
-def _vectors_by_fold(
-    records: dict[RecordKey, Record],
-    method: str,
-    model: str,
-    k: int,
-    sessions: list[str],
-) -> dict[int, np.ndarray]:
-    """Per-neuron BPS vectors by fold, concatenated over `sessions` (only shared folds)."""
-    per_session = [
-        {key[4]: rec.bps for key, rec in records.items() if key[:4] == (method, s, model, k)}
-        for s in sessions
-    ]
-    folds = set.intersection(*(set(d) for d in per_session)) if per_session else set()
-    return {f: np.concatenate([d[f] for d in per_session]) for f in sorted(folds)}
-
-
-def summarize(
-    records: dict[RecordKey, Record],
-    *,
-    pooled: bool,
-    error: str,
-    neuron_folds: list[int] | None = None,
-) -> list[dict]:
-    """Mean and error of BPS for every (method, session, model, K).
-
-    Args:
-        records: records of both methods and all sessions.
-        pooled: pool all sessions into one unit named `'all'`, else one unit per session.
-        error: `'fold'` for mean over neurons then SD (ddof=1) across folds, `'neuron'` for
-            per-neuron BPS averaged over folds then SEM across neurons.
-        neuron_folds: folds used when `error='neuron'`, default all folds on disk.
-
-    Returns:
-        One row per unit with keys method, session, model, k, mean, err, n_folds, n_neurons.
-
-    Raises:
-        ValueError: if `error` is not `'fold'` or `'neuron'`.
-    """
-    if error not in {'fold', 'neuron'}:
-        raise ValueError(f'unknown error type: {error!r}')
-    sessions = sorted({key[1] for key in records})
-    units = [('all', sessions)] if pooled else [(s, [s]) for s in sessions]
-    rows: list[dict] = []
-    for method, model, k in sorted({(key[0], key[2], key[3]) for key in records}):
-        for unit, unit_sessions in units:
-            by_fold = _vectors_by_fold(records, method, model, k, unit_sessions)
-            if error == 'neuron' and neuron_folds is not None:
-                by_fold = {f: v for f, v in by_fold.items() if f in neuron_folds}
-            if not by_fold:
-                continue
-            if error == 'fold':
-                fold_means = np.array([np.nanmean(v) for v in by_fold.values()])
-                mean = float(fold_means.mean())
-                err = float(fold_means.std(ddof=1)) if len(fold_means) > 1 else 0.0
-                n_neurons = int(np.isfinite(next(iter(by_fold.values()))).sum())
-            else:
-                # neurons without spikes in every selected fold are all-NaN, which is expected
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', RuntimeWarning)
-                    per_neuron = np.nanmean(np.stack(list(by_fold.values())), axis=0)
-                per_neuron = per_neuron[np.isfinite(per_neuron)]
-                mean = float(per_neuron.mean())
-                err = float(per_neuron.std(ddof=1) / np.sqrt(len(per_neuron)))
-                n_neurons = len(per_neuron)
-            rows.append(
-                {
-                    'method': method,
-                    'session': unit,
-                    'model': model,
-                    'k': k,
-                    'mean': mean,
-                    'err': err,
-                    'n_folds': len(by_fold),
-                    'n_neurons': n_neurons,
-                },
-            )
-    return rows
 
 
 def plot_encoding(
@@ -332,12 +103,12 @@ def plot_encoding(
                 )
                 if not sub:
                     continue
-                x = np.array([KS.index(r['k']) for r in sub]) + style['offset']
+                x = np.array([PCA_KS.index(r['k']) for r in sub]) + style['offset']
                 ax.errorbar(
                     x,
                     [r['mean'] for r in sub],
                     yerr=[r['err'] for r in sub],
-                    color=MODEL_COLORS[model],
+                    color=model_color(model),
                     linestyle=style['linestyle'],
                     marker=style['marker'],
                     linewidth=2,
@@ -345,7 +116,7 @@ def plot_encoding(
                     capsize=3,
                     label=f'{MODEL_LABELS[model]} ({style["label"]})',
                 )
-        ax.set_xticks(range(len(KS)), [str(k) for k in KS])
+        ax.set_xticks(range(len(PCA_KS)), [str(k) for k in PCA_KS])
         ax.set_xlabel('Number of PCA components (K)')
         ax.set_ylabel(Y_LABEL)
         title = 'All sessions' if pooled else f'Session {unit}'

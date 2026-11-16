@@ -20,7 +20,7 @@ unless ``--save-dir`` is set.
 By default, figures are produced for **both** ``rrr`` and ``cnn``; pass ``--method rrr`` or
 ``--method cnn`` for a single model.
 
-python /src/analyses/neural_analysis/viz_single_cell.py \
+python scripts/neural_analysis/neural_encoding_cls_token/viz_single_cell.py \
   --encoding-npy path/to/encoding_results.npy
 
 Note: if you use the new std calculation method, you can't use this script. ValueError: mean_X time dim 1 does not match gt time dim 60. 
@@ -37,7 +37,7 @@ import os
 from pathlib import Path
 import numpy as np
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts.neural_analysis.eval_utils import bits_per_spike, viz_single_cell
 
 

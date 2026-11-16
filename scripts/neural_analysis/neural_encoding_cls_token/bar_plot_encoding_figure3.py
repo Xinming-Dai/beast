@@ -16,7 +16,7 @@ Under each method folder, paths use :func:`iter_eid_encoding_npys` in
 ``plot_helpers.py`` (recursive EID directory discovery).
 
 ```bash
-python scripts/neural_analysis/bar_plot_encoding_figure3.py \
+python scripts/neural_analysis/neural_encoding_cls_token/bar_plot_encoding_figure3.py \
   --results-dir /path/to/figure3 --methods random_baseline keypoints pca resnet beast sable_dino
 ```
 """
@@ -27,7 +27,7 @@ import argparse
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,7 +42,7 @@ from scripts.neural_analysis.plot_helpers import (
     iter_eid_encoding_npys,
     normalize_eid,
 )
-from scripts.neural_analysis.scatter_plot_figure3 import bps_vector_from_npy
+from scripts.neural_analysis.neural_encoding_cls_token.scatter_plot_figure3 import bps_vector_from_npy
 
 RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/ibl/SABLE_encoding")
 
@@ -213,6 +213,8 @@ def plot_encoding_bars(
     rrr_label: str | None = None,
     tcn_label: str | None = None,
     y_label: str | None = None,
+    figsize: tuple[float, float] | None = None,
+    xtick_color: str | None = None,
     save_path: Path | None = None,
     show: bool = True,
 ) -> plt.Figure:
@@ -227,7 +229,7 @@ def plot_encoding_bars(
     # bar_center_spacing so the first and last bars sit closer to the axes than to each other.
     edge_padding = 0.4
     x = np.arange(n, dtype=np.float64) * bar_center_spacing
-    fig, ax = plt.subplots(figsize=(0.68 * n, 2.0), dpi=200)
+    fig, ax = plt.subplots(figsize=figsize or (0.68 * n, 2.0), dpi=200)
 
     def _finite_pairs(
         means: np.ndarray,
@@ -301,7 +303,7 @@ def plot_encoding_bars(
     plt.setp(ax.get_yticklabels(), fontweight=fontweight)
     plt.setp(ax.get_xticklabels(), fontweight=fontweight)
     for tick_label, (c_rrr, _c_cnn) in zip(ax.get_xticklabels(), color_pairs):
-        tick_label.set_color(c_rrr)
+        tick_label.set_color(xtick_color or c_rrr)
 
     ax.set_ylim(y_min, y_lim)
     ax.grid(False)

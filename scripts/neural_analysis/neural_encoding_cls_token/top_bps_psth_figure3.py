@@ -9,7 +9,7 @@ cannot be built, but PSTHs can still be plotted directly from ``gt`` and ``pred`
 Example:
 
 ```
-python src/analyses/neural_analysis/top_bps_psth_figure3.py \
+python scripts/neural_analysis/neural_encoding_cls_token/top_bps_psth_figure3.py \
   --encoding-npy /path/to/encoding_results.npy
 ```
 """
@@ -20,7 +20,7 @@ import argparse
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import matplotlib.pyplot as plt
 import numpy as np

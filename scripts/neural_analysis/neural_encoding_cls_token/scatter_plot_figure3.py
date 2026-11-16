@@ -16,7 +16,7 @@ Under each method folder, paths use :func:`iter_eid_encoding_npys` in
 ``plot_helpers.py`` (recursive EID directory discovery).
 
 ```bash
-python src/analyses/neural_analysis/scatter_plot_figure3.py \
+python scripts/neural_analysis/neural_encoding_cls_token/scatter_plot_figure3.py \
   --results-dir /path/to/figure3 --eid <uuid> --methods BEAST ResNet
 ```
 """
@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -40,7 +40,7 @@ from scripts.neural_analysis.plot_helpers import (
     iter_eid_encoding_npys,
     normalize_eid,
 )
-from scripts.neural_analysis.viz_single_cell import bps_per_neuron
+from scripts.neural_analysis.neural_encoding_cls_token.viz_single_cell import bps_per_neuron
 
 RESULTS_DIR = Path("/work/nvme/bfsr/xdai3/project3d/plotting/figure3")
 TEXT_FONT_SIZE = 12

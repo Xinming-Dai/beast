@@ -31,14 +31,16 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.neural_analysis.bar_plot_encoding_figure3 import (
+from scripts.neural_analysis.neural_encoding_cls_token.bar_plot_encoding_figure3 import (
     _allowed_eid_set,
     collect_method_stats as collect_encoding_stats,
 )
 from scripts.neural_analysis.decoding_metrics_figure2 import (
     collect_method_stats as collect_decoding_stats,
 )
-from scripts.neural_analysis.latex_table_encoding_figure3 import format_cells
+from scripts.neural_analysis.neural_encoding_cls_token.latex_table_encoding_figure3 import (
+    format_cells,
+)
 from scripts.neural_analysis.plot_helpers import EID_SET, _default_output_path_helper
 
 RESULTS_DIR = Path('/projects/bfsr/xdai3/project3d/iclr_plotting/ibl/model_size_ablation')

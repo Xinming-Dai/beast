@@ -5,7 +5,7 @@ Mirrors :mod:`bar_plot_encoding_figure3` (same folder structure, method stats), 
 emits a LaTeX table instead of a bar chart:
 
 ```bash
-python scripts/neural_analysis/latex_table_encoding_figure3.py \
+python scripts/neural_analysis/neural_encoding_cls_token/latex_table_encoding_figure3.py \
     --methods keypoints sable_dino
 ```
 """
@@ -17,12 +17,13 @@ from pathlib import Path
 import re
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np
 
-from scripts.neural_analysis.bar_plot_encoding_figure3 import (
+from scripts.neural_analysis.neural_encoding_cls_token.bar_plot_encoding_figure3 import (
     EID_SET,
+    RESULTS_DIR,
     _allowed_eid_set,
     collect_method_stats,
 )

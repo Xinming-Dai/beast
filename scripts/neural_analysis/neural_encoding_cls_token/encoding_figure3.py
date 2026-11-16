@@ -7,7 +7,7 @@ the Figure 3 neural panels.
 
 Example
 -------
-python src/analyses/neural_analysis/encoding_figure3.py \
+python scripts/neural_analysis/neural_encoding_cls_token/encoding_figure3.py \
   --output /work/nvme/bfsr/xdai3/project3d/plotting/figure3/encoding_schematic
 """
 
