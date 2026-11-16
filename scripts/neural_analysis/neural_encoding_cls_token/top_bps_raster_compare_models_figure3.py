@@ -49,6 +49,13 @@ from scripts.neural_analysis.plot_helpers import (
     iter_eid_encoding_npys,
     normalize_eid,
 )
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (
+    RANKING_DIRNAME,
+    add_ranking_args,
+    cls_ranking_path,
+    neurons_from_ranking,
+    thresholds_from_args,
+)
 
 
 RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_zero_shot_encoding")
@@ -376,9 +383,10 @@ def main() -> None:
     p.add_argument(
         "--neuron-index",
         type=int,
-        required=True,
-        help="Neuron index for the activity raster panels",
+        default=None,
+        help="Neuron index for the activity raster panels (required without --ranking)",
     )
+    add_ranking_args(p)
     p.add_argument(
         "--encoder",
         choices=("cnn", "rrr"),
@@ -413,6 +421,32 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    if args.neuron_index is not None:
+        neuron_index = args.neuron_index
+    elif args.ranking:
+        path = cls_ranking_path(
+            args.ranking_dir or args.results_dir / RANKING_DIRNAME,
+            args.eid,
+            args.methods[1],
+            args.encoder,
+        )
+        neuron_indices = neurons_from_ranking(
+            args,
+            1,
+            path=path,
+            expected={"eid": args.eid, "method": args.methods[1], "encoder": args.encoder},
+        )
+        if not neuron_indices:
+            min_psth_corr, min_modulation = thresholds_from_args(args)
+            p.error(
+                f"no neuron of {path} has psth r >= {min_psth_corr} and modulation >= "
+                f"{min_modulation}, lower the thresholds or pass --no-filter"
+            )
+        neuron_index = neuron_indices[0]
+        print(f"top neuron of {args.methods[1]} from {path}: {neuron_index}")
+    else:
+        p.error("one of --neuron-index or --ranking is required")
+
     save_path = args.output
     if save_path is None:
         save_path = _default_output_path_helper(
@@ -425,7 +459,7 @@ def main() -> None:
         args.results_dir,
         args.eid,
         tuple(args.methods),
-        args.neuron_index,
+        neuron_index,
         encoder=args.encoder,
         duration_s=args.duration_s,
         method1_label=args.method1_label,

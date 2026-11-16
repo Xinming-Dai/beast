@@ -51,6 +51,13 @@ from scripts.neural_analysis.plot_helpers import (
     iter_eid_encoding_npys,
     normalize_eid,
 )
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (
+    RANKING_DIRNAME,
+    add_ranking_args,
+    cls_ranking_path,
+    neurons_from_ranking,
+    thresholds_from_args,
+)
 
 
 RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/SABLE_zero_shot_encoding")
@@ -491,8 +498,15 @@ def main() -> None:
         "--neuron-indices",
         nargs="+",
         type=int,
-        required=True,
-        help="Neuron indices to plot, one panel per neuron",
+        default=None,
+        help="Neuron indices to plot, one panel per neuron (required without --ranking)",
+    )
+    add_ranking_args(p)
+    p.add_argument(
+        "--num-neurons",
+        type=int,
+        default=4,
+        help="With --ranking: number of top neurons to plot (default: 4)",
     )
     p.add_argument(
         "--encoder",
@@ -535,6 +549,31 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    if args.neuron_indices is not None:
+        neuron_indices = list(args.neuron_indices)
+    elif args.ranking:
+        path = cls_ranking_path(
+            args.ranking_dir or args.results_dir / RANKING_DIRNAME,
+            args.eid,
+            args.methods[1],
+            args.encoder,
+        )
+        neuron_indices = neurons_from_ranking(
+            args,
+            args.num_neurons,
+            path=path,
+            expected={"eid": args.eid, "method": args.methods[1], "encoder": args.encoder},
+        )
+        if not neuron_indices:
+            min_psth_corr, min_modulation = thresholds_from_args(args)
+            p.error(
+                f"no neuron of {path} has psth r >= {min_psth_corr} and modulation >= "
+                f"{min_modulation}, lower the thresholds or pass --no-filter"
+            )
+        print(f"top neurons of {args.methods[1]} from {path}: {neuron_indices}")
+    else:
+        p.error("one of --neuron-indices or --ranking is required")
+
     save_path = args.output
     if save_path is None:
         save_path = _default_output_path_helper(
@@ -547,7 +586,7 @@ def main() -> None:
         args.results_dir,
         args.eid,
         tuple(args.methods),
-        list(args.neuron_indices),
+        neuron_indices,
         encoder=args.encoder,
         duration_s=args.duration_s,
         method1_label=args.method1_label,

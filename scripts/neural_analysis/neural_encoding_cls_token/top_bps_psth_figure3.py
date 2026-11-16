@@ -25,6 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import matplotlib.pyplot as plt
 import numpy as np
 
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (
+    RANKING_DIRNAME,
+    add_ranking_args,
+    cls_ranking_path,
+    neurons_from_ranking,
+    thresholds_from_args,
+)
 from scripts.neural_analysis.plot_helpers import bps_per_neuron, normalize_eid
 
 
@@ -162,6 +169,7 @@ def plot_top_bps_psth(
     method: str = "cnn",
     eid: str | None = None,
     top_bps: int = 5,
+    neuron_indices: list[int] | None = None,
     duration_s: float = 1.0,
     trials_idx: tuple[int, ...] | None = None,
     normalize: bool = True,
@@ -169,7 +177,7 @@ def plot_top_bps_psth(
     also_save_pdf: bool = False,
     show: bool = True,
 ) -> tuple[plt.Figure, np.ndarray, np.ndarray]:
-    """Plot PSTH panels for the top-BPS neurons in one encoder block."""
+    """Plot PSTH panels for the top-BPS neurons, or for ``neuron_indices``, of one encoder block."""
     root = _encoding_dict(encoding_npy)
     eid_key = _resolve_eid_key(root, eid)
     session = root[eid_key]
@@ -200,9 +208,12 @@ def plot_top_bps_psth(
     pred = pred[t0:t1]
 
     bps = bps_per_neuron(gt, pred)
-    neuron_indices = top_neuron_indices_by_bps(bps, top_bps)
+    if neuron_indices is None:
+        neuron_indices = top_neuron_indices_by_bps(bps, top_bps)
+    else:
+        neuron_indices = np.asarray(neuron_indices, dtype=int)
     print(
-        f"[{method}] Top {len(neuron_indices)} by BPS (index, bps): "
+        f"[{method}] Top {len(neuron_indices)} (index, bps): "
         + ", ".join(f"({int(idx)}, {bps[idx]:.4f})" for idx in neuron_indices)
     )
 
@@ -288,13 +299,16 @@ def main() -> None:
         "--results-dir",
         type=Path,
         default=DEFAULT_RESULTS_DIR,
-        help="Figure 3 root directory, used only when --encoding-npy is omitted.",
+        help=(
+            "Figure 3 root directory, used when --encoding-npy is omitted and, with --ranking, "
+            "for <results-dir>/neuron_ranking."
+        ),
     )
     parser.add_argument(
         "--method-folder",
         type=str,
         default="CLS",
-        help="Folder under --results-dir, used only when --encoding-npy is omitted.",
+        help="Folder under --results-dir, used when --encoding-npy is omitted and with --ranking.",
     )
     parser.add_argument("--eid", type=str, default=None, help="Session EID; required if results contain multiple EIDs.")
     parser.add_argument(
@@ -304,6 +318,7 @@ def main() -> None:
         help="Encoder block inside encoding results. Default only calculates cnn.",
     )
     parser.add_argument("--top-bps", type=int, default=10, help="Number of top-BPS neurons to plot.")
+    add_ranking_args(parser)
     parser.add_argument("--duration-s", type=float, default=1.0, help="Right x-axis time in seconds.")
     parser.add_argument("--no-normalize", action="store_true", help="Plot raw PSTH values instead of normalized traces.")
     parser.add_argument(
@@ -333,6 +348,30 @@ def main() -> None:
     if not encoding_npy.is_file():
         raise FileNotFoundError(encoding_npy)
 
+    neuron_indices = None
+    if args.ranking:
+        if args.eid is None:
+            parser.error("--eid is required with --ranking")
+        path = cls_ranking_path(
+            args.ranking_dir or args.results_dir / RANKING_DIRNAME,
+            args.eid,
+            args.method_folder,
+            args.method,
+        )
+        neuron_indices = neurons_from_ranking(
+            args,
+            args.top_bps,
+            path=path,
+            expected={"eid": args.eid, "method": args.method_folder, "encoder": args.method},
+        )
+        if not neuron_indices:
+            min_psth_corr, min_modulation = thresholds_from_args(args)
+            parser.error(
+                f"no neuron of {path} has psth r >= {min_psth_corr} and modulation >= "
+                f"{min_modulation}, lower the thresholds or pass --no-filter"
+            )
+        print(f"top neurons of {args.method_folder} from {path}: {neuron_indices}")
+
     save_path = args.output
     if save_path is None:
         save_path = encoding_npy.parent / f"top_bps_psth_{args.method}.png"
@@ -342,6 +381,7 @@ def main() -> None:
         method=args.method,
         eid=args.eid,
         top_bps=args.top_bps,
+        neuron_indices=neuron_indices,
         duration_s=args.duration_s,
         trials_idx=args.trial_idx,
         normalize=not args.no_normalize,

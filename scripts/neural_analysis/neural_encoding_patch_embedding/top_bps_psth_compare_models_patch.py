@@ -37,6 +37,15 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     load_session_spikes,
     model_color,
 )
+from scripts.neural_analysis.neuron_ranking_and_filtering.rank_neurons_bps_corr_patch import (  # noqa: E402
+    RANKING_DIR,
+    ranking_path,
+)
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (  # noqa: E402
+    add_ranking_args,
+    neurons_from_ranking,
+    thresholds_from_args,
+)
 from scripts.neural_analysis.plot_helpers import (  # noqa: E402
     AXIS_LABEL_FONT_KWARGS,
     AXIS_TICK_LABEL_FONT_KWARGS,
@@ -448,6 +457,7 @@ def main() -> None:
         help='PSTH neurons (default: top 4 by BPS of MODEL2)',
     )
     parser.add_argument('--raster-neuron-index', type=int, default=None)
+    add_ranking_args(parser)
     parser.add_argument(
         '--trial-idx',
         type=parse_trials_idx_arg,
@@ -469,7 +479,23 @@ def main() -> None:
     _, gt2, pred2 = load_ridge_predictions(args.session, model2, args.k, args.fold, spikes)
 
     neuron_indices = args.neuron_indices
-    if neuron_indices is None:
+    if neuron_indices is None and args.ranking:
+        path = ranking_path(args.session, model2, args.k, args.fold, args.ranking_dir or RANKING_DIR)
+        neuron_indices = neurons_from_ranking(
+            args,
+            4,
+            path=path,
+            expected={'session': args.session, 'model': model2, 'k': args.k, 'fold': args.fold},
+            n_neurons=gt2.shape[2],
+        )
+        if not neuron_indices:
+            min_psth_corr, min_modulation = thresholds_from_args(args)
+            parser.error(
+                f'no neuron of {path} has psth r >= {min_psth_corr} and modulation >= '
+                f'{min_modulation}, lower the thresholds or pass --no-filter'
+            )
+        print(f'top neurons of {model2} from {path}: {neuron_indices}')
+    elif neuron_indices is None:
         bps2 = bps_per_neuron(gt2, pred2)
         neuron_indices = [int(i) for i in np.argsort(np.nan_to_num(bps2, nan=-np.inf))[::-1][:4]]
         print(f'top-BPS neurons of {model2}: {neuron_indices}')

@@ -109,13 +109,14 @@ def load_ridge_records(
         FileNotFoundError: if `root` holds no matching ridge file.
     """
     records: dict[RecordKey, Record] = {}
+    spikes_per_trial = spikes.sum(axis=1)
     for path in sorted(root.glob('fullfit_*.npz')):
         match = RIDGE_PATTERN.fullmatch(path.name)
         if match is None or match['model'] not in models:
             continue
         with np.load(path) as data:
             trial_ids = np.sort(data['trial_ids'])
-            has_spikes = spikes[data['trial_ids']].sum(axis=(0, 1)) > 0
+            has_spikes = spikes_per_trial[data['trial_ids']].sum(axis=0) > 0
             bps = np.where(has_spikes, data['fold_bps'].astype(np.float64), np.nan)
         key = ('ridge', session, match['model'], int(match['k']), int(match['fold']))
         records[key] = Record(bps=bps, trial_ids=trial_ids)
@@ -334,6 +335,32 @@ def neuron_bps(
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
         return np.nanmean(np.stack(list(by_fold.values())), axis=0)
+
+
+def restrict_records(
+    records: dict[RecordKey, Record],
+    idx_by_session: dict[str, list[int]],
+) -> dict[RecordKey, Record]:
+    """Keep only the given neurons of every session, all other neurons become NaN.
+
+    `summarize` drops non-finite neurons, so the restricted records can be summarized as usual.
+
+    Args:
+        records: records of all runs.
+        idx_by_session: session name to the indices of the neurons to keep.
+
+    Returns:
+        New records with the same keys, NaN BPS for the neurons that are not kept.
+    """
+    restricted: dict[RecordKey, Record] = {}
+    for key, record in records.items():
+        keep = np.zeros(record.bps.shape, dtype=bool)
+        keep[idx_by_session[key[1]]] = True
+        restricted[key] = Record(
+            bps=np.where(keep, record.bps, np.nan),
+            trial_ids=record.trial_ids,
+        )
+    return restricted
 
 
 def load_ridge_session_data(
