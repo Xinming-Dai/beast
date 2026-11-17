@@ -325,15 +325,17 @@ def plot_encoding_bars(
     # to make room for negative bars (e.g. random_baseline).
     ax.axhline(0, color="black", linewidth=1.5, zorder=0.5)
 
-    ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(0.0, 1.12),
-        frameon=False,
-        ncol=2,
-        fontsize=8,
-        handlelength=1.2,
-        columnspacing=1.2,
-    )
+    # callers that pass no rrr_label / tcn_label have nothing to put in the legend
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(0.0, 1.12),
+            frameon=False,
+            ncol=2,
+            fontsize=8,
+            handlelength=1.2,
+            columnspacing=1.2,
+        )
 
     ax.set_xlim(x.min() - edge_padding, x.max() + edge_padding)
     if not own_figure:
