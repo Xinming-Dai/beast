@@ -19,6 +19,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -145,28 +146,56 @@ def split_neurons_by_ranking(
     return idx_3d, idx_2d
 
 
+def summarize_group(records: dict, args: argparse.Namespace) -> list[dict]:
+    """Mean and SEM over neurons of every session and of the pooled sessions.
+
+    Args:
+        records: ridge records, restricted to one neuron group or not.
+        args: parsed arguments of the script.
+
+    Returns:
+        Rows of `summarize`, per session followed by the pooled `'all'` rows.
+    """
+    rows = []
+    for pooled in (False, True):
+        rows += summarize(records, pooled=pooled, error='neuron', neuron_folds=args.folds)
+    return rows
+
+
+def unit_bars(rows: list[dict], unit: str, k: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """Mean, SEM and neuron count of one session (or `'all'`) for every bar model.
+
+    Args:
+        rows: output of `summarize_group`.
+        unit: session name or `'all'`.
+        k: number of PCA components.
+
+    Returns:
+        Means and SEMs ordered as `BAR_MODELS`, and the number of neurons.
+    """
+    by_model = {r['model']: r for r in rows if r['session'] == unit and r['k'] == k}
+    means = np.array([by_model[model]['mean'] for model in BAR_MODELS])
+    errs = np.array([by_model[model]['err'] for model in BAR_MODELS])
+    return means, errs, by_model[BAR_MODELS[0]]['n_neurons']
+
+
 def plot_group(
-    records: dict,
+    rows: list[dict],
     args: argparse.Namespace,
     save_dir: Path,
     stem: str,
     group: str | None = None,
 ) -> None:
-    """Write the pooled bar plot and the markdown table of per-session results of `records`.
+    """Write the pooled bar plot and the markdown table of per-session results.
 
     Args:
-        records: ridge records, restricted to one neuron group or not.
+        rows: output of `summarize_group` of one neuron group, or of all neurons.
         args: parsed arguments of the script.
         save_dir: output folder.
         stem: file name without extension.
         group: description of the neuron group for the table title, None for all neurons.
     """
-    rows = []
-    for pooled in (False, True):
-        rows += summarize(records, pooled=pooled, error='neuron', neuron_folds=args.folds)
-    pooled_by_model = {r['model']: r for r in rows if r['session'] == 'all' and r['k'] == args.k}
-    means = np.array([pooled_by_model[model]['mean'] for model in BAR_MODELS])
-    errs = np.array([pooled_by_model[model]['err'] for model in BAR_MODELS])
+    means, errs, _ = unit_bars(rows, 'all', args.k)
     plot_encoding_bars(
         [MODEL_LABELS[model] for model in BAR_MODELS],
         np.full_like(means, np.nan),
@@ -186,6 +215,72 @@ def plot_group(
     print(table)
 
 
+def plot_sessions_grid(
+    rows_by_row: dict[str, list[dict]],
+    args: argparse.Namespace,
+    save_path: Path,
+) -> None:
+    """Write one figure with a bar panel per session, one row per neuron group.
+
+    Args:
+        rows_by_row: row label to the output of `summarize_group` of that neuron group, in the
+            order the rows are drawn.
+        args: parsed arguments of the script.
+        save_path: output image path.
+    """
+    n_rows, n_cols = len(rows_by_row), len(args.sessions)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(3.2 * n_cols, 2.4 * n_rows),
+        dpi=200,
+        sharex=True,
+        squeeze=False,
+    )
+    for idx_row, (row_label, rows) in enumerate(rows_by_row.items()):
+        for idx_col, session in enumerate(args.sessions):
+            ax = axes[idx_row, idx_col]
+            means, errs, n_neurons = unit_bars(rows, session, args.k)
+            plot_encoding_bars(
+                [MODEL_LABELS[model] for model in BAR_MODELS],
+                np.full_like(means, np.nan),
+                means,
+                np.full_like(errs, np.nan),
+                errs,
+                [(model_color(model), model_color(model)) for model in BAR_MODELS],
+                plot_encoders='cnn',
+                xtick_color='black',
+                ax=ax,
+            )
+            if idx_row == 0:
+                ax.set_title(f'Session {session}', fontsize=12, fontweight='medium')
+            if idx_col == 0:
+                ax.set_ylabel(f'{row_label}\nAvg BPS', fontsize=12, fontweight='medium')
+            else:
+                ax.set_ylabel('')
+            ax.text(
+                0.98,
+                0.98,
+                f'n={n_neurons}',
+                transform=ax.transAxes,
+                ha='right',
+                va='top',
+                fontsize=9,
+            )
+        # sessions of the same neuron group share the y range so they can be compared
+        y_lims = [axes[idx_row, idx_col].get_ylim() for idx_col in range(n_cols)]
+        for ax in axes[idx_row]:
+            ax.set_ylim(min(lo for lo, _ in y_lims), max(hi for _, hi in y_lims))
+    fig.tight_layout(pad=0.4)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=400, bbox_inches='tight', pad_inches=0.05, facecolor='white')
+    if args.no_show:
+        plt.close(fig)
+    else:
+        plt.show()
+    print(save_path)
+
+
 def main() -> None:
     """Write the pooled bar plot and the markdown table, for all neurons or per 3D / 2D group."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -200,7 +295,8 @@ def main() -> None:
         default=None,
         help=(
             'fraction of the neurons of each session, ranked by Full SABLE BPS, that goes to the '
-            '3D group, the rest is the 2D group; writes one plot and table per group'
+            '3D group, the rest is the 2D group; writes one plot and table per group and one '
+            'figure with a panel per session (2D row, 3D row)'
         ),
     )
     parser.add_argument(
@@ -212,7 +308,12 @@ def main() -> None:
     parser.add_argument('--no-show', action='store_true')
     args = parser.parse_args()
 
-    records, spikes_by_session = load_ridge_session_data(args.sessions, args.neural_dir)
+    # only this K is read from disk, all folds are kept because the ranking split needs them
+    records, spikes_by_session = load_ridge_session_data(
+        args.sessions,
+        args.neural_dir,
+        ks=(args.k,),
+    )
     save_dir = args.output_dir or _default_output_path_helper(
         RESULTS_DIR,
         'encoding_barplot',
@@ -222,7 +323,7 @@ def main() -> None:
     stem = f'bar_k{args.k}_fold{"".join(map(str, args.folds))}'
 
     if args.split_frac is None:
-        plot_group(records, args, save_dir, stem)
+        plot_group(summarize_group(records, args), args, save_dir, stem)
         return
     idx_3d, idx_2d = split_neurons_by_ranking(
         records,
@@ -238,14 +339,18 @@ def main() -> None:
         '3d': (idx_3d, f'3D neurons (top {pct_3d}% by Full SABLE BPS)'),
         '2d': (idx_2d, f'2D neurons (remaining {100 - pct_3d}% by Full SABLE BPS)'),
     }
-    for suffix, (idx_by_session, group) in groups.items():
-        plot_group(
-            restrict_records(records, idx_by_session),
-            args,
-            save_dir,
-            f'{stem}_{suffix}',
-            group,
-        )
+    # each group is summarized once, the rows feed the pooled plot, the table and the grid
+    rows_by_suffix = {
+        suffix: summarize_group(restrict_records(records, idx_by_session), args)
+        for suffix, (idx_by_session, _) in groups.items()
+    }
+    for suffix, (_, group) in groups.items():
+        plot_group(rows_by_suffix[suffix], args, save_dir, f'{stem}_{suffix}', group)
+    plot_sessions_grid(
+        {'2D neurons': rows_by_suffix['2d'], '3D neurons': rows_by_suffix['3d']},
+        args,
+        save_dir / f'{stem}_sessions.png',
+    )
 
 
 if __name__ == '__main__':

@@ -91,7 +91,7 @@ def main() -> None:
     args = parser.parse_args()
 
     sessions = list(SESSION_EIDS) if args.session == 'all' else [args.session]
-    records, _ = load_ridge_session_data(sessions, args.neural_dir)
+    records, _ = load_ridge_session_data(sessions, args.neural_dir, folds=args.folds)
     rows = summarize(
         records,
         pooled=args.session == 'all',

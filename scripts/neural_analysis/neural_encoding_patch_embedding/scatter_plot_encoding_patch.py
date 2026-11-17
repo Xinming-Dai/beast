@@ -56,7 +56,12 @@ def main() -> None:
     args = parser.parse_args()
 
     model_y, model_x = args.models
-    records, _ = load_ridge_session_data([args.session], args.neural_dir)
+    records, _ = load_ridge_session_data(
+        [args.session],
+        args.neural_dir,
+        ks=(args.k,),
+        folds=args.folds,
+    )
     bps_y = neuron_bps(records, 'ridge', args.session, model_y, args.k, args.folds)
     bps_x = neuron_bps(records, 'ridge', args.session, model_x, args.k, args.folds)
     save_path = args.output or _default_output_path_helper(

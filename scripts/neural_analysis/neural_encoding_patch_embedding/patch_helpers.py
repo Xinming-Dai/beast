@@ -93,14 +93,20 @@ def load_ridge_records(
     root: Path,
     spikes: np.ndarray,
     models: tuple[str, ...] = MODELS,
+    ks: tuple[int, ...] | None = None,
+    folds: list[int] | None = None,
 ) -> dict[RecordKey, Record]:
     """Load the ridge per-neuron BPS of every (model, K, fold) file under `root`.
+
+    Files are selected by name, so the ones that are not wanted are never opened.
 
     Args:
         session: session name used in the record keys.
         root: directory with `fullfit_<model>_f<fold>_k<K>.npz` files.
         spikes: session spikes of shape (trials, time, neurons), used to mask neurons.
         models: models to load.
+        ks: numbers of PCA components to load, default all.
+        folds: folds to load, default all.
 
     Returns:
         Records keyed by (`'ridge'`, session, model, K, fold).
@@ -113,6 +119,10 @@ def load_ridge_records(
     for path in sorted(root.glob('fullfit_*.npz')):
         match = RIDGE_PATTERN.fullmatch(path.name)
         if match is None or match['model'] not in models:
+            continue
+        if ks is not None and int(match['k']) not in ks:
+            continue
+        if folds is not None and int(match['fold']) not in folds:
             continue
         with np.load(path) as data:
             trial_ids = np.sort(data['trial_ids'])
@@ -366,12 +376,16 @@ def restrict_records(
 def load_ridge_session_data(
     sessions: list[str],
     neural_dir: Path = NEURAL_DIR,
+    ks: tuple[int, ...] | None = None,
+    folds: list[int] | None = None,
 ) -> tuple[dict[RecordKey, Record], dict[str, np.ndarray]]:
     """Load the ridge records and the spikes of several sessions.
 
     Args:
         sessions: session names, keys of `SESSION_EIDS`.
         neural_dir: directory holding `<eid>/<eid>_aligned.npz`.
+        ks: numbers of PCA components to load, default all.
+        folds: folds to load, default all.
 
     Returns:
         Ridge records of all sessions and the spikes per session, shape (trials, time, neurons).
@@ -381,5 +395,7 @@ def load_ridge_session_data(
     for session in sessions:
         spikes = load_session_spikes(SESSION_EIDS[session], neural_dir)
         spikes_by_session[session] = spikes
-        records.update(load_ridge_records(session, RIDGE_ROOTS[session], spikes))
+        records.update(
+            load_ridge_records(session, RIDGE_ROOTS[session], spikes, ks=ks, folds=folds),
+        )
     return records, spikes_by_session

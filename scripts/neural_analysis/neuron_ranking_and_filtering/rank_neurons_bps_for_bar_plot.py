@@ -71,7 +71,7 @@ def main() -> None:
     parser.add_argument('--output-dir', type=Path, default=RANKING_DIR)
     args = parser.parse_args()
 
-    records, _ = load_ridge_session_data(args.sessions, args.neural_dir)
+    records, _ = load_ridge_session_data(args.sessions, args.neural_dir, ks=tuple(args.k))
     n_written = 0
     for session in args.sessions:
         for k in args.k:

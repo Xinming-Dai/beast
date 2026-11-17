@@ -217,7 +217,13 @@ def plot_encoding_bars(
     xtick_color: str | None = None,
     save_path: Path | None = None,
     show: bool = True,
+    ax: plt.Axes | None = None,
 ) -> plt.Figure:
+    """Bar plot of mean +/- SE per method.
+
+    With ``ax`` the bars are drawn on that axis and ``figsize``, ``save_path`` and ``show`` are
+    ignored: the caller owns the figure (layout, saving, closing).
+    """
     if plot_encoders not in {"cnn", "rrr", "both"}:
         raise ValueError(f"Unknown plot_encoders: {plot_encoders!r}")
 
@@ -229,7 +235,11 @@ def plot_encoding_bars(
     # bar_center_spacing so the first and last bars sit closer to the axes than to each other.
     edge_padding = 0.4
     x = np.arange(n, dtype=np.float64) * bar_center_spacing
-    fig, ax = plt.subplots(figsize=figsize or (0.68 * n, 2.0), dpi=200)
+    own_figure = ax is None
+    if own_figure:
+        fig, ax = plt.subplots(figsize=figsize or (0.68 * n, 2.0), dpi=200)
+    else:
+        fig = ax.figure
 
     def _finite_pairs(
         means: np.ndarray,
@@ -326,6 +336,8 @@ def plot_encoding_bars(
     )
 
     ax.set_xlim(x.min() - edge_padding, x.max() + edge_padding)
+    if not own_figure:
+        return fig
     fig.tight_layout(pad=0.4)
 
     if save_path is not None:
