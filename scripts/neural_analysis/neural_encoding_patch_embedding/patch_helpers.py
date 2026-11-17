@@ -275,6 +275,121 @@ def summarize(
     return rows
 
 
+def summarize_session_mean(
+    records: dict[RecordKey, Record],
+    *,
+    neuron_folds: list[int] | None = None,
+    baseline: str | None = None,
+) -> list[dict]:
+    """Per-session mean +/- SEM over neurons, and the session-weighted mean over sessions.
+
+    Counterpart of `summarize(error='neuron')` that does not let sessions with more neurons
+    dominate the pooled value: the `'all'` row is the mean of the session means and its error is
+    the SEM across sessions (0 for a single session). With `baseline`, every model is replaced by
+    its per-neuron difference to the baseline model of the same session, which cancels the
+    session offset in BPS, and the baseline model itself is dropped.
+
+    Args:
+        records: records of all methods, sessions and models.
+        neuron_folds: folds the per-neuron BPS is averaged over, default all folds on disk.
+        baseline: model whose per-neuron BPS is subtracted, None for the absolute BPS.
+
+    Returns:
+        Rows with the keys of `summarize` plus `n_sessions`, per session followed by `'all'`.
+    """
+    sessions = sorted({key[1] for key in records})
+    rows: list[dict] = []
+    for method, model, k in sorted({(key[0], key[2], key[3]) for key in records}):
+        if model == baseline:
+            continue
+        session_means: list[float] = []
+        n_folds = n_neurons_all = 0
+        for session in sessions:
+            per_neuron, by_fold = _session_neuron_bps(
+                records,
+                method,
+                model,
+                k,
+                session,
+                neuron_folds,
+            )
+            if per_neuron is None:
+                continue
+            if baseline is not None:
+                per_neuron_base, _ = _session_neuron_bps(
+                    records,
+                    method,
+                    baseline,
+                    k,
+                    session,
+                    neuron_folds,
+                )
+                if per_neuron_base is None:
+                    raise ValueError(f'no {baseline} records for session {session}, K={k}')
+                per_neuron = per_neuron - per_neuron_base
+            per_neuron = per_neuron[np.isfinite(per_neuron)]
+            mean = float(per_neuron.mean())
+            session_means.append(mean)
+            n_folds = len(by_fold)
+            n_neurons_all += len(per_neuron)
+            rows.append(
+                {
+                    'method': method,
+                    'session': session,
+                    'model': model,
+                    'k': k,
+                    'mean': mean,
+                    'err': float(per_neuron.std(ddof=1) / np.sqrt(len(per_neuron))),
+                    'n_folds': n_folds,
+                    'n_neurons': len(per_neuron),
+                    'n_sessions': 1,
+                },
+            )
+        if not session_means:
+            continue
+        rows.append(
+            {
+                'method': method,
+                'session': 'all',
+                'model': model,
+                'k': k,
+                'mean': float(np.mean(session_means)),
+                'err': (
+                    float(np.std(session_means, ddof=1) / np.sqrt(len(session_means)))
+                    if len(session_means) > 1
+                    else 0.0
+                ),
+                'n_folds': n_folds,
+                'n_neurons': n_neurons_all,
+                'n_sessions': len(session_means),
+            },
+        )
+    return rows
+
+
+def _session_neuron_bps(
+    records: dict[RecordKey, Record],
+    method: str,
+    model: str,
+    k: int,
+    session: str,
+    neuron_folds: list[int] | None,
+) -> tuple[np.ndarray | None, dict[int, np.ndarray]]:
+    """Per-neuron BPS of one session averaged over the selected folds, None if no fold exists."""
+    by_fold = _vectors_by_fold(records, method, model, k, [session])
+    if neuron_folds is not None:
+        by_fold = {f: v for f, v in by_fold.items() if f in neuron_folds}
+    return (_mean_over_folds(by_fold) if by_fold else None), by_fold
+
+
+def _mean_over_folds(by_fold: dict[int, np.ndarray]) -> np.ndarray:
+    """Per-neuron BPS averaged over folds, NaN for neurons without spikes in every fold."""
+    # all-NaN neurons are expected, so the empty-slice warning is silenced
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        return np.nanmean(np.stack(list(by_fold.values())), axis=0)
+
+
 def model_color(model: str) -> str:
     """Color of a model, taken from `ENCODING_BASE_COLORS` in `plot_helpers.py`."""
     return ENCODING_BASE_COLORS[MODEL_COLOR_KEYS[model]]
