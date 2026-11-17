@@ -38,7 +38,7 @@ ENCODING_BASE_COLORS: dict[str, str] = {
     # patch-embedding ridge experiment: full SABLE, SABLE without geometry, DINO
     "sable_full": "#F28E2B",
     "sable_nogeom": "#8E6BBF",
-    "dino": "#6B6B6B",  # darker grey than beast (#9E9E9E)
+    "dino": "#1B66A7",
 }
 
 

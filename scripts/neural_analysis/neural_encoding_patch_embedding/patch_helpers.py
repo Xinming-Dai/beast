@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from scripts.neural_analysis.plot_helpers import ENCODING_BASE_COLORS, bps_per_neuron
 
@@ -65,6 +66,9 @@ NEURAL_DIR = Path('/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/n
 RESULTS_DIR = Path(
     CKPT_ROOT / 'beast_sable/ibl_pretrain_restricted_sessions/SABLE_encoding_patch_embedding',
 )
+
+SELECTION_DIR = Path('/work/hdd/bezq/jzhang107/sable/cv5_step20851/neuron_selection_handoff')
+SELECTION_COLUMNS = ('neuron_index', 'selected', 'valid_bps', *(f'{m}_mean_bps' for m in MODELS))
 
 RIDGE_PATTERN = re.compile(r'fullfit_(?P<model>\w+)_f(?P<fold>\d+)_k(?P<k>\d+)\.npz')
 TCN_PATTERN = re.compile(r'patch_tcn_k(?P<k>\d+)_fold(?P<fold>\d+)\.npy')
@@ -185,6 +189,51 @@ def load_random_baseline_records(
         (method, session_, RANDOM_MODEL, k, fold): record
         for (method, session_, _model, k, fold), record in records.items()
     }
+
+
+def load_selection_records(
+    session: str,
+    k: int,
+    directory: Path = SELECTION_DIR,
+) -> tuple[dict[RecordKey, Record], list[int]]:
+    """Load the per-neuron ridge BPS and the neuron selection of one session and K.
+
+    Reads `session_<session>_k<K>_all_neurons.csv`, whose BPS columns are already averaged over
+    the five folds. Each model therefore becomes a single record under pseudo-fold 0, which
+    `summarize` and `summarize_session_mean` read like any one-fold record.
+
+    Args:
+        session: session name used in the record keys.
+        k: number of PCA components.
+        directory: folder with the `session_<session>_k<K>_all_neurons.csv` files.
+
+    Returns:
+        Records keyed by (`'ridge'`, session, model, K, 0), NaN BPS for the neurons with
+        `valid_bps == 0`, and the sorted indices of the neurons with `selected == 1`.
+
+    Raises:
+        FileNotFoundError: if the csv of this session and K does not exist.
+        ValueError: if a needed column is missing or `neuron_index` is not 0..N-1 once.
+    """
+    path = directory / f'session_{session}_k{k}_all_neurons.csv'
+    if not path.exists():
+        raise FileNotFoundError(f'{path} not found')
+    table = pd.read_csv(path)
+    missing = [col for col in SELECTION_COLUMNS if col not in table.columns]
+    if missing:
+        raise ValueError(f'{path} has no column(s) {missing}')
+    table = table.sort_values('neuron_index').reset_index(drop=True)
+    if not np.array_equal(table['neuron_index'].to_numpy(), np.arange(len(table))):
+        raise ValueError(f'neuron_index of {path} is not 0..{len(table) - 1} once each')
+    valid = table['valid_bps'].to_numpy() == 1
+    records = {
+        ('ridge', session, model, k, 0): Record(
+            bps=np.where(valid, table[f'{model}_mean_bps'].to_numpy(np.float64), np.nan),
+            trial_ids=np.array([], dtype=np.int64),
+        )
+        for model in MODELS
+    }
+    return records, np.flatnonzero(table['selected'].to_numpy() == 1).tolist()
 
 
 def load_tcn_records(

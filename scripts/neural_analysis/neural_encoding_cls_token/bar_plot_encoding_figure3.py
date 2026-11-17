@@ -44,6 +44,7 @@ from scripts.neural_analysis.plot_helpers import (
 )
 from scripts.neural_analysis.neural_encoding_cls_token.scatter_plot_figure3 import bps_vector_from_npy
 
+BAR_FONT_SIZE = 8  # pt, shared by the tick labels, value labels and y label
 RESULTS_DIR = Path("/projects/bfsr/xdai3/project3d/iclr_plotting/ibl/SABLE_encoding")
 
 def _as_scalar_bps(x: object) -> float:
@@ -285,7 +286,14 @@ def plot_encoding_bars(
             )
             first_rrr_legend = False
             y_text, va_text = _label_position(means_rrr[i], se_rrr[i], label_offset)
-            ax.text(x[i], y_text, f"{means_rrr[i]:.3f}", ha="center", va=va_text, fontsize=11)
+            ax.text(
+                x[i],
+                y_text,
+                f"{means_rrr[i]:.3f}",
+                ha="center",
+                va=va_text,
+                fontsize=BAR_FONT_SIZE,
+            )
         if plot_encoders in {"cnn", "both"} and np.isfinite(means_cnn[i]):
             xpos = x[i] + width / 2 if plot_encoders == "both" else x[i]
             ax.bar(
@@ -302,13 +310,28 @@ def plot_encoding_bars(
             )
             first_cnn_legend = False
             y_text, va_text = _label_position(means_cnn[i], se_cnn[i], label_offset)
-            ax.text(x[i], y_text, f"{means_cnn[i]:.3f}", ha="center", va=va_text, fontsize=11)
+            ax.text(
+                x[i],
+                y_text,
+                f"{means_cnn[i]:.3f}",
+                ha="center",
+                va=va_text,
+                fontsize=BAR_FONT_SIZE,
+            )
 
-    fontweight = "medium"
+    fontweight = "normal"
     ax.set_xticks(x)
-    ax.set_xticklabels(method_labels, rotation=35, ha="center", fontsize=12, fontweight=fontweight)
-    ax.set_ylabel(y_label or "Avg BPS", fontsize=12, fontweight=fontweight)
-    ax.tick_params(axis="y", labelsize=11, width=1.5, length=7, direction="out")
+    # rotation_mode="anchor" with ha="right" puts the end of each label under its bar center
+    ax.set_xticklabels(
+        method_labels,
+        rotation=45,
+        ha="right",
+        rotation_mode="anchor",
+        fontsize=BAR_FONT_SIZE,
+        fontweight=fontweight,
+    )
+    ax.set_ylabel(y_label or "Avg BPS", fontsize=BAR_FONT_SIZE, fontweight=fontweight)
+    ax.tick_params(axis="y", labelsize=BAR_FONT_SIZE, width=1.5, length=7, direction="out")
     ax.tick_params(axis="x", length=0, width=2.25, pad=2)
     plt.setp(ax.get_yticklabels(), fontweight=fontweight)
     plt.setp(ax.get_xticklabels(), fontweight=fontweight)

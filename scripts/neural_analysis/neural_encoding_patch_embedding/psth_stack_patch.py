@@ -74,6 +74,10 @@ def plot_psth_stack(
     colors: list[str],
     normalize: bool = True,
     figsize: tuple[float, float] = (1.0, 1.6),
+    line_scale: float = 1.0,
+    widths: list[float] | None = None,
+    gt_width: float = 0.8,
+    label_neurons: bool = False,
     save_path: Path | None = None,
     also_save_pdf: bool = False,
     show: bool = True,
@@ -87,6 +91,11 @@ def plot_psth_stack(
         colors: color of the predicted PSTH of each model.
         normalize: min-max normalize each neuron over all its traces, so all panels share a scale.
         figsize: figure size in inches.
+        line_scale: factor on the width of every line, below 1 for thinner lines.
+        widths: line width of the predicted PSTH of each model before `line_scale`, the first
+            model is drawn underneath. Defaults to a thick first and a thin second line.
+        gt_width: line width of the ground-truth PSTH before `line_scale`.
+        label_neurons: write the neuron index to the left of every panel.
         save_path: output image path.
         also_save_pdf: also write a PDF next to `save_path`.
         show: open an interactive window.
@@ -95,12 +104,17 @@ def plot_psth_stack(
         The matplotlib figure.
 
     Raises:
-        ValueError: if there are not one or two models, or `colors` does not match `preds`.
+        ValueError: if there are not one or two models, or `colors` or `widths` does not match
+            `preds`.
     """
     if not 1 <= len(preds) <= 2 or len(colors) != len(preds):
         raise ValueError(f'expected one or two models with one color each, got {len(preds)}')
     # the first of two models is thicker and sits underneath, so both stay visible
-    widths = [2.2, 1.2] if len(preds) == 2 else [1.2]
+    if widths is None:
+        widths = [2.2, 1.2] if len(preds) == 2 else [1.2]
+    elif len(widths) != len(preds):
+        raise ValueError(f'expected one width per model, got {len(widths)} for {len(preds)}')
+    widths = [width * line_scale for width in widths]
     fig, axes = plt.subplots(len(neuron_indices), 1, figsize=figsize, dpi=300, squeeze=False)
     time_s = np.arange(gt.shape[1])
     for ax, neuron_idx in zip(axes[:, 0], neuron_indices, strict=True):
@@ -108,11 +122,22 @@ def plot_psth_stack(
         traces = [gt_trace] + [_psth(pred[:, :, neuron_idx]) for pred in preds]
         if normalize:
             traces = _normalize_traces(traces)
-        ax.plot(time_s, traces[0], color=GROUND_TRUTH_COLOR, linewidth=0.8)
+        ax.plot(time_s, traces[0], color=GROUND_TRUTH_COLOR, linewidth=gt_width * line_scale)
         for order, (trace, color, width) in enumerate(zip(traces[1:], colors, widths)):
             ax.plot(time_s, trace, color=color, linewidth=width, zorder=3 + order)
         ax.set_xlim(time_s[0], time_s[-1])
         ax.axis('off')
+        if label_neurons:
+            # axes coordinates, so the label sits just outside the left edge of the panel
+            ax.text(
+                -0.03,
+                0.5,
+                str(neuron_idx),
+                transform=ax.transAxes,
+                ha='right',
+                va='center',
+                fontsize=5,
+            )
     fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02, hspace=0.12)
 
     if save_path is not None:

@@ -125,6 +125,7 @@ def plot_bps_scatter(
     panel_label: str | None = "C",
     show_bps: bool = False,
     show_axis_labels: bool = True,
+    dot_size: float = 18,
     save_path: Path | None = None,
     also_save_pdf: bool = False,
     show: bool = True,
@@ -156,7 +157,7 @@ def plot_bps_scatter(
     ax.scatter(
         x,
         y,
-        s=18,
+        s=dot_size,
         facecolors=(0.25, 0.25, 0.25),
         edgecolors="none",
         alpha=0.35,
