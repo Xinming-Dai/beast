@@ -22,8 +22,20 @@ SESSION_EIDS = {
     '4b': '4b00df29-3769-43be-bb40-128b1cba6d35',
 }
 MODELS = ('full', 'nogeom', 'dino')
-MODEL_LABELS = {'full': 'Full SABLE', 'nogeom': 'SABLE NoGeom', 'dino': 'DINO'}
-MODEL_COLOR_KEYS = {'full': 'sable_full', 'nogeom': 'sable_nogeom', 'dino': 'dino'}
+RANDOM_MODEL = 'random'  # frame-permutation baseline, not part of MODELS (only exists for K=6)
+RANDOM_BASELINE_K = 6
+MODEL_LABELS = {
+    'full': 'Full SABLE',
+    'nogeom': 'SABLE NoGeom',
+    'dino': 'DINO',
+    RANDOM_MODEL: 'Random',
+}
+MODEL_COLOR_KEYS = {
+    'full': 'sable_full',
+    'nogeom': 'sable_nogeom',
+    'dino': 'dino',
+    RANDOM_MODEL: 'random_baseline',
+}
 PCA_KS = (6, 12, 24, 32, 64, 128)
 Y_LABEL = 'Avg BPS'
 
@@ -36,6 +48,9 @@ RIDGE_ROOTS = {
     '78': RIDGE_BASE / 'patch_ridge_cv5',
     '72': RIDGE_BASE / 'patch_ridge_cv5_sessions' / 'session_72',
     '4b': RIDGE_BASE / 'patch_ridge_cv5_sessions' / 'session_4b',
+}
+RANDOM_BASELINE_ROOTS = {
+    session: RIDGE_BASE / 'random_baseline_k6' / f'session_{session}' for session in RIDGE_ROOTS
 }
 CKPT_ROOT = Path('/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts')
 TCN_ROOTS = {
@@ -133,6 +148,43 @@ def load_ridge_records(
     if not records:
         raise FileNotFoundError(f'no ridge files found in {root}')
     return records
+
+
+def load_random_baseline_records(
+    session: str,
+    root: Path,
+    spikes: np.ndarray,
+    folds: list[int] | None = None,
+) -> dict[RecordKey, Record]:
+    """Load the K=6 frame-permutation baseline of a session as the `'random'` model.
+
+    The baseline files are named `fullfit_full_f<fold>_k6.npz` like the real Full SABLE ones, so
+    they are re-keyed to `RANDOM_MODEL` to keep them from being mistaken for Full SABLE.
+
+    Args:
+        session: session name used in the record keys.
+        root: directory with the baseline's `fullfit_full_f<fold>_k6.npz` files.
+        spikes: session spikes of shape (trials, time, neurons), used to mask neurons.
+        folds: folds to load, default all.
+
+    Returns:
+        Records keyed by (`'ridge'`, session, `'random'`, 6, fold).
+
+    Raises:
+        FileNotFoundError: if `root` holds no baseline file.
+    """
+    records = load_ridge_records(
+        session,
+        root,
+        spikes,
+        models=('full',),
+        ks=(RANDOM_BASELINE_K,),
+        folds=folds,
+    )
+    return {
+        (method, session_, RANDOM_MODEL, k, fold): record
+        for (method, session_, _model, k, fold), record in records.items()
+    }
 
 
 def load_tcn_records(

@@ -2,7 +2,9 @@
 """Held-out BPS bar plot of the patch-embedding ridge encoders at one K.
 
 Patch-embedding counterpart of ``neural_encoding_cls_token/bar_plot_encoding_figure3.py``: one bar
-per model (DINO, NoGeom SABLE, Full SABLE), with each session's mean overlaid as a marker.
+per model (DINO, NoGeom SABLE, Full SABLE), with each session's mean overlaid as a marker. At K=6
+a frame-permutation random baseline is drawn as the leftmost bar, it does not exist for the other
+K and ``--no-random-baseline`` leaves it out.
 
 BPS differs between sessions, so the pooling is selectable with ``--pool``:
 - ``session`` (default): bar is the mean of the session means, error bar is the SEM across
@@ -38,8 +40,11 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     MODEL_LABELS,
     NEURAL_DIR,
     PCA_KS,
+    RANDOM_BASELINE_K,
+    RANDOM_BASELINE_ROOTS,
     RESULTS_DIR,
     SESSION_EIDS,
+    load_random_baseline_records,
     load_ridge_session_data,
     model_color,
     restrict_records,
@@ -56,14 +61,27 @@ from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import
 )
 from scripts.neural_analysis.plot_helpers import _default_output_path_helper  # noqa: E402
 
-BAR_MODELS = ('dino', 'nogeom', 'full')  # bar order, left to right
+BAR_MODELS = ('random', 'dino', 'nogeom', 'full')  # bar order, left to right
 BASELINE_MODEL = 'dino'  # model subtracted in the difference plot
 SESSION_MARKERS = ('o', 's', '^', 'D', 'v')
 
 
-def bar_models(baseline: str | None = None) -> tuple[str, ...]:
-    """Models of the bars in order, without the `baseline` model that is subtracted from them."""
-    return tuple(model for model in BAR_MODELS if model != baseline)
+def bar_models(rows: list[dict], k: int, baseline: str | None = None) -> tuple[str, ...]:
+    """Models of the bars in order, without the `baseline` model that is subtracted from them.
+
+    Models without rows at `k` are left out, so the random baseline, which only exists for
+    K=6, drops out of the plots of the other K.
+
+    Args:
+        rows: output of `summarize_group`.
+        k: number of PCA components.
+        baseline: model subtracted from the others, None for the absolute BPS.
+
+    Returns:
+        The models to draw, ordered as `BAR_MODELS`.
+    """
+    present = {r['model'] for r in rows if r['k'] == k}
+    return tuple(model for model in BAR_MODELS if model in present and model != baseline)
 
 
 def build_markdown_table(
@@ -89,7 +107,7 @@ def build_markdown_table(
     Returns:
         The markdown text.
     """
-    models = bar_models(baseline)
+    models = bar_models(rows, k, baseline)
     header = ['Session', 'Neurons', *(MODEL_LABELS[model] for model in models)]
     what = 'Held-out BPS' if baseline is None else f'Held-out BPS minus {MODEL_LABELS[baseline]}'
     pooled_error = 'across sessions' if pool == 'session' else 'over neurons'
@@ -254,7 +272,7 @@ def plot_group(
         group: description of the neuron group for the table title, None for all neurons.
         baseline: model subtracted from the others in `rows`, None for the absolute BPS.
     """
-    models = bar_models(baseline)
+    models = bar_models(rows, args.k, baseline)
     means, errs, _ = unit_bars(rows, 'all', args.k, models)
     fig, ax = plt.subplots(figsize=(3.2, 2.2), dpi=200)
     plot_encoding_bars(
@@ -334,14 +352,15 @@ def plot_sessions_grid(
     for idx_row, (row_label, rows) in enumerate(rows_by_row.items()):
         for idx_col, session in enumerate(args.sessions):
             ax = axes[idx_row, idx_col]
-            means, errs, n_neurons = unit_bars(rows, session, args.k)
+            models = bar_models(rows, args.k)
+            means, errs, n_neurons = unit_bars(rows, session, args.k, models)
             plot_encoding_bars(
-                [MODEL_LABELS[model] for model in BAR_MODELS],
+                [MODEL_LABELS[model] for model in models],
                 np.full_like(means, np.nan),
                 means,
                 np.full_like(errs, np.nan),
                 errs,
-                [(model_color(model), model_color(model)) for model in BAR_MODELS],
+                [(model_color(model), model_color(model)) for model in models],
                 plot_encoders='cnn',
                 xtick_color='black',
                 ax=ax,
@@ -403,6 +422,11 @@ def main() -> None:
             'across sessions, "neuron" pools all neurons so larger sessions weigh more'
         ),
     )
+    parser.add_argument(
+        '--no-random-baseline',
+        action='store_true',
+        help=f'leave out the random baseline bar, which only exists for K={RANDOM_BASELINE_K}',
+    )
     parser.add_argument('--no-show', action='store_true')
     args = parser.parse_args()
 
@@ -412,6 +436,15 @@ def main() -> None:
         args.neural_dir,
         ks=(args.k,),
     )
+    if args.k == RANDOM_BASELINE_K and not args.no_random_baseline:
+        for session in args.sessions:
+            records.update(
+                load_random_baseline_records(
+                    session,
+                    RANDOM_BASELINE_ROOTS[session],
+                    spikes_by_session[session],
+                ),
+            )
     save_dir = args.output_dir or _default_output_path_helper(
         RESULTS_DIR,
         'encoding_barplot',
