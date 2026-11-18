@@ -37,6 +37,7 @@ MODEL_COLOR_KEYS = {
     'dino': 'dino',
     RANDOM_MODEL: 'random_baseline',
 }
+GROUND_TRUTH_COLOR = '#B9B9B9'  # light grey, so the model traces stand out
 PCA_KS = (6, 12, 24, 32, 64, 128)
 Y_LABEL = 'Avg BPS'
 

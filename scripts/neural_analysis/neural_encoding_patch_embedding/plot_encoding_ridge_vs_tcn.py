@@ -30,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (
     MODEL_LABELS,
     MODELS,
     NEURAL_DIR,
@@ -49,7 +49,7 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     model_color,
     summarize,
 )
-from scripts.neural_analysis.plot_helpers import _default_output_path_helper  # noqa: E402
+from scripts.neural_analysis.plot_helpers import _default_output_path_helper
 
 METHOD_STYLES = {
     'ridge': {'label': 'ridge', 'linestyle': '-', 'marker': 'o', 'offset': 0.0},

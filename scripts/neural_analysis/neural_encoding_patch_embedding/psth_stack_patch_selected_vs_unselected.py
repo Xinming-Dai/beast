@@ -39,7 +39,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (
     MODELS,
     NEURAL_DIR,
     RESULTS_DIR,
@@ -50,22 +50,22 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     load_session_spikes,
     model_color,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch import (
     format_bps_text,
     plot_psth_stack,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (  # noqa: E402, E501
+from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (
     parse_trials_idx_arg,
     trials_idx_to_bounds,
 )
-from scripts.neural_analysis.neuron_ranking_and_filtering.rank_neurons_bps_corr_patch import (  # noqa: E402, E501
+from scripts.neural_analysis.neuron_ranking_and_filtering.rank_neurons_bps_corr_patch import (
     RANKING_DIR,
     ranking_path,
 )
-from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (  # noqa: E402
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (
     load_ranking,
 )
-from scripts.neural_analysis.plot_helpers import _default_output_path_helper  # noqa: E402
+from scripts.neural_analysis.plot_helpers import _default_output_path_helper
 
 SELECTION_KS = (6, 32)  # numbers of PCA components of the handoff csv files
 GROUPS = ('selected', 'unselected')

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compact vertical stack of PSTHs of the top-BPS neurons for patch-embedding ridge encoders.
 
-Each neuron is one small axis-free panel: the ground-truth PSTH in black and the PSTH predicted by
-one or two models in the colors of ``plot_helpers.py`` (with two models, the first is drawn
-thicker underneath and the second on top). Neurons are ranked by the BPS of the last model on the
+Each neuron is one small axis-free panel: the ground-truth PSTH in light grey and the PSTH
+predicted by one or two models in the colors of ``plot_helpers.py`` (with two models, the first is
+drawn thicker underneath and the second on top). Neurons are ranked by the BPS of the last model on the
 held-out trials of one fold. The BPS of every stacked neuron is written to a txt file next to the
 figure, as ``1.33 vs 1.55`` in the order of ``--model``. The PSTH computation and normalization are the ones of
 ``top_bps_psth_compare_models_patch.py``.
@@ -32,7 +32,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (
+    GROUND_TRUTH_COLOR,
     MODEL_LABELS,
     MODELS,
     NEURAL_DIR,
@@ -43,24 +44,23 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     load_session_spikes,
     model_color,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (  # noqa: E402
-    GROUND_TRUTH_COLOR,
+from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (
     _normalize_traces,
     _psth,
     parse_trials_idx_arg,
     trials_idx_to_bounds,
 )
-from scripts.neural_analysis.neuron_ranking_and_filtering.rank_neurons_bps_corr_patch import (  # noqa: E402
+from scripts.neural_analysis.neuron_ranking_and_filtering.rank_neurons_bps_corr_patch import (
     RANKING_DIR,
     ranking_path,
 )
-from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (  # noqa: E402
+from scripts.neural_analysis.neuron_ranking_and_filtering.ranking_helpers import (  
     add_ranking_args,
     load_ranking,
     select_top_neurons,
     thresholds_from_args,
 )
-from scripts.neural_analysis.plot_helpers import (  # noqa: E402
+from scripts.neural_analysis.plot_helpers import (  
     _default_output_path_helper,
     bps_per_neuron,
 )

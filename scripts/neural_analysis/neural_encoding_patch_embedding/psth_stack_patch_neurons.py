@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers import (
     MODELS,
     NEURAL_DIR,
     RESULTS_DIR,
@@ -35,21 +35,21 @@ from scripts.neural_analysis.neural_encoding_patch_embedding.patch_helpers impor
     load_session_spikes,
     model_color,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch import (  # noqa: E402
+from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch import (
     format_bps_text,
     plot_psth_stack,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch_selected_vs_unselected import (  # noqa: E402, E501
+from scripts.neural_analysis.neural_encoding_patch_embedding.psth_stack_patch_selected_vs_unselected import (
     HEIGHT_PER_NEURON,
     LINE_SCALE,
     SELECTION_KS,
     load_wins_vs_dino,
 )
-from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (  # noqa: E402, E501
+from scripts.neural_analysis.neural_encoding_patch_embedding.top_bps_psth_compare_models_patch import (
     parse_trials_idx_arg,
     trials_idx_to_bounds,
 )
-from scripts.neural_analysis.plot_helpers import _default_output_path_helper  # noqa: E402
+from scripts.neural_analysis.plot_helpers import _default_output_path_helper
 
 # wider than the 1.0 in of `psth_stack_patch.py`: 1.96 x 1.6 in (4 neurons) is the 328 x 268 px
 # aspect ratio of the reference stack
