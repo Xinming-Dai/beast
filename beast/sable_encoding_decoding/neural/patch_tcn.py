@@ -4,25 +4,36 @@ Each fold directory holds `features_pca128.npy` (trials x time bins x patches x 
 `pca_model.npz` (with a `fold_id` array marking the trials held out of that fold's PCA fit). The
 first `num_pcs` components of every patch are flattened into one feature vector per time bin, the
 `fold_id == fold` trials form the test set, and the remaining trials are split into train and val
-for the learning-rate search in `train_cnn_encoder_with_tune`.
+for the hyperparameter search.
+
+Three modes are available. `legacy` searches only the learning rate and evaluates the best
+model on the test trials. `tune` searches lr, weight decay and dropout on train/val only and
+saves the best config as a JSON file, without touching the test trials. `eval` trains with a
+saved config, applied unchanged, and evaluates on the test trials.
 
 Runnable as `python -m beast.sable_encoding_decoding.neural.patch_tcn`.
 """
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import ray
 
-from beast.sable_encoding_decoding.neural.encoder import train_cnn_encoder_with_tune
+from beast.sable_encoding_decoding.neural.encoder import (
+    train_cnn_encoder,
+    train_cnn_encoder_with_tune,
+    tune_cnn_encoder,
+)
 from beast.sable_encoding_decoding.neural.run_encoding_decoding import (
     _resolve_ray_session_temp_dir,
 )
 from beast.sable_encoding_decoding.neural.utils import set_seed
 
 _CHUNK_TRIALS = 20
+_MODES = ('legacy', 'tune', 'eval')
 
 
 def load_patch_features(features_path: str | Path, num_pcs: int) -> np.ndarray:
@@ -132,6 +143,52 @@ def build_data_dict(
     }
 
 
+def save_locked_config(
+    config_json: str | Path,
+    config: dict[str, Any],
+    val_metrics: dict[str, float],
+    meta: dict[str, Any],
+) -> Path:
+    """Write a tuned config to JSON so it can be applied unchanged to other runs.
+
+    Args:
+        config_json: output path; parent directories are created.
+        config: hyperparameters accepted by `train_cnn_encoder`.
+        val_metrics: validation `bps` and `r2` of the config, for the record.
+        meta: provenance (session, PCs, fold, seed, ...).
+
+    Returns:
+        The path written.
+    """
+    config_json = Path(config_json)
+    config_json.parent.mkdir(parents=True, exist_ok=True)
+    payload = {'config': config, 'val_metrics': val_metrics, 'meta': meta}
+    config_json.write_text(json.dumps(payload, indent=2) + '\n')
+    return config_json
+
+
+def load_locked_config(config_json: str | Path) -> dict[str, Any]:
+    """Read the config saved by `save_locked_config`.
+
+    Args:
+        config_json: path of the JSON file.
+
+    Returns:
+        Hyperparameters accepted by `train_cnn_encoder`.
+
+    Raises:
+        FileNotFoundError: if the file does not exist.
+        ValueError: if the file has no `config` entry.
+    """
+    config_json = Path(config_json)
+    if not config_json.is_file():
+        raise FileNotFoundError(f'locked config not found: {config_json}')
+    payload = json.loads(config_json.read_text())
+    if 'config' not in payload:
+        raise ValueError(f"{config_json} has no 'config' entry")
+    return payload['config']
+
+
 def run_patch_tcn(
     eid: str,
     neural_input_dir: str | Path,
@@ -142,8 +199,10 @@ def run_patch_tcn(
     num_samples: int,
     num_val: int,
     seed: int,
+    mode: str = 'legacy',
+    config_json: str | Path | None = None,
 ) -> Path:
-    """Tune and evaluate the TCN on one fold of PCA-compressed patch features.
+    """Tune and/or evaluate the TCN on one fold of PCA-compressed patch features.
 
     Args:
         eid: session id.
@@ -155,10 +214,21 @@ def run_patch_tcn(
         num_samples: number of Ray Tune trials.
         num_val: number of validation trials taken from the non-test trials.
         seed: seed for the train/val split and the TCN.
+        mode: `legacy` (lr search, then test evaluation), `tune` (lr/wd/dropout search on
+            train/val only, writes `config_json`) or `eval` (train with the config in
+            `config_json` and evaluate on test).
+        config_json: output path in `tune` mode, input path in `eval` mode.
 
     Returns:
-        Path of the saved `.npy` result file.
+        Path of the saved `.npy` result file, or of `config_json` in `tune` mode.
+
+    Raises:
+        ValueError: if `mode` is unknown, or `config_json` is missing in `tune`/`eval` mode.
     """
+    if mode not in _MODES:
+        raise ValueError(f'mode must be one of {_MODES}, got {mode!r}')
+    if mode != 'legacy' and config_json is None:
+        raise ValueError(f'config_json is required in {mode!r} mode')
     fold_dir = Path(pca_dir) / f'fold_{fold}'
     with np.load(fold_dir / 'pca_model.npz') as pca_model:
         fold_id = pca_model['fold_id']
@@ -183,12 +253,44 @@ def run_patch_tcn(
     session_out_dir = (Path(out_dir) / eid).resolve()
     session_out_dir.mkdir(parents=True, exist_ok=True)
     set_seed(seed)
-    result = train_cnn_encoder_with_tune(
-        data_dict,
-        num_samples=num_samples,
-        tune_storage_path=str(session_out_dir / f'ray_tune_k{num_pcs}_fold{fold}'),
-        seed=seed,
-    )
+    config = None
+    if mode == 'tune':
+        config, val_metrics = tune_cnn_encoder(
+            data_dict,
+            num_samples=num_samples,
+            tune_storage_path=str(session_out_dir / f'ray_tune_k{num_pcs}_fold{fold}'),
+            seed=seed,
+            preset='reg',
+        )
+        meta = {
+            'eid': eid,
+            'num_pcs': num_pcs,
+            'fold': fold,
+            'seed': seed,
+            'num_val': num_val,
+            'num_samples': num_samples,
+        }
+        save_path = save_locked_config(config_json, config, val_metrics, meta)
+        print(f'Saved locked config to: {save_path}')
+        return save_path
+    if mode == 'eval':
+        config = load_locked_config(config_json)
+        print(f'Evaluating with locked config: {config}')
+        # drop the validation split, the locked config is trained on train only
+        data_dict_eval = {
+            eid: {
+                'X': [data_dict[eid]['X'][0], data_dict[eid]['X'][2]],
+                'y': [data_dict[eid]['y'][0], data_dict[eid]['y'][2]],
+            },
+        }
+        result = train_cnn_encoder(config, data_dict_eval, seed=seed)
+    else:
+        result = train_cnn_encoder_with_tune(
+            data_dict,
+            num_samples=num_samples,
+            tune_storage_path=str(session_out_dir / f'ray_tune_k{num_pcs}_fold{fold}'),
+            seed=seed,
+        )
     print(f"Patch TCN {eid} fold {fold} Test BPS: {result[eid]['bps']} R2: {result[eid]['r2']}")
 
     save_path = session_out_dir / f'patch_tcn_k{num_pcs}_fold{fold}.npy'
@@ -196,6 +298,8 @@ def run_patch_tcn(
         'num_pcs': num_pcs,
         'fold': fold,
         'seed': seed,
+        'mode': mode,
+        'config': config,
         'idx_train': idx_splits[0],
         'idx_val': idx_splits[1],
         'idx_test': idx_splits[2],
@@ -225,15 +329,31 @@ def get_args() -> argparse.Namespace:
     parser.add_argument('--num_samples', type=int, default=30, help='Ray Tune trials')
     parser.add_argument('--num_val', type=int, default=40, help='validation trials')
     parser.add_argument('--seed', type=int, default=42)
-    return parser.parse_args()
+    parser.add_argument(
+        '--mode',
+        choices=_MODES,
+        default='legacy',
+        help='legacy: lr search + test; tune: lr/wd/dropout search, no test; eval: locked config',
+    )
+    parser.add_argument(
+        '--config_json',
+        default=None,
+        help='locked config JSON: written in tune mode, read in eval mode',
+    )
+    args = parser.parse_args()
+    if args.mode != 'legacy' and args.config_json is None:
+        parser.error(f'--config_json is required with --mode {args.mode}')
+    return args
 
 
 def main() -> None:
     """Run the patch TCN pipeline for one session and fold."""
     args = get_args()
-    ray_temp = _resolve_ray_session_temp_dir()
-    print(f'Ray session temp dir (_temp_dir): {ray_temp}')
-    ray.init(num_cpus=2, num_gpus=1, _temp_dir=ray_temp)
+    if args.mode != 'eval':
+        # only Ray Tune searches need Ray; the locked-config evaluation trains directly
+        ray_temp = _resolve_ray_session_temp_dir()
+        print(f'Ray session temp dir (_temp_dir): {ray_temp}')
+        ray.init(num_cpus=2, num_gpus=1, _temp_dir=ray_temp)
     run_patch_tcn(
         eid=args.eid,
         neural_input_dir=args.neural_input_dir,
@@ -244,6 +364,8 @@ def main() -> None:
         num_samples=args.num_samples,
         num_val=args.num_val,
         seed=args.seed,
+        mode=args.mode,
+        config_json=args.config_json,
     )
 
 
