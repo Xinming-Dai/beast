@@ -22,6 +22,8 @@ from beast.models.registry import (
     get_model_class,
     get_train_fn,
 )
+from beast.models.sable.sable_config import SableBeastConfig
+from beast.models.sable.sable_model import Sable
 
 
 class TestGetModelClass:
@@ -35,6 +37,9 @@ class TestGetModelClass:
 
     def test_erayzer_returns_erayzer(self) -> None:
         assert get_model_class('erayzer') is ERayZer
+
+    def test_sable_returns_sable(self) -> None:
+        assert get_model_class('sable') is Sable
 
     def test_unknown_raises_key_error(self) -> None:
         with pytest.raises(KeyError):
@@ -53,7 +58,7 @@ class TestGetDatamoduleFn:
     """Test the get_datamodule_fn function."""
 
     def test_registered_models_return_callable(self) -> None:
-        for key in ('resnet', 'vit', 'erayzer', 'beast3d', 'msps_vae'):
+        for key in ('resnet', 'vit', 'erayzer', 'beast3d', 'msps_vae', 'sable'):
             assert callable(get_datamodule_fn(key))
 
     def test_unknown_raises_key_error(self) -> None:
@@ -81,6 +86,10 @@ class TestGetTrainFn:
 
     def test_erayzer_returns_callable(self) -> None:
         fn = get_train_fn('erayzer')
+        assert callable(fn)
+
+    def test_sable_returns_callable(self) -> None:
+        fn = get_train_fn('sable')
         assert callable(fn)
 
     def test_unknown_raises_key_error(self) -> None:
@@ -121,6 +130,7 @@ class TestGetConfigClass:
             ('erayzer', ERayZerBeastConfig),
             ('beast3d', Beast3DBeastConfig),
             ('msps_vae', MspsVaeBeastConfig),
+            ('sable', SableBeastConfig),
         ],
     )
     def test_registered_model_class(self, model_class: str, expected: type) -> None:

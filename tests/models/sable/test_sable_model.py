@@ -92,7 +92,7 @@ class TestMaskedL2LossWithSegMask:
     def test_background_pixels_do_not_contribute_to_loss(self) -> None:
         import torch.nn.functional as F
 
-        from beast.models.model_utils.losses import masked_mse_loss
+        from beast.models.sable.utils.losses import masked_mse_loss
 
         # Arrange: rendering != target only on background pixels (mask=0)
         b, v, c, h, w = 1, 1, 3, 2, 2
@@ -121,7 +121,7 @@ class TestMaskedGsRegLossWithSegMask:
     def test_background_points_do_not_contribute_to_loss(self) -> None:
         import torch.nn.functional as F
 
-        from beast.models.model_utils.losses import masked_gs_reg_loss
+        from beast.models.sable.utils.losses import masked_gs_reg_loss
 
         # Arrange: predicted != target only on background points (mask=0)
         b, v, hh, ww, ph, pw = 1, 1, 2, 2, 2, 2
@@ -219,3 +219,17 @@ class TestSelectTargetGaussians:
                 assert torch.equal(
                     features_out[b_idx, start:end], features_expected[b_idx, view_idx],
                 )
+
+
+class TestSableConfigureCallbacks:
+    """Test the method Sable.configure_callbacks."""
+
+    def test_configure_callbacks_ignores_missing_viz_keys(self) -> None:
+        # Arrange: sable configs have no viz_every_n_epochs, which the base class would require
+        sable = Sable.__new__(Sable)
+
+        # Act
+        result = Sable.configure_callbacks(sable)
+
+        # Assert
+        assert result == []

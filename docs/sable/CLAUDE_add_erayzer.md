@@ -6,7 +6,7 @@ Target repo: `/u/xdai3/project3d/SBALE_repo/beast`
 ## Files to Move
 
 All imports in `erayzer.py` originate from `erayzer_core.*`. The mapping below flattens that
-namespace into `beast.models` and `beast.models.model_utils`.
+namespace into `beast.models` and `beast.models.sable.utils`.
 
 ### Main model
 
@@ -14,7 +14,7 @@ namespace into `beast.models` and `beast.models.model_utils`.
 |---|---|
 | `erayzer_core/model/erayzer.py` | `beast/models/erayzer.py` |
 
-### Model utilities → `beast/models/model_utils/`
+### Model utilities → `beast/models/sable/utils/`
 
 | Source (relative to `src/erayzer_core/model/`) | Destination filename |
 |---|---|
@@ -31,7 +31,7 @@ namespace into `beast.models` and `beast.models.model_utils`.
 | `utils_vis.py` | `utils_vis.py` |
 | `utils_vits.py` | `utils_vits.py` |
 
-### Training utilities → `beast/models/model_utils/`
+### Training utilities → `beast/models/sable/utils/`
 
 | Source (relative to `src/erayzer_core/training/`) | Destination filename |
 |---|---|
@@ -40,7 +40,7 @@ namespace into `beast.models` and `beast.models.model_utils`.
 | `losses.py` | `losses.py` |
 | `patch_masking.py` | `patch_masking.py` (later deleted — see Post-Migration Removals) |
 
-### Core utilities → `beast/models/model_utils/`
+### Core utilities → `beast/models/sable/utils/`
 
 | Source (relative to `src/`) | Destination filename |
 |---|---|
@@ -49,7 +49,7 @@ namespace into `beast.models` and `beast.models.model_utils`.
 
 ## `__init__.py` Files to Create
 
-- `beast/models/model_utils/__init__.py` — create empty (currently missing; pycache exists for some files)
+- `beast/models/sable/utils/__init__.py` — create empty (currently missing; pycache exists for some files)
 
 ## Import Rewriting Required
 
@@ -57,11 +57,11 @@ Every `erayzer_core.*` import inside the moved files must be rewritten to `beast
 
 | Old prefix | New prefix |
 |---|---|
-| `erayzer_core.model.` | `beast.models.model_utils.` |
-| `erayzer_core.training.` | `beast.models.model_utils.` |
-| `erayzer_core.utils.` | `beast.models.model_utils.` |
-| `erayzer_core.camera_overrides` | `beast.models.model_utils.camera_overrides` |
-| `.gaussians_renderer` (relative import) | `beast.models.model_utils.gaussians_renderer` (absolute) |
+| `erayzer_core.model.` | `beast.models.sable.utils.` |
+| `erayzer_core.training.` | `beast.models.sable.utils.` |
+| `erayzer_core.utils.` | `beast.models.sable.utils.` |
+| `erayzer_core.camera_overrides` | `beast.models.sable.utils.camera_overrides` |
+| `.gaussians_renderer` (relative import) | `beast.models.sable.utils.gaussians_renderer` (absolute) |
 
 ## CLAUDE.md Conventions to Apply During Migration
 
@@ -131,7 +131,7 @@ f'Got {x}'
 
 Files affected: `utils_gaussian.py` uses `from .gaussians_renderer import ...`.
 
-Replace with: `from beast.models.model_utils.gaussians_renderer import ...`
+Replace with: `from beast.models.sable.utils.gaussians_renderer import ...`
 
 ### 6. Use single quotes for strings
 
@@ -158,10 +158,10 @@ are **not** present in the beast repo even though they appear in the source repo
 
 | File | Reason |
 |---|---|
-| `beast/models/model_utils/utils_psae.py` | PS-VAE latent partition not needed |
-| `beast/models/model_utils/latent_partition_cfg.py` | latent partition config resolver not needed |
-| `beast/models/model_utils/camera_overrides.py` | inference-time camera override machinery removed |
-| `beast/models/model_utils/patch_masking.py` | masking inlined directly in `ERayZer.forward` (see below) |
+| `beast/models/sable/utils/utils_psae.py` | PS-VAE latent partition not needed |
+| `beast/models/sable/utils/latent_partition_cfg.py` | latent partition config resolver not needed |
+| `beast/models/sable/utils/camera_overrides.py` | inference-time camera override machinery removed |
+| `beast/models/sable/utils/patch_masking.py` | masking inlined directly in `ERayZer.forward` (see below) |
 | `beast/models/erayzer_lightning.py` | lightning interface merged into `ERayZer` directly |
 
 ### Features removed from `erayzer.py`
@@ -182,7 +182,7 @@ are **not** present in the beast repo even though they appear in the source repo
 
 - `erayzer.py` forward now returns `xyz_norm` and `xyz_init_norm` (both `None`
   when `model.init_gs: false`) so `LossComputer` receives them directly.
-- `beast/models/model_utils/losses.py`: config key renamed from `gs_loss_weight`
+- `beast/models/sable/utils/losses.py`: config key renamed from `gs_loss_weight`
   (source repo) to `gs_reg_loss_weight` (beast convention).
 - `beast/inference.py`: new `predict_erayzer` function supports multi-view
   inference (pass V image paths per scene, builds `[B, V, 3, H, W]` batch).
@@ -241,7 +241,7 @@ Changes made to `erayzer.py`:
 Changes made to `configs/erayzer_ibl3d.yaml`:
 - Replaced the 7-line `patch_masking:` block with `mask_ratio: 0.75`.
 
-`beast/models/model_utils/patch_masking.py` deleted (no remaining callers).
+`beast/models/sable/utils/patch_masking.py` deleted (no remaining callers).
 
 ## New 3rd-Party Dependencies to Add to `pyproject.toml`
 

@@ -150,7 +150,7 @@ sable-specific work) — no decoder-logic substitution was needed here. What *wa
 - The source's single `save_and_vis_gaussian_pointclouds` helper was split into two beast-native
   calls: `beast.inference.save_gaussian_pointclouds` (expects a `dict` — built via
   `vars(result)` since `predict_frame_from_all_tokens` returns a `types.SimpleNamespace`) and
-  `beast.models.model_utils.train_vis.save_training_visuals` (expects the `SimpleNamespace`
+  `beast.models.sable.utils.train_vis.save_training_visuals` (expects the `SimpleNamespace`
   directly, since it uses attribute access).
 
 ### `render/decode_and_render.py::_apply_dataloader_overrides`

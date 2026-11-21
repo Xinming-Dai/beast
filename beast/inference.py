@@ -14,23 +14,22 @@ import lightning.pytorch as pl
 import matplotlib
 import numpy as np
 import torch
-import torch.nn.functional as F
 import trimesh
 import yaml
 from PIL import Image
 from torchvision import transforms
 from typeguard import typechecked
 
-from beast.logging import log_step
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD, BaseDataset
 from beast.data.video import VideoFrameIterator
+from beast.logging import log_step
 from beast.models.base import BaseLightningModel
-from beast.models.model_utils.train_vis import _sanitize_filename
-from beast.models.model_utils.utils_icp import (
+from beast.models.sable.utils.train_vis import _sanitize_filename
+from beast.models.sable.utils.utils_icp import (
     apply_similarity_transform_to_poses,
     estimate_camera_similarity_transform,
 )
-from beast.models.model_utils.utils_vis import add_scene_cam
+from beast.models.sable.utils.utils_vis import add_scene_cam
 
 _logger = logging.getLogger(__name__)
 
@@ -1223,7 +1222,7 @@ def _build_sable_dataset(config: dict, include_splits: list[str] | None = None) 
     Returns:
         the constructed dataset instance.
     """
-    from beast.train_sable import _resolve_dataset_class
+    from beast.models.sable.sable_train import _resolve_dataset_class
 
     if include_splits is None:
         include_splits = ['train', 'val', 'test']
@@ -1398,7 +1397,7 @@ def infer_sable(
         ValueError: if ``neural_input_dir`` is set but the dataset batches carry no neural
             trial/bin metadata.
     """
-    from beast.models.model_utils.train_vis import save_render_only_visuals, save_training_visuals
+    from beast.models.sable.utils.train_vis import save_render_only_visuals, save_training_visuals
     from beast.sable_encoding_decoding.render.metrics import (
         NeuralTrialMetricsAccumulator,
         _image_metrics_by_view,
@@ -1697,7 +1696,7 @@ def _batch_neural_rows(
 
 
 # maps a latent type name to the `data`/`config['model']` gate key read by
-# `beast.models.model_utils.utils_latent.latent_tensor_export_if_requested`
+# `beast.models.sable.utils.utils_latent.latent_tensor_export_if_requested`
 _LATENT_GATE_KEYS: dict[str, str] = {
     'frame_z': 'return_frame_cls_tokens',
     'dino_z': 'return_dino_cls',
@@ -2278,7 +2277,7 @@ def extract_dino_patch_tokens(
         config: full beast config dict (same as used for training).
         dino: frozen DINO featurizer whose forward takes ImageNet-normalized images
             ``[b, v, 3, h, w]`` and returns ``(patch_tokens [b, v, n, d], cls_tokens)``, e.g.
-            ``beast.models.model_utils.utils_dino.DinoV3``.
+            ``beast.models.sable.utils.utils_dino.DinoV3``.
         output_dir: root directory for the ``dino_patch_tokens`` subdirectory.
         max_batches: stop after this many batches per split. ``None`` runs the full dataset.
         include_splits: IBL splits to process, in order. Defaults to ``'train'``, ``'val'``,

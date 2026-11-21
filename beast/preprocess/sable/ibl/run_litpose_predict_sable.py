@@ -24,8 +24,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from beast.preprocess.sable.ibl.extraction_sable import _video_session_re
 from beast.preprocess.sable.ibl.config_sable import load_sable_config
+from beast.preprocess.sable.ibl.extraction_sable import _video_session_re
 
 
 def _discover_sessions(

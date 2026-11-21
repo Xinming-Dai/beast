@@ -300,7 +300,7 @@ def _handle_dino_patches(args: argparse.Namespace) -> None:
 
     from beast.inference import extract_dino_patch_tokens
     from beast.io import load_config
-    from beast.models.model_utils.utils_dino import DinoV3
+    from beast.models.sable.utils.utils_dino import DinoV3
 
     if args.input is None:
         _logger.error('--extract-dino-patches requires --input')

@@ -29,11 +29,11 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import subprocess
 import sys
-import argparse
 from pathlib import Path
 
 _IBL_CAMERAS = ['left', 'right']

@@ -25,7 +25,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from beast.preprocess.extraction import select_frame_idxs_kmeans
-from beast.preprocess.sable.ibl.config_sable import SABLEConfig, VideoNamingConfig
+from beast.preprocess.sable.ibl.config_sable import SABLEConfig
 from beast.video import downsample_video, get_video_stats, trim_video
 
 _logger = logging.getLogger(__name__)

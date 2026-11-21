@@ -14,9 +14,8 @@ import torch
 from PIL import Image
 
 from beast.logging import log_step
-from beast.models.model_utils.utils_vda import load_frozen_video_depth_anything
+from beast.models.sable.utils.utils_vda import load_frozen_video_depth_anything
 from beast.preprocess.sable.ibl.config_sable import VDAConfig
-from beast.preprocess.sable.ibl.extraction_sable import _CAMERA_VIDEO_SUBDIR_TMPL
 
 
 def _resolve_device(device: str) -> str:

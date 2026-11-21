@@ -35,7 +35,8 @@ from beast.api.model import Model
 from beast.data.sable_dataset import collate_with_correspondence_padding
 from beast.inference import save_gaussian_pointclouds
 from beast.logging import log_step
-from beast.models.model_utils.train_vis import save_training_visuals
+from beast.models.sable.sable_train import _resolve_dataset_class
+from beast.models.sable.utils.train_vis import save_training_visuals
 from beast.sable_encoding_decoding.img_token.saved_tokens_io import (
     load_z_from_npz_file,
     sorted_img_tokens_npz_paths,
@@ -59,7 +60,6 @@ from beast.sable_encoding_decoding.render.metrics import (
     resize_image_batch,
     resolve_metrics_npz_path,
 )
-from beast.train_sable import _resolve_dataset_class
 
 # Keys written into the .npz by the inference save routine (flat and IBL-trial formats).
 _CAM_FLAT_KEYS = ('c2w_input_out', 'fxfycxcy_input_out', 'c2w_target_out', 'fxfycxcy_target_out')

@@ -322,8 +322,8 @@ def main() -> None:
             raise FileNotFoundError(f'--litpose-repo directory not found: {litpose_repo}')
         sys.path.insert(0, str(litpose_repo))
 
-    from lightning_pose.api.model import Model
     from lightning_pose.api import model as model_module
+    from lightning_pose.api.model import Model
 
     model_module.io_utils.collect_video_files_by_view = _fixed_collect_video_files_by_view
 

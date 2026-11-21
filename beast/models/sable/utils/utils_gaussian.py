@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from beast.models.model_utils.gaussians_renderer import (
+from beast.models.sable.utils.gaussians_renderer import (
     GaussianModel,
     deferred_gaussian_render,
     render_opencv_cam,

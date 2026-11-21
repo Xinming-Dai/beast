@@ -2,8 +2,8 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import Mock, patch
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -808,7 +808,7 @@ class TestSaveCameraPointcloudScene:
         # should recover it and draw both predicted and GT frustums.
         from scipy.spatial.transform import Rotation
 
-        from beast.models.model_utils.utils_icp import apply_similarity_transform_to_poses
+        from beast.models.sable.utils.utils_icp import apply_similarity_transform_to_poses
 
         gs = Mock()
         num_views = 2

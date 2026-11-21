@@ -45,6 +45,7 @@ beast/
     beast_vit/
     erayzer/
     msps_vae/
+    sable/             # self-contained (own utils/, step-based train loop, lenient config)
   preprocess/          # extract pipeline (extraction.py, extraction_3d.py) + SAM segmenter
   losses.py            # masked_mse_loss
   nn/

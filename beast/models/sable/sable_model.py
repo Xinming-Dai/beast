@@ -1,40 +1,41 @@
 """Sable: 3D Gaussian Splatting model with transformer encoder and pose estimation."""
 import copy
 import logging
-import numpy as np
 from pathlib import Path
 from types import SimpleNamespace
+
+import numpy as np
+import open3d as o3d
 import torch
 import torch.nn as nn
-from einops.layers.torch import Rearrange
 from einops import rearrange, repeat
-import open3d as o3d
+from einops.layers.torch import Rearrange
+
 from beast.data.datasets import _IMAGENET_MEAN, _IMAGENET_STD
 from beast.models.base import BaseLightningModel
-from beast.models.model_utils.losses import LossComputer
-from beast.models.model_utils.utils_transformer import (
+from beast.models.sable.utils.camera_utils import get_interpolated_poses_many
+from beast.models.sable.utils.losses import LossComputer
+from beast.models.sable.utils.utils_dino import DinoV3
+from beast.models.sable.utils.utils_gaussian import Renderer, get_point_range_func
+from beast.models.sable.utils.utils_icp import (
+    estimate_initial_transform,
+    pixel_xy_to_pointcloud_flat_indices,
+)
+from beast.models.sable.utils.utils_latent import latent_tensor_export_if_requested
+from beast.models.sable.utils.utils_pe import get_2d_sincos_pos_embed
+from beast.models.sable.utils.utils_rot import quat2mat, rot6d2mat
+from beast.models.sable.utils.utils_transformer import (
     QK_Norm_TransformerBlock,
     _init_weights,
     _init_weights_layerwise,
 )
-from beast.models.model_utils.camera_utils import get_interpolated_poses_many
-from beast.models.model_utils.utils_pe import get_2d_sincos_pos_embed
-from beast.models.model_utils.utils_rot import rot6d2mat, quat2mat
-from beast.models.model_utils.utils_gaussian import get_point_range_func, Renderer
-from beast.models.model_utils.utils_vis import build_stepback_c2ws
-
-from beast.models.model_utils.utils_vda import (
+from beast.models.sable.utils.utils_vda import (
     extract_vda_depth,
     load_frozen_video_depth_anything,
-    save_vda_debug_images,
     pseudo_pointcloud_normalized,
+    save_vda_debug_images,
 )
-from beast.models.model_utils.utils_icp import (
-    estimate_initial_transform,
-    pixel_xy_to_pointcloud_flat_indices,
-)
-from beast.models.model_utils.utils_latent import latent_tensor_export_if_requested
-from beast.models.model_utils.utils_dino import DinoV3
+from beast.models.sable.utils.utils_vis import build_stepback_c2ws
 
 _logger = logging.getLogger(__name__)
 
@@ -717,6 +718,19 @@ class Sable(BaseLightningModel):
         """
         return self.get_model_outputs(batch_dict)
 
+    def configure_callbacks(self) -> list:
+        """Return no model-specific callbacks.
+
+        The shared implementation reads ``training.viz_every_n_epochs``, which Sable configs do
+        not define; ``train_sable`` passes Sable's own callbacks to the trainer instead.
+
+        Returns
+        -------
+        an empty list
+
+        """
+        return []
+
     def configure_optimizers(self) -> dict:
         """Configure AdamW optimizer and cosine LR schedule from optimizer config.
 
@@ -962,7 +976,7 @@ class Sable(BaseLightningModel):
             config_key='return_frame_cls_tokens',
         )
         # img_tokens_out is for neural decoding
-        img_tokens_out = latent_tensor_export_if_requested( 
+        img_tokens_out = latent_tensor_export_if_requested(
             all_tokens,
             data,
             self.config,
@@ -990,7 +1004,7 @@ class Sable(BaseLightningModel):
         )[:, :v_real]
         img_aligned_gaussians = rearrange(
             img_aligned_gaussians,
-            'b v n (ph pw c) -> b (v n ph pw) c',  
+            'b v n (ph pw c) -> b (v n ph pw) c',
             ph=self.ph,
             pw=self.pw,
         )
@@ -1149,7 +1163,7 @@ class Sable(BaseLightningModel):
 
             if self.debug_merged_pcd:
                 xyz = xyz_init
-                from beast.models.model_utils.debug_merge import save_debug_pcd
+                from beast.models.sable.utils.debug_merge import save_debug_pcd
                 save_debug_pcd(
                     xyz_init=xyz_init,
                     xyz_init_for_merge=xyz_init_for_merge,
@@ -1209,7 +1223,7 @@ class Sable(BaseLightningModel):
         if self.init_gs:
             xyz_norm, xyz_init_norm = map(
                 sanitize, map(
-                    normalize_gaussians, 
+                    normalize_gaussians,
                     (xyz, xyz_init.detach()),
                 )
             )

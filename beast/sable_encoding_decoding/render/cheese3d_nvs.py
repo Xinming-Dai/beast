@@ -82,7 +82,7 @@ def map_gt_poses_to_model_frame(transform: np.ndarray, gt_c2w: np.ndarray) -> np
     Returns:
         GT camera-to-world matrices in the model frame, shape [V, 4, 4].
     """
-    from beast.models.model_utils.utils_icp import apply_similarity_transform_to_poses
+    from beast.models.sable.utils.utils_icp import apply_similarity_transform_to_poses
 
     return apply_similarity_transform_to_poses(invert_similarity_transform(transform), gt_c2w)
 
@@ -440,7 +440,7 @@ def _render_at_cameras(
     Returns:
         renders ``[V, 3, H, W]`` in [0, 1].
     """
-    from beast.models.model_utils.gaussians_renderer import render_opencv_cam_gsplat
+    from beast.models.sable.utils.gaussians_renderer import render_opencv_cam_gsplat
 
     with torch.no_grad():
         buffers = render_opencv_cam_gsplat(
@@ -563,7 +563,7 @@ def _run_nvs_session(
     """
     from beast.data.sable_dataset import collate_with_correspondence_padding
     from beast.inference import _dedupe_cameras_by_view_index, save_camera_pointcloud_scene
-    from beast.models.model_utils.utils_icp import (
+    from beast.models.sable.utils.utils_icp import (
         apply_similarity_transform_to_poses,
         estimate_camera_similarity_transform,
     )

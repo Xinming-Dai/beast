@@ -128,7 +128,7 @@ color) alongside the predicted frustums (still colored by view index via the `hs
 colormap). Since the predicted and GT frames are unrelated, a best-fit similarity
 transform (rotation + isotropic scale + translation) is solved from predicted to GT
 camera poses — via `estimate_camera_similarity_transform`
-([beast/models/model_utils/utils_icp.py](../../beast/models/model_utils/utils_icp.py)) —
+([beast/models/sable/utils/utils_icp.py](../../beast/models/sable/utils/utils_icp.py)) —
 and applied to both the predicted point cloud and predicted frustums before drawing, so
 predicted and GT geometry appear in the same frame. Rotation and scale/translation are
 solved in two decoupled steps — rotation from the camera orientations alone (orthogonal
@@ -219,6 +219,6 @@ JOB_ID=<training job id> sbatch scripts/sable_scripts/inference/infer_sable_chee
 list is picked up automatically. The render-vs-target PNG grid shows
 `training.vis_max_views` views (default 2 when the key is absent).
 
-`train_sable.py` resolves `training.dataset_name` dynamically (via
+`beast/models/sable/sable_train.py` resolves `training.dataset_name` dynamically (via
 `_resolve_dataset_class`), so other dataset classes can be swapped in the same way by
 changing this one config field.

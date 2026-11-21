@@ -1,5 +1,7 @@
+from unittest.mock import patch
+
 from beast.data.samplers import ResumableRandomSampler
-from beast.train_sable import SamplerStateCallback
+from beast.models.sable.sable_train import SamplerStateCallback, build_datamodule, train
 
 
 class TestSamplerStateCallback:
@@ -41,3 +43,30 @@ class TestSamplerStateCallback:
 
         # Assert
         assert sampler.state_dict() == original_state
+
+
+class TestBuildDatamodule:
+    """Test the function build_datamodule."""
+
+    def test_build_datamodule_returns_none(self):
+        # Act
+        result = build_datamodule({'training': {}})
+
+        # Assert
+        assert result is None
+
+
+class TestTrain:
+    """Test the function train."""
+
+    def test_train_delegates_to_train_sable(self, tmp_path):
+        # Arrange
+        config, model = {'training': {}}, object()
+
+        # Act
+        with patch('beast.models.sable.sable_train.train_sable', return_value='trained') as mock:
+            result = train(config, model, None, output_dir=tmp_path)
+
+        # Assert
+        mock.assert_called_once_with(config, model, tmp_path)
+        assert result == 'trained'

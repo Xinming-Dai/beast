@@ -1,4 +1,10 @@
-"""Sable-specific training loop using PyTorch Lightning."""
+"""Sable training loop using PyTorch Lightning.
+
+Sable builds its datasets and loaders inside ``train_sable`` (they depend on session lists,
+resumable samplers, and checkpoint state), so ``build_datamodule`` returns ``None`` and
+``train`` adapts ``train_sable`` to the registry's ``train(config, model, datamodule,
+output_dir)`` contract.
+"""
 
 import importlib
 import sys
@@ -7,16 +13,19 @@ from collections import Counter
 from pathlib import Path
 
 import lightning.pytorch as pl
-from lightning.pytorch.utilities import rank_zero_only
 import torch
 import yaml
+from lightning.pytorch.utilities import rank_zero_only
 
-from beast.data.samplers import ResumableRandomSampler
-from beast.inference import save_camera_pointcloud_scene, save_gaussian_pointclouds
-from beast.logging import log_step
+# imported as a module, not by name: beast.inference imports beast.models.sable.utils, which
+# runs this package's __init__, so a from-import here would see a half-initialized module
+from beast import inference as inference_utils
+from beast.callbacks.factory import get_callbacks
 from beast.data.sable_dataset import collate_with_correspondence_padding
-from beast.models.model_utils.train_vis import save_training_visuals
-from beast.train import get_callbacks, pretty_print_config, reset_seeds
+from beast.data.samplers import ResumableRandomSampler
+from beast.logging import log_step
+from beast.models.sable.utils.train_vis import save_training_visuals
+from beast.train import pretty_print_config, reset_seeds
 
 
 def _resolve_dataset_class(dataset_name: str) -> type:
@@ -149,7 +158,7 @@ class ValVisualizationCallback(pl.Callback):
             if saved_paths:
                 log_step(f'Saved initial visuals: {saved_paths[0]}', level='info')
             if self._save_pointclouds:
-                ply_paths = save_gaussian_pointclouds(
+                ply_paths = inference_utils.save_gaussian_pointclouds(
                     vars(result),
                     self._vis_dir,
                     batch_idx=trainer.global_step,
@@ -158,7 +167,7 @@ class ValVisualizationCallback(pl.Callback):
                 if ply_paths:
                     log_step(f'Saved initial point cloud: {ply_paths[0]}', level='info')
             if self._save_camera_pointcloud_scene:
-                glb_paths = save_camera_pointcloud_scene(
+                glb_paths = inference_utils.save_camera_pointcloud_scene(
                     vars(result),
                     self._vis_dir,
                     batch_idx=trainer.global_step,
@@ -199,7 +208,7 @@ class ValVisualizationCallback(pl.Callback):
             if saved_paths:
                 log_step(f'Saved val visuals: {saved_paths[0]}', level='info')
             if self._save_pointclouds:
-                ply_paths = save_gaussian_pointclouds(
+                ply_paths = inference_utils.save_gaussian_pointclouds(
                     vars(result),
                     self._vis_dir,
                     batch_idx=trainer.global_step,
@@ -208,7 +217,7 @@ class ValVisualizationCallback(pl.Callback):
                 if ply_paths:
                     log_step(f'Saved val point cloud: {ply_paths[0]}', level='info')
             if self._save_camera_pointcloud_scene:
-                glb_paths = save_camera_pointcloud_scene(
+                glb_paths = inference_utils.save_camera_pointcloud_scene(
                     vars(result),
                     self._vis_dir,
                     batch_idx=trainer.global_step,
@@ -556,3 +565,36 @@ def train_sable(config: dict, model, output_dir: str | Path):
         log_step(f'Training complete after {total_steps_trained} steps', level='info')
 
     return model
+
+
+def build_datamodule(config: dict) -> None:
+    """Return no datamodule; Sable builds its datasets inside ``train_sable``.
+
+    Parameters
+    ----------
+    config: full experiment configuration dict (unused)
+
+    Returns
+    -------
+    ``None``, to satisfy the registry's datamodule-builder contract
+
+    """
+    return None
+
+
+def train(config: dict, model, datamodule: None, output_dir: str | Path):
+    """Registry-facing training entry point; delegates to ``train_sable``.
+
+    Parameters
+    ----------
+    config: full beast config dict
+    model: Sable Lightning model instance
+    datamodule: unused; Sable builds its own data loaders
+    output_dir: directory to save checkpoints and logs
+
+    Returns
+    -------
+    trained model
+
+    """
+    return train_sable(config, model, output_dir)

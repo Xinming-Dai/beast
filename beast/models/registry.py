@@ -69,6 +69,14 @@ def _register_all() -> None:
     from beast.models.msps_vae.msps_vae_train import (
         train as msps_vae_train,
     )
+    from beast.models.sable.sable_config import SableBeastConfig
+    from beast.models.sable.sable_model import Sable
+    from beast.models.sable.sable_train import (
+        build_datamodule as sable_build_datamodule,
+    )
+    from beast.models.sable.sable_train import (
+        train as sable_train,
+    )
 
     MODEL_REGISTRY['resnet'] = ResnetAutoencoder
     DATAMODULE_REGISTRY['resnet'] = resnet_build_datamodule
@@ -94,6 +102,11 @@ def _register_all() -> None:
     DATAMODULE_REGISTRY['msps_vae'] = msps_vae_build_datamodule
     TRAIN_REGISTRY['msps_vae'] = msps_vae_train
     CONFIG_REGISTRY['msps_vae'] = MspsVaeBeastConfig
+
+    MODEL_REGISTRY['sable'] = Sable
+    DATAMODULE_REGISTRY['sable'] = sable_build_datamodule
+    TRAIN_REGISTRY['sable'] = sable_train
+    CONFIG_REGISTRY['sable'] = SableBeastConfig
 
 
 def get_model_class(model_class: str) -> type:

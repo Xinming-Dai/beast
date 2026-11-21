@@ -10,7 +10,7 @@ from typing import Any
 import torch
 
 from beast.inference import predict_images, predict_video
-from beast.io import load_config, validate_config
+from beast.io import load_config
 from beast.logging import log_step
 from beast.models.base import BaseLightningModel
 from beast.models.registry import (
