@@ -29,7 +29,7 @@ CORRESPONDENCE_CACHE_ROOT="${CORRESPONDENCE_CACHE_ROOT:-$DATASET_ROOT/litpose_co
 
 RESUME_BASE="/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions"
 RESUME_CKPT="/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/qitaoz--E-RayZer/checkpoints/erayzer_dl3dv.pt"
-RESET_TRAINING_STATE="${RESET_TRAINING_STATE:-False}"
+RESET_TRAINING_STATE="${RESET_TRAINING_STATE:-True}"
 RESUME_CKPT_JOB_ID="${RESUME_CKPT_JOB_ID:-23610582_dino_mlp}"
 
 CHECKPOINT_BASE="${CHECKPOINT_DIR:-/work/nvme/bfsr/xdai3/project3d/twoview3d_ckpts/beast_sable/ibl_pretrain_restricted_sessions}"
