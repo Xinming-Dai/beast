@@ -56,12 +56,16 @@ RANDOM_BASELINE_ROOTS = {
 }
 CKPT_ROOT = Path('/work/hdd/bfsr/xdai3/project3d/twoview3d_ckpts')
 TCN_ROOTS = {
-    'full': CKPT_ROOT / 'beast_sable/ibl_pretrain_restricted_sessions/21047248/latents/patch_TCN',
+    'full': (
+        CKPT_ROOT
+        / 'beast_sable/ibl_pretrain_restricted_sessions/21047248/latents/patch_TCN/tuned'
+    ),
     'nogeom': (
         CKPT_ROOT
         / 'beast_sable/ibl_pretrain_restricted_sessions/22359987_disable_geom/latents/patch_TCN'
+        / 'tuned'
     ),
-    'dino': CKPT_ROOT / 'dino_baseline/latents/patch_TCN',
+    'dino': CKPT_ROOT / 'dino_baseline/latents/patch_TCN/tuned',
 }
 NEURAL_DIR = Path('/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data')
 RESULTS_DIR = Path(
