@@ -26,6 +26,7 @@ from beast.sable_encoding_decoding.neural.utils import _std, bits_per_spike, set
 TUNED_N_KP = 4800
 _NUM_EPOCHS = 100
 _ANNEAL_SCHEDULES = ('legacy', 'fixed')
+_TCN_CONFIG_KEYS = ('lr', 'wd', 'dropout_in', 'dropout_mid', 'n_kp', 'anneal', 'lr_decay_epochs')
 
 
 class Embed_Dataset(torch.utils.data.Dataset):
@@ -255,6 +256,40 @@ def _anneal_epochs(epochs: int, annealing_steps: int, schedule: str) -> np.ndarr
     raise ValueError(f'anneal must be one of {_ANNEAL_SCHEDULES}, got {schedule!r}')
 
 
+def validate_tcn_config(config: dict[str, Any]) -> None:
+    """Check a TCN hyperparameter config, so typos fail loudly instead of being ignored.
+
+    Args:
+        config: hyperparameters of `train_cnn_encoder`: `lr` and `wd` (required) and optionally
+            `dropout_in`, `dropout_mid`, `n_kp` and one of `anneal` or `lr_decay_epochs`.
+
+    Raises:
+        ValueError: if a key is unknown or missing, a dropout rate is outside [0, 1), `anneal`
+            is not one of `_ANNEAL_SCHEDULES`, `lr_decay_epochs` is not a list of epochs in
+            [0, `_NUM_EPOCHS`), or both `anneal` and `lr_decay_epochs` are given.
+    """
+    unknown = sorted(set(config) - set(_TCN_CONFIG_KEYS))
+    if unknown:
+        raise ValueError(f'unknown TCN config keys {unknown}, allowed: {list(_TCN_CONFIG_KEYS)}')
+    missing = [key for key in ('lr', 'wd') if key not in config]
+    if missing:
+        raise ValueError(f'TCN config is missing the required keys {missing}')
+    for key in ('dropout_in', 'dropout_mid'):
+        if not 0.0 <= config.get(key, 0.0) < 1.0:
+            raise ValueError(f'{key} must be in [0, 1), got {config[key]}')
+    if 'anneal' in config and 'lr_decay_epochs' in config:
+        raise ValueError("give either 'anneal' or 'lr_decay_epochs', not both")
+    if config.get('anneal', 'legacy') not in _ANNEAL_SCHEDULES:
+        raise ValueError(f"anneal must be one of {_ANNEAL_SCHEDULES}, got {config['anneal']!r}")
+    decay_epochs = config.get('lr_decay_epochs', [])
+    if not isinstance(decay_epochs, list | tuple) or not all(
+        isinstance(epoch, int) and 0 <= epoch < _NUM_EPOCHS for epoch in decay_epochs
+    ):
+        raise ValueError(
+            f'lr_decay_epochs must be a list of epochs in [0, {_NUM_EPOCHS}), got {decay_epochs}',
+        )
+
+
 def _evaluate_cnn(
     model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
@@ -333,9 +368,11 @@ def train_cnn_encoder(
     """Train a `PatchTCN` (facemap `KeypointsNetwork`) encoder for each session in `data_dict`.
 
     Args:
-        config: hyperparameters; must contain `lr` and `wd`. Optional keys, with defaults that
-            reproduce the untuned model: `dropout_in` (0), `dropout_mid` (0), `n_kp` (the number
-            of input features) and `anneal` (`legacy`, see `_anneal_epochs`).
+        config: hyperparameters, checked by `validate_tcn_config`; must contain `lr` and `wd`.
+            Optional keys, with defaults that reproduce the untuned model: `dropout_in` (0),
+            `dropout_mid` (0), `n_kp` (the width of the first linear layer; the number of
+            input features) and the lr schedule, either `anneal` (`legacy`, see `_anneal_epochs`)
+            or `lr_decay_epochs` (the epochs at which the lr is divided by 10).
         data_dict: mapping `eid -> {'X': [train, test], 'y': [train, test]}`.
         report_to_tune: if `True`, report `bps`/`r2`/`epoch` of the last session to Ray Tune
             instead of returning results.
@@ -352,6 +389,7 @@ def train_cnn_encoder(
         `mean_X`, `std_X`, `mean_y`, `std_y`, `bps`, `r2`, `eid`; or `None` when
         `report_to_tune=True`.
     """
+    validate_tcn_config(config)
     set_seed(seed)
     lr = config['lr']
     wd = config['wd']
@@ -362,7 +400,10 @@ def train_cnn_encoder(
     epochs = _NUM_EPOCHS
     annealing_steps = 2
     trial_len = 1
-    anneal_epochs = _anneal_epochs(epochs, annealing_steps, config.get('anneal', 'legacy'))
+    if 'lr_decay_epochs' in config:
+        anneal_epochs = np.array(config['lr_decay_epochs'])
+    else:
+        anneal_epochs = _anneal_epochs(epochs, annealing_steps, config.get('anneal', 'legacy'))
     threshold = 1e-3
     accelerator = Accelerator()
     result = {}

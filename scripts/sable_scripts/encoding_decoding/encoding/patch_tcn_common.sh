@@ -3,7 +3,8 @@
 # step2_tune_patch_tcn.sh and step2_eval_patch_tcn.sh.
 #
 # Provides: setup_env, resolve_session <78|72|4b> (sets EID, PCA_ROOT),
-#           resolve_model <full|nogeom|dino> (sets OUT_DIR, TUNED_DIR, LOCKED_JSON).
+#           resolve_model <full|nogeom|dino> (sets OUT_DIR, TUNED_DIR, LOCKED_JSON, SHARED_DIR,
+#           SHARED_CONFIG).
 
 REPO_ROOT="/u/xdai3/project3d/SBALE_repo/beast"
 NEURAL_INPUT_DIR=/work/hdd/bfsr/xdai3/IBL_data/synchronized/extracted_frames/neural_data
@@ -64,4 +65,6 @@ resolve_model() {
     esac
     TUNED_DIR=$OUT_DIR/tuned
     LOCKED_JSON=$TUNED_DIR/locked_config.json
+    SHARED_DIR=$OUT_DIR/tuned_shared
+    SHARED_CONFIG=$REPO_ROOT/configs/sable/encoding/patch_tcn_shared.yaml
 }

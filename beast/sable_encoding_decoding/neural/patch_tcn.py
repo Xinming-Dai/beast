@@ -9,7 +9,8 @@ for the hyperparameter search.
 Three modes are available. `legacy` searches only the learning rate and evaluates the best
 model on the test trials. `tune` searches lr, weight decay and dropout on train/val only and
 saves the best config as a JSON file, without touching the test trials. `eval` trains with a
-saved config, applied unchanged, and evaluates on the test trials.
+saved config, applied unchanged, and evaluates on the test trials; the config is that JSON file
+or a YAML file such as `configs/sable/encoding/patch_tcn_shared.yaml`.
 
 Runnable as `python -m beast.sable_encoding_decoding.neural.patch_tcn`.
 """
@@ -21,11 +22,13 @@ from typing import Any
 
 import numpy as np
 import ray
+import yaml
 
 from beast.sable_encoding_decoding.neural.encoder import (
     train_cnn_encoder,
     train_cnn_encoder_with_tune,
     tune_cnn_encoder,
+    validate_tcn_config,
 )
 from beast.sable_encoding_decoding.neural.run_encoding_decoding import (
     _resolve_ray_session_temp_dir,
@@ -168,25 +171,35 @@ def save_locked_config(
 
 
 def load_locked_config(config_json: str | Path) -> dict[str, Any]:
-    """Read the config saved by `save_locked_config`.
+    """Read a TCN hyperparameter config from a YAML or JSON file.
+
+    Accepts the file written by `save_locked_config` (hyperparameters under a `config` entry) and
+    a flat mapping of hyperparameters, such as `configs/sable/encoding/patch_tcn_shared.yaml`.
+    JSON is read as YAML.
 
     Args:
-        config_json: path of the JSON file.
+        config_json: path of the YAML or JSON file.
 
     Returns:
         Hyperparameters accepted by `train_cnn_encoder`.
 
     Raises:
         FileNotFoundError: if the file does not exist.
-        ValueError: if the file has no `config` entry.
+        ValueError: if the file is not a mapping or the hyperparameters are invalid, see
+            `validate_tcn_config`.
     """
     config_json = Path(config_json)
     if not config_json.is_file():
         raise FileNotFoundError(f'locked config not found: {config_json}')
-    payload = json.loads(config_json.read_text())
-    if 'config' not in payload:
-        raise ValueError(f"{config_json} has no 'config' entry")
-    return payload['config']
+    payload = yaml.safe_load(config_json.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f'{config_json} must contain a mapping of hyperparameters')
+    config = payload['config'] if 'config' in payload else payload
+    try:
+        validate_tcn_config(config)
+    except ValueError as err:
+        raise ValueError(f'invalid config in {config_json}: {err}') from err
+    return config
 
 
 def run_patch_tcn(
@@ -336,13 +349,15 @@ def get_args() -> argparse.Namespace:
         help='legacy: lr search + test; tune: lr/wd/dropout search, no test; eval: locked config',
     )
     parser.add_argument(
+        '--config',
         '--config_json',
+        dest='config_json',
         default=None,
-        help='locked config JSON: written in tune mode, read in eval mode',
+        help='TCN config file (YAML or JSON): written (JSON) in tune mode, read in eval mode',
     )
     args = parser.parse_args()
     if args.mode != 'legacy' and args.config_json is None:
-        parser.error(f'--config_json is required with --mode {args.mode}')
+        parser.error(f'--config is required with --mode {args.mode}')
     return args
 
 

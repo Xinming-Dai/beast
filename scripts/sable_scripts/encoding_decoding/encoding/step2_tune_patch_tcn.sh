@@ -41,7 +41,7 @@ python -m beast.sable_encoding_decoding.neural.patch_tcn \
     --neural_input_dir "$NEURAL_INPUT_DIR" \
     --pca_dir "$PCA_ROOT/$MODEL" \
     --out_dir "$TUNED_DIR" \
-    --config_json "$LOCKED_JSON" \
+    --config "$LOCKED_JSON" \
     --num_pcs "$NUM_PCS" \
     --fold "$FOLD" \
     --num_samples "$NUM_SAMPLES"

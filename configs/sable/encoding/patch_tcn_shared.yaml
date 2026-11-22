@@ -1,0 +1,8 @@
+# shared patch-TCN hyperparameters: trial 44 of the session 78 / fold 0 / 6 PCs `reg` search
+# (mean val bps 0.1455 over full, nogeom and dino)
+lr: 0.00036057456332457466
+wd: 64.28811769449216
+dropout_in: 0.09876469054921089
+dropout_mid: 0.022455309696164494
+n_kp: 4800
+lr_decay_epochs: [0, 50]
